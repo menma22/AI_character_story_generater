@@ -165,108 +165,122 @@ class CreativeDirector:
     
     async def run(self, theme: Optional[str] = None) -> ConceptPackage:
         """
-        concept_packageを生成する。内部ループでSelf-Critiqueを行い品質を担保。
-        
-        Args:
-            theme: ユーザー指定のテーマ（省略時は完全自動）
-        
-        Returns:
-            ConceptPackage
+        concept_packageを生成する。エージェント自身がツールを駆使して自律的に品質を担保する。
         """
-        await self._notify("Creative Directorを起動します...")
+        from backend.tools.llm_api import AgentTool, call_llm_agentic
         
-        # 初回生成
+        await self._notify("Creative Directorを起動します（エージェンティック・モード）...")
+        
         user_msg = "独創的で面白いキャラクターのconcept_packageを生成してください。character_conceptは必ず500字以上、story_outlineも500字以上で具体的に書いてください。"
         if theme:
-            user_msg = f"以下のテーマに基づいて、独創的で面白いキャラクターのconcept_packageを生成してください。character_conceptは必ず500字以上、story_outlineも500字以上で具体的に書いてください。\n\nテーマ: {theme}"
+            user_msg = f"以下のテーマに基づいて、独創的で面白いキャラクターのconcept_packageを生成してください。\n\nテーマ: {theme}"
         
-        await self._notify(f"concept_package初回生成中..." + (f" テーマ: {theme}" if theme else " (完全自動)"))
-        
-        result = await call_llm(
-            tier="opus",
-            system_prompt=SYSTEM_PROMPT,
-            user_message=user_msg,
-            max_tokens=8000,
-            json_mode=True,
-            cache_system=True,
-        )
-        
-        concept_data = result["content"] if isinstance(result["content"], dict) else {}
+        final_concept_data = None
         self_critique_history = []
+        critique_iteration = 0
         
-        # Self-Critiqueループ
-        for iteration in range(self.max_iterations):
-            await self._notify(f"Self-Critique iteration {iteration + 1}/{self.max_iterations}...")
+        async def request_critique(concept_package: dict = None) -> dict:
+            """現在のドラフトに対する批判的フィードバック（心理学的な矛盾や面白さの採点）を要求する"""
+            if not concept_package:
+                return {"status": "FAILED", "message": "ERROR: concept_package引数が欠落しています。ツールのパラメータとして、作成したJSONデータを必ず渡してください。自然言語テキストに書き出すだけでは無効です。"}
+            nonlocal critique_iteration
+            critique_iteration += 1
+            await self._notify(f"Self-Critiqueを依頼中...（試行 {critique_iteration}）")
             
             critique_result = await call_llm(
                 tier="opus",
                 system_prompt=SELF_CRITIQUE_PROMPT,
-                user_message=f"以下のconcept_packageを評価してください:\n\n{json.dumps(concept_data, ensure_ascii=False, indent=2)}",
+                user_message=f"以下のconcept_packageを評価してください:\n\n{json.dumps(concept_package, ensure_ascii=False, indent=2)}",
                 max_tokens=2048,
                 json_mode=True,
                 cache_system=True,
             )
             
             critique = critique_result["content"] if isinstance(critique_result["content"], dict) else {}
-            verdict = critique.get("verdict", "pass")
-            
-            # 履歴に記録
             self_critique_history.append(critique)
             
-            # チェック結果の通知
             checks = critique.get("checks", {})
             check_summary = []
             for key, val in checks.items():
                 status = "✓" if val.get("passed", False) else "✗"
                 check_summary.append(f"  [{status}] {key}: {val.get('comment', '')[:60]}")
-            await self._notify(f"Self-Critique結果:\n" + "\n".join(check_summary) + f"\n\nVerdict: {verdict}")
+            
+            verdict = critique.get("verdict", "pass")
+            await self._notify(f"Self-Critique結果（Verdict: {verdict}）:\n" + "\n".join(check_summary))
             
             if verdict == "pass":
-                await self._notify(f"concept_package承認（iteration {iteration + 1}）", "complete")
-                break
-            
-            # 改善
-            refinement = critique.get("refinement_instructions", "")
-            await self._notify(f"改善中: {refinement[:100]}...")
-            
-            refine_result = await call_llm(
-                tier="opus",
-                system_prompt=SYSTEM_PROMPT,
-                user_message=(
-                    f"以下のconcept_packageを改善してください。\n\n"
-                    f"【現在のconcept_package】\n{json.dumps(concept_data, ensure_ascii=False, indent=2)}\n\n"
-                    f"【改善指示】\n{refinement}\n\n"
-                    f"改善後のconcept_package全体をJSON形式で出力してください。"
-                ),
-                max_tokens=8000,
-                json_mode=True,
-                cache_system=True,
+                return {"status": "SUCCESS", "message": "CRITIQUE PASSED. Please call submit_final_concept to finish."}
+            else:
+                return {"status": "FAILED", "feedback": critique}
+
+        async def submit_final_concept(concept_package: dict = None) -> dict:
+            """最終確定版を提出し、ミッションを完了する"""
+            if not concept_package:
+                return {"status": "FAILED", "message": "ERROR: concept_package引数が欠落しています。最終データをパラメータとして渡してください。"}
+            nonlocal final_concept_data
+            final_concept_data = concept_package
+            await self._notify("最終concept_packageが提出されました。", "complete")
+            return {"status": "SUCCESS", "message": "Task complete. Thank you."}
+
+        tools = [
+            AgentTool(
+                name="request_critique",
+                description="現在のconcept_packageドラフトを厳しく評価し、面白さや心理学的深さ、Redemption Biasの有無を判定してもらいます。結果が 'pass' になるまで必ず繰り返してください。",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "concept_package": {"type": "object", "description": "現在のドラフトデータ全体"}
+                    },
+                    "required": ["concept_package"]
+                },
+                handler=request_critique
+            ),
+            AgentTool(
+                name="submit_final_concept",
+                description="request_critiqueでの評価が 'pass' になった後、十分な品質を満たした最終的なconcept_packageをシステムに提出し、タスクを終了します。",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "concept_package": {"type": "object", "description": "完成したデータ全体"}
+                    },
+                    "required": ["concept_package"]
+                },
+                handler=submit_final_concept
             )
-            concept_data = refine_result["content"] if isinstance(refine_result["content"], dict) else concept_data
+        ]
         
-        # iteration_count と self_critique_history を埋め込む
-        concept_data["iteration_count"] = len(self_critique_history)
-        concept_data["self_critique_history"] = self_critique_history
-        concept_data["verdict"] = verdict if 'verdict' in dir() else "pass"
+        agentic_sys_prompt = SYSTEM_PROMPT + "\n\n【エージェンティック行動指針】\n1. まずドラフトを作成する\n2. 必ず `request_critique` ツールを用いて自身のドラフトを自身で客観的に評価する\n3. 評価が 'refine'（不合格）だったら、指摘事項に沿って自身の構成案を修正し、再度 `request_critique` を呼び出す\n4. 評価が 'pass'（合格）になったら、絶対に妥協せず、`submit_final_concept` ツールを呼び出して最終データを提出する"
         
-        # ConceptPackageモデルに変換
+        await call_llm_agentic(
+            tier="opus",
+            system_prompt=agentic_sys_prompt,
+            user_message=user_msg,
+            tools=tools,
+            max_iterations=self.max_iterations * 3,
+        )
+        
+        if not final_concept_data:
+            logger.warning("Agentic loop finished without submitting final concept. Falling back to empty or partial.")
+            final_concept_data = {}
+            
+        final_concept_data["iteration_count"] = critique_iteration
+        final_concept_data["self_critique_history"] = self_critique_history
+        
         try:
-            package = ConceptPackage(**concept_data)
+            package = ConceptPackage(**final_concept_data)
         except Exception as e:
             logger.warning(f"ConceptPackage validation warning: {e}")
             package = ConceptPackage(
-                character_concept=concept_data.get("character_concept", ""),
-                story_outline=concept_data.get("story_outline", ""),
-                narrative_theme=concept_data.get("narrative_theme", ""),
-                genre_and_world=concept_data.get("genre_and_world", ""),
-                interestingness_hooks=concept_data.get("interestingness_hooks", []),
-                critical_design_notes=concept_data.get("critical_design_notes", []),
-                psychological_hints=concept_data.get("psychological_hints", {}),
-                reference_stories=concept_data.get("reference_stories", []),
-                iteration_count=len(self_critique_history),
+                character_concept=final_concept_data.get("character_concept", ""),
+                story_outline=final_concept_data.get("story_outline", ""),
+                narrative_theme=final_concept_data.get("narrative_theme", ""),
+                genre_and_world=final_concept_data.get("genre_and_world", ""),
+                interestingness_hooks=final_concept_data.get("interestingness_hooks", []),
+                critical_design_notes=final_concept_data.get("critical_design_notes", []),
+                psychological_hints=final_concept_data.get("psychological_hints", {}),
+                reference_stories=final_concept_data.get("reference_stories", []),
+                iteration_count=critique_iteration,
                 self_critique_history=self_critique_history,
             )
-        
-        cc_preview = package.character_concept[:60] if package.character_concept else "(empty)"
-        await self._notify(f"concept_package生成完了: {cc_preview}...", "complete")
+            
         return package

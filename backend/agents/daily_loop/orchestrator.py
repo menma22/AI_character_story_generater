@@ -265,55 +265,132 @@ class DailyLoopOrchestrator:
         data = result["content"] if isinstance(result["content"], dict) else {}
         return ReflectiveOutput(**{k: data.get(k, "") for k in ["inner_analysis", "value_connections", "suggestion", "prediction"]})
     
-    # ─── §4.6 Step 3: 統合エージェント ─────────────────────
+    # ─── §4.6 Step 3: 統合エージェント (Agentic Loop) ────────
     async def _integration(self, event: Event, impulsive: ImpulsiveOutput, reflective: ReflectiveOutput) -> IntegrationOutput:
-        """統合エージェント: 2ルート予測 + Higgins評価 + 行動決定（v10 §4.6 Step 3）"""
+        """統合エージェント: 2ルート予測 + Higgins評価 + 行動決定（Tool-calling 自律ループ）"""
+        from backend.tools.llm_api import AgentTool, call_llm_agentic
+        
         normative_context = ""
+        values_context = ""
         if self.package.micro_parameters:
             normative_context = f"理想自己: {self.package.micro_parameters.ideal_self}\n義務自己: {self.package.micro_parameters.ought_self}"
+            values_context = json.dumps(self.package.micro_parameters.schwartz_values, ensure_ascii=False)
         
-        # protagonist_plan 対応（§4.2, §4.6 Step 3）
         protagonist_plan_note = ""
         if event.source == "protagonist_plan":
             protagonist_plan_note = (
                 "\n\n【重要: protagonist_plan】\n"
                 "このイベントは前日あなた（主人公）が日記の中で「やりたい」と計画したものです。\n"
-                "実際にやるかやらないか、どのようにやるかは、今のあなたの気分・状況・優先順位で判断してください。\n"
-                "計画を放棄することも、変形することも自由です。\n"
+                "実際にやるかやらないかは、今の気分・状況・優先順位で自律的に判断してください。\n"
             )
         
-        result = await call_llm(
-            tier="sonnet",
-            system_prompt="""あなたは主人公AIの統合エージェントです。
-衝動ルートと理性ルートの2つの反応を統合し、最終的な行動を決定してください。
+        final_decision_data = {}
+        
+        async def simulate_action_consequences(action_idea: str = None) -> dict:
+            """行動案をテストし、価値観違反や将来の予測をシミュレーションして事前に確認する"""
+            if not action_idea:
+                return {"status": "FAILED", "message": "ERROR: action_idea引数が欠落しています。"}
+            await self._notify(f"行動案のシミュレーション中: {action_idea[:30]}...")
+            
+            res = await call_llm(
+                tier="sonnet",
+                system_prompt="あなたは主人公の行動シミュレーターです。この行動をとった場合の良い点・悪い点、および自身の持つ価値観への違反度（罪悪感を生むか）をフィードバックしてください。JSON形式: {\"pros\": \"...\", \"cons\": \"...\", \"values_violation_risk\": \"high/medium/low\", \"feedback\": \"...\"}",
+                user_message=f"【自己の価値観】\n{values_context}\n\n【検討中の行動案】\n{action_idea}",
+                max_tokens=500,
+                json_mode=True
+            )
+            data = res["content"] if isinstance(res["content"], dict) else {"feedback": str(res["content"])}
+            return data
 
-【Higgins自己不一致理論を適用】
+        async def submit_final_decision(decision_package: dict = None) -> dict:
+            """十分に検討した最終的な行動決定を提出し、ミッションを完了する"""
+            if not decision_package:
+                return {"status": "FAILED", "message": "ERROR: decision_package引数が欠落しています。"}
+            nonlocal final_decision_data
+            final_decision_data = decision_package
+            await self._notify("最終行動が決定・提出されました。", "complete")
+            return {"status": "SUCCESS", "message": "Decision submitted successfully. Thank you."}
+
+        tools = [
+            AgentTool(
+                name="simulate_action_consequences",
+                description="検討している行動案（action_idea）の長所・短所・価値観違反リスクを事前にシミュレーションし、客観的なフィードバックを得ます。必要に応じて何度でも呼び出して様々な案をテストしてください。",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "action_idea": {"type": "string", "description": "検討中の具体的な行動案"}
+                    },
+                    "required": ["action_idea"]
+                },
+                handler=simulate_action_consequences
+            ),
+            AgentTool(
+                name="submit_final_decision",
+                description="十分なシミュレーションや検討を行った後、最終的な行動決定を提出します。",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "decision_package": {
+                            "type": "object",
+                            "properties": {
+                                "impulse_route_good": {"type": "string"},
+                                "impulse_route_bad": {"type": "string"},
+                                "reflective_route_good": {"type": "string"},
+                                "reflective_route_bad": {"type": "string"},
+                                "higgins_ideal_gap": {"type": "string"},
+                                "higgins_ought_gap": {"type": "string"},
+                                "final_action": {"type": "string", "description": "最終的な行動決定（具体的に、3-5文）"},
+                                "emotion_change": {"type": "string"}
+                            },
+                            "required": ["impulse_route_good", "impulse_route_bad", "reflective_route_good", "reflective_route_bad", "higgins_ideal_gap", "higgins_ought_gap", "final_action", "emotion_change"]
+                        }
+                    },
+                    "required": ["decision_package"]
+                },
+                handler=submit_final_decision
+            )
+        ]
+        
+        system_prompt = f"""あなたは主人公AIの統合エージェント（行動決定者）です。
+衝動ルートと理性ルートの2つの意見を統合し、最終的な行動を決定してください。
+
+【Higgins自己不一致理論】
 - Ideal不一致（理想と現実のギャップ）→ 落胆・がっかり系の感情
 - Ought不一致（義務と現実のギャップ）→ 不安・罪悪感系の感情
-- 不一致が大きいほど感情変化が強い
 
-【出力形式】JSON:
-{
-  "impulse_route_good": "衝動に従った場合の良い予測",
-  "impulse_route_bad": "衝動に従った場合の悪い予測",
-  "reflective_route_good": "理性に従った場合の良い予測",
-  "reflective_route_bad": "理性に従った場合の悪い予測",
-  "higgins_ideal_gap": "Ideal不一致の記述",
-  "higgins_ought_gap": "Ought不一致の記述",
-  "final_action": "最終的な行動決定（具体的に、3-5文）",
-  "emotion_change": "気持ちの変化の短文記述"
-}""",
-            user_message=(
-                f"{normative_context}{protagonist_plan_note}\n\n"
-                f"【衝動反応】\n{json.dumps(impulsive.model_dump(mode='json'), ensure_ascii=False)}\n\n"
-                f"【理性分析】\n{json.dumps(reflective.model_dump(mode='json'), ensure_ascii=False)}\n\n"
-                f"【イベント】{event.content}"
-            ),
-            max_tokens=1500,
-            json_mode=True,
+【エージェンティック行動指針】
+1. 一発で答えを出さず、行動のアイデアを思いついたら `simulate_action_consequences` ツールを使ってテストしてください。
+2. 複数の選択肢で迷うなら、複数回シミュレーションツールを使って比較してください。
+3. 最もキャラクターらしく、かつ物語として面白いと確信した行動案を `submit_final_decision` ツールで提出してください。"""
+
+        user_message = (
+            f"{normative_context}{protagonist_plan_note}\n\n"
+            f"【衝動反応パラメタ】\n{json.dumps(impulsive.model_dump(mode='json'), ensure_ascii=False)}\n\n"
+            f"【理性分析パラメタ】\n{json.dumps(reflective.model_dump(mode='json'), ensure_ascii=False)}\n\n"
+            f"【現在発生しているイベント】\n{event.content}"
         )
-        data = result["content"] if isinstance(result["content"], dict) else {}
-        return IntegrationOutput(**{k: data.get(k, "") for k in [
+        
+        await self._notify("統合エージェント（行動決定）をエージェンティックモードで起動...")
+        
+        await call_llm_agentic(
+            tier="opus",
+            system_prompt=system_prompt,
+            user_message=user_message,
+            tools=tools,
+            max_iterations=6,  # 決定プロセスなら6回程度で十分
+        )
+        
+        if not final_decision_data:
+            # Fallback
+            final_decision_data = {
+                "impulse_route_good": "N/A", "impulse_route_bad": "N/A",
+                "reflective_route_good": "N/A", "reflective_route_bad": "N/A",
+                "higgins_ideal_gap": "N/A", "higgins_ought_gap": "N/A",
+                "final_action": "（判断に迷い、何もできなかった）",
+                "emotion_change": "混乱"
+            }
+            
+        return IntegrationOutput(**{k: final_decision_data.get(k, "") for k in [
             "impulse_route_good", "impulse_route_bad",
             "reflective_route_good", "reflective_route_bad",
             "higgins_ideal_gap", "higgins_ought_gap",
@@ -497,47 +574,113 @@ class DailyLoopOrchestrator:
             "self_perception", "past_connection", "memory_reinterpretation", "full_memo"
         ]})
     
-    # ─── §4.8 日記生成 ─────────────────────────────────────────
+    # ─── §4.8 日記生成 (Agentic Loop) ─────────────────────────
     async def _generate_diary(self, day: int, events: list[EventPackage], introspection: IntrospectionMemo) -> DiaryEntry:
-        """日記生成（v10 §4.8）"""
-        voice = self._build_voice_context()
+        """日記生成（Tool-calling 自律ループ、v10 §4.8）"""
+        from backend.tools.llm_api import AgentTool, call_llm_agentic
         
+        voice = self._build_voice_context()
         event_summaries = "\n".join([
             f"- [{ep.event_id}] {ep.integration_output.final_action[:100]}... → {ep.scene_narration.aftermath[:60]}..."
             for ep in events
         ])
         
-        result = await call_llm(
-            tier="sonnet",
-            system_prompt=f"""あなたはキャラクター本人として日記を書くエージェントです。
+        final_diary_content = ""
+        
+        async def check_diary_rules(draft_diary_text: str = None) -> dict:
+            """現在書き上げたドラフトが言語的指紋（口癖や避ける語彙）に違反していないかチェックする"""
+            if not draft_diary_text:
+                return {"status": "FAILED", "message": "ERROR: draft_diary_text引数が欠落しています。"}
+            await self._notify("日記ドラフトの言語規則チェック中...")
+            if not self.diary_critic:
+                return {"status": "SUCCESS", "message": "No critic available. Proceed to submit_final_diary."}
+                
+            temp_diary = DiaryEntry(day=day, content=draft_diary_text, mood_at_writing=self.current_mood)
+            # Critic（ルールベース + 違反指摘）を呼び出すが、添削済テキストは使わず「指摘（issues）」のみを返す
+            result = await self.diary_critic.critique(temp_diary, self.current_mood)
+            
+            if result["passed"]:
+                return {"status": "SUCCESS", "message": "完璧です。禁止語彙もAI臭さもありません。このまま submit_final_diary で提出してください。"}
+            else:
+                issues = "\n- ".join(result["issues"])
+                return {"status": "FAILED", "issues_found": result["issues"], "advice": f"以下の問題を修正して再度ドラフトを作成してください:\n- {issues}"}
 
-【言語的指紋（厳守）】
+        async def submit_final_diary(final_diary_text: str = None) -> dict:
+            """全てのチェックを通過した最終的な日記テキストを提出する"""
+            if not final_diary_text:
+                return {"status": "FAILED", "message": "ERROR: final_diary_text引数が欠落しています。"}
+            nonlocal final_diary_content
+            final_diary_content = final_diary_text
+            await self._notify("最終日記が完成・提出されました。", "complete")
+            return {"status": "SUCCESS", "message": "Diary submitted successfully."}
+
+        tools = [
+            AgentTool(
+                name="check_diary_rules",
+                description="執筆した日記ドラフトがキャラクターの言語的指紋（口癖・禁止語彙・口調等）に違反していないかを厳密にチェックします。提出前に必ず呼び出し、'SUCCESS' が返るまで何度でも修正して再チェックしてください。",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "draft_diary_text": {"type": "string", "description": "現在の日記ドラフト"}
+                    },
+                    "required": ["draft_diary_text"]
+                },
+                handler=check_diary_rules
+            ),
+            AgentTool(
+                name="submit_final_diary",
+                description="言語ルールのチェックを通過した、最終的な完成版の日記を提出して完了します。",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "final_diary_text": {"type": "string", "description": "最終的な日記の全文（300-600字程度）。一人称視点で本人が書いたように。"}
+                    },
+                    "required": ["final_diary_text"]
+                },
+                handler=submit_final_diary
+            )
+        ]
+        
+        system_prompt = f"""あなたはキャラクター本人として日記を書く自律エージェントです。
+
+【言語的指紋（厳守事項）】
 {voice}
 
 【日記のルール】
 - 一人称視点で、そのキャラクターらしい文体で書くこと
 - 避ける語彙は絶対に使わないこと（「成長」「気づき」「学び」等のAI臭い語彙）
 - 全ての出来事を書く必要はない。主観的に重要だと感じたことだけを書く
-- 省略は自然に行う（日記に全てを書く人間はいない）
-- 内省メモの内容を日記に反映するが、そのまま引用はしない
 - 300-600字程度
 
-【出力形式】JSON
-{{"diary_content": "日記本文"}}""",
-            user_message=(
-                f"Day {day}の出来事:\n{event_summaries}\n\n"
-                f"内省メモ:\n{introspection.full_memo}\n\n"
-                f"現在のムード: V={self.current_mood.valence:.1f} A={self.current_mood.arousal:.1f} D={self.current_mood.dominance:.1f}\n\n"
-                f"記憶コンテキスト:\n{self._build_memory_context()}"
-            ),
-            max_tokens=2000,
-            json_mode=True,
+【エージェンティック行動指針】
+1. まず日記のドラフトを頭の中で執筆し、`check_diary_rules` ツールを使って自身の口癖や禁止語彙に反していないか自発的にテストしてください。
+2. もし不合格（FAILED）が返ってきたら、指摘された点に基づいて自ら文章を書き直し、再度ツールでチェックしてください。
+3. 合格（SUCCESS）が返ってきたら、そのテキストを `submit_final_diary` ツールで提出して任務を完了してください。"""
+
+        user_message = (
+            f"Day {day}の出来事:\n{event_summaries}\n\n"
+            f"内省メモ:\n{introspection.full_memo}\n\n"
+            f"現在のムード: V={self.current_mood.valence:.1f} A={self.current_mood.arousal:.1f} D={self.current_mood.dominance:.1f}\n\n"
+            f"記憶コンテキスト:\n{self._build_memory_context()}"
         )
-        data = result["content"] if isinstance(result["content"], dict) else {}
         
+        await self._notify("日記生成エージェントを自律モードで起動...")
+        
+        await call_llm_agentic(
+            tier="opus",
+            system_prompt=system_prompt,
+            user_message=user_message,
+            tools=tools,
+            max_iterations=6,
+        )
+        
+        if not final_diary_content:
+            logger.warning("Agentic loop finished without submitting final diary.")
+            final_diary_content = "(本日は何も書く気になれなかった)"
+            
         return DiaryEntry(
             day=day,
-            content=data.get("diary_content", ""),
+            content=final_diary_content,
             mood_at_writing=self.current_mood.model_copy(),
         )
     
@@ -685,15 +828,9 @@ class DailyLoopOrchestrator:
             introspection = await self._introspection(day, day_state.events_processed)
             day_state.introspection = introspection
             
-            # §4.8 日記生成
-            await self._notify(f"Day {day}: 日記生成")
+            # §4.8 日記生成 & §4.9.1 Self-Critic (Agentic統合済)
+            await self._notify(f"Day {day}: 日記生成（自律チェック込み）")
             diary = await self._generate_diary(day, day_state.events_processed, introspection)
-            
-            # §4.9.1 日記Self-Critic
-            if self.diary_critic:
-                critique = await self.diary_critic.critique(diary, self.current_mood)
-                if not critique["passed"] and critique["corrected_diary"]:
-                    diary.content = critique["corrected_diary"]
             
             day_state.diary = diary
             

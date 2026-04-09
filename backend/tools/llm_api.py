@@ -10,6 +10,8 @@ from typing import Any, Optional
 
 import anthropic
 import google.generativeai as genai
+from dataclasses import dataclass
+from typing import Any, Optional, Callable
 
 from backend.config import APIKeys, LLMModels
 
@@ -282,29 +284,25 @@ async def call_llm(
     Returns:
         {"content": str or dict, "usage": dict}
     """
-    if tier == "opus":
-        return await call_anthropic(
-            model=LLMModels.OPUS,
-            system_prompt=system_prompt,
-            user_message=user_message,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            cache_system=cache_system,
-            cache_context=cache_context,
-            json_mode=json_mode,
-        )
-    elif tier == "sonnet":
-        return await call_anthropic(
-            model=LLMModels.SONNET,
-            system_prompt=system_prompt,
-            user_message=user_message,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            cache_system=cache_system,
-            cache_context=cache_context,
-            json_mode=json_mode,
-        )
-    elif tier == "gemma":
+    if tier in ("opus", "sonnet"):
+        model_name = LLMModels.OPUS if tier == "opus" else LLMModels.SONNET
+        try:
+            return await call_anthropic(
+                model=model_name,
+                system_prompt=system_prompt,
+                user_message=user_message,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                cache_system=cache_system,
+                cache_context=cache_context,
+                json_mode=json_mode,
+            )
+        except Exception as e:
+            logger.warning(f"[llm_api] Anthropic fallback triggered due to: {e}. Falling back to Gemma.")
+            # エラー時はGemmaへフォールバック
+            tier = "gemma"
+            
+    if tier == "gemma":
         return await call_gemma(
             user_message=f"{system_prompt}\n\n---\n\n{user_message}" if system_prompt else user_message,
             model=LLMModels.GEMMA_4_MOE,
@@ -314,3 +312,151 @@ async def call_llm(
         )
     else:
         raise ValueError(f"Unknown tier: {tier}")
+
+
+# ─── 真の自律型エージェントループ (Agentic Execution Loop) ────────
+
+@dataclass
+class AgentTool:
+    name: str
+    description: str
+    input_schema: dict
+    handler: Callable  # (kwargs) -> str | dict
+
+
+async def call_llm_agentic(
+    tier: str,
+    system_prompt: str,
+    user_message: str,
+    tools: list[AgentTool],
+    max_iterations: int = 10,
+    max_tokens: int = 4096,
+    temperature: float = 0.7,
+) -> Any:
+    """
+    Tool Callingによる自立ループを実行する
+    ※ この機能は高度な推論を必要とするため Anthropic API 専用とし、Geminiへの自動フォールバックは使用しません。
+    
+    Args:
+        tier: "opus" or "sonnet"
+        system_prompt: システムプロンプト
+        user_message: 最初の指示
+        tools: 利用可能なツールのリスト
+        max_iterations: 最大ループ回数
+        
+    Returns:
+        最終アクションの戻り値、または最後に確定した状態など
+    """
+    if tier not in ("opus", "sonnet"):
+        raise ValueError("Agentic loop requires Anthropic tier ('opus' or 'sonnet').")
+    
+    client = get_anthropic_client()
+    model_name = LLMModels.OPUS if tier == "opus" else LLMModels.SONNET
+    
+    anthropic_tools = [
+        {
+            "name": t.name,
+            "description": t.description,
+            "input_schema": t.input_schema,
+        }
+        for t in tools
+    ]
+    tool_map = {t.name: t.handler for t in tools}
+    
+    system = [{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}]
+    messages = [{"role": "user", "content": [{"type": "text", "text": user_message}]}]
+    
+    for i in range(max_iterations):
+        logger.info(f"[call_llm_agentic] Iteration {i+1}/{max_iterations}")
+        
+        # DEBUG LOGGING FOR MESSAGES
+        try:
+            import copy
+            dbg_msgs = []
+            for m in messages:
+                if isinstance(m.get("content"), list):
+                    content_str = []
+                    for c in m["content"]:
+                        if hasattr(c, "model_dump"):
+                            content_str.append(c.model_dump())
+                        else:
+                            content_str.append(c)
+                    dbg_msgs.append({"role": m["role"], "content": content_str})
+                else:
+                    dbg_msgs.append(m)
+            logger.info(f"[call_llm_agentic] SENDING MESSAGES: {json.dumps(dbg_msgs, ensure_ascii=False)}")
+        except Exception as e:
+            logger.error(f"Debug print failed: {e}")
+            
+        response = client.messages.create(
+            model=model_name,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            system=system,
+            messages=messages,
+            tools=anthropic_tools,
+            tool_choice={"type": "any"} # ツール使用を強制
+        )
+        
+        # トークン記録
+        usage = {
+            "input_tokens": getattr(response.usage, "input_tokens", 0),
+            "output_tokens": getattr(response.usage, "output_tokens", 0),
+        }
+        token_tracker.record(model_name, usage)
+        
+        # Response内容を履歴に追加
+        messages.append({"role": "assistant", "content": response.content})
+        
+        tool_use_blocks = [b for b in response.content if getattr(b, "type", "") == "tool_use"]
+        
+        if tool_use_blocks or response.stop_reason == "tool_use":
+            tool_results = []
+            for block in tool_use_blocks:
+                tool_name = block.name
+                tool_args = block.input
+                logger.info(f"[call_llm_agentic] Tool called: {tool_name}")
+                
+                if tool_name in tool_map:
+                    try:
+                        # ツール実行 (async/sync両対応)
+                        handler = tool_map[tool_name]
+                        import inspect
+                        if inspect.iscoroutinefunction(handler):
+                            result_data = await handler(**tool_args)
+                        else:
+                            result_data = handler(**tool_args)
+                            
+                        result_str = json.dumps(result_data, ensure_ascii=False) if isinstance(result_data, (dict, list)) else str(result_data)
+                        is_error = False
+                    except Exception as e:
+                        logger.error(f"[call_llm_agentic] Tool '{tool_name}' failed: {e}")
+                        result_str = f"Error executing tool: {e}"
+                        is_error = True
+                else:
+                    result_str = f"Error: Tool '{tool_name}' not found."
+                    is_error = True
+                    
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": result_str,
+                    "is_error": is_error,
+                })
+            
+            # ツール結果をユーザーメッセージとして追加し、ループ継続
+            messages.append({"role": "user", "content": tool_results})
+            
+            # もし `submit_` で始まるツール（最終提出ツール）が呼ばれており、エラーでないなら、ループを正常終了させる
+            if any(block.name.startswith("submit_") and not res["is_error"] for block, res in zip(tool_use_blocks, tool_results)):
+                logger.info(f"[call_llm_agentic] Final submit tool called successfully. Exiting loop.")
+                return final_text if 'final_text' in locals() else "Success"
+        
+        else:
+            # any強制しているのにテキストで返ってきた場合の安全網
+            final_text = next((getattr(block, "text", "") for block in response.content if getattr(block, "type", "") == "text"), "")
+            logger.warning(f"[call_llm_agentic] Returned without tool_use (stop_reason={response.stop_reason}). Forcing instruction.")
+            messages.append({"role": "user", "content": [{"type": "text", "text": "指示: あなたは必ず用意されたツールのいずれかを呼び出す必要があります。自然言語のみの回答は受け付けられません。最終的な回答を提出したい場合は提供された `submit_` ツールを使用してください。"}]})
+    
+    logger.warning("[call_llm_agentic] Hit max iterations without final resolution.")
+    return next((getattr(block, "text", "") for block in messages[-1]["content"] if getattr(block, "type", "") == "text"), "")

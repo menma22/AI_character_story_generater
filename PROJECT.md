@@ -123,17 +123,17 @@ graph TB
 #### コアロジック・ルール
 
 **4層エージェント階層（Day 0）:**
-1. **Tier -1 Creative Director** (Opus 4.6): concept_package生成 + Self-Critique最大4回
-2. **Tier 0 Master Orchestrator** (Opus 4.6): Phase A-1→A-2→A-3→D順次制御
+1. **Tier -1 Creative Director** (Opus): Tool-Callingによる自律推敲ループ (Agentic Loop) でconcept_packageを生成・自己批評・修正。
+2. **Tier 0 Master Orchestrator** (Opus): Phase A-1→A-2→A-3→D順次制御
 3. **Phase Orchestrators**: 各Phase内のWorker群を管理
 4. **Workers** (Gemma 4 / Sonnet): 個別生成タスク
 
 **日次ループ（Day 1-7）:**
 ```
 各日のイベント(4-6個) → Perceiver → [Impulsive | Reflective](並列)
-→ 統合(Higgins) → 情景描写 → 価値観違反チェック → 行動バッファ蓄積
+→ 統合(Higgins): Agentic行動決定(事前シミュレーションツール使用) → 情景描写
 → 内省(Self-Perception + 過去統合 + 再解釈)
-→ 日記生成(言語的指紋 + 省略制御)
+→ 日記生成: Agentic日記執筆(言語的指紋・AI臭さツール検証込み)
 → key memory抽出 + 記憶圧縮 + 翌日予定追加
 ```
 
@@ -172,17 +172,17 @@ graph TB
 
 ## パート2: ベストプラクティス・設計進化
 
-### 1. エージェント階層の設計
+### 1. エージェント階層の設計と評価ループ
 
-**(a) 当初設計**: 仕様書v2の4層階層をそのまま採用
-**(b) 変更・根拠**: MVP段階ではPhase Orchestrator + Worker分離を一部簡略化（Phase A-2のWorker統合実行）。コスト効率のため。
-**(c) 採用プラクティス**: Phase Orchestrator内にWorker呼び出しロジックを直接実装し、ファイル分割よりも実行効率を優先。本番品質ではWorker分離を完全実装。
+**(a) 当初設計**: 仕様書v2の4層階層を採用。評価(EvaluatorPipeline)はすべての生成が終わった最後にまとめて呼び出して成否をテストする想定。
+**(b) 変更・根拠**: 全工程終了後のテストでは、例えばPhase A-1（マクロ）で不合格が出た場合、既に無駄に消費したPhase Dまでのトークン生成が全て破棄されるというコスト破壊の問題が存在した。
+**(c) 採用プラクティス**: `MasterOrchestrator` の `run()` 内に「Evaluator-Optimizer ループ」を完全統合。各Phase（例えばPhase A-3完了直後）ごとに即座に評価を挟み、FailならそのPhaseだけを指定回数（最大4回）再生成（リトライ）させる堅牢な自律修正システムへ進化した。また、APIの404エラー障害に対してフォールバックルーティング（Anthropic → Google Gemini）を実装して安定化を図った。
 
 ### 2. LLM API設計
 
-**(a) 当初設計**: Claude Agent SDK使用を前提
-**(b) 変更・根拠**: SDK未確認のため、直接Anthropic API呼び出しに切替。Prompt Caching（`cache_control: ephemeral`）を手動で制御可能にする利点もある。
-**(c) 採用プラクティス**: `call_llm()` 統一インターフェースで `tier="opus"|"sonnet"|"gemma"` を指定。内部で自動的にモデル・API・キャッシュ制御を切替。
+**(a) 当初設計**: Claude Agent SDK使用を前提。また、Opus 4.6やGemma 4などの指定について代替えの現行モデルを使用して検証していた。
+**(b) 変更・根拠**: SDK未確認のため、直接Anthropic APIおよびGoogle Generative AIに切替。さらに最新のAPIエコシステム（2026年現在）にて、 `claude-opus-4-6`, `claude-sonnet-4-6`, `models/gemma-4-31b-it` が実在・稼働していることが確認されたため。
+**(c) 採用プラクティス**: `call_llm()` 統一インターフェースで、実在する最新モデルID（`claude-opus-4-6`等）を直接指定。エラー時にはフォールバックルーティング（Anthropic → Google Gemini）が作動して安定化を図る設計とした。
 
 ### 3. 隠蔽原則の実装
 
@@ -192,6 +192,12 @@ graph TB
 - Reflective Agent: `schwartz_values`, `ideal_self`, `ought_self` のみ渡す（気質パラメータは渡さない）
 - 日記生成AI: `voice_fingerprint` のみ渡す（パラメータ値は一切渡さない）
 
+### 4. コアAPI層の自律エージェント化 (Agentic Loops v10)
+
+**(a) 当初設計**: 各タスク（Creative Directorによるドラフト生成や、日記の評価）はPython側の固定化された順次・反復ループ構造（プロンプトチェイン）を用いて、外部からLLMをコントロールする「制御型フロー」だった。
+**(b) 変更・根拠**: V10仕様書に基づく「真のエージェンティックな振る舞い」を実現するため。LLMに対し、外部から判定を押し付けるのではなく、複数のツール（機能）を提供し、自ら考えて行動・検証させる方が高度な成果が得られる。
+**(c) 採用プラクティス**: Anthropic Tool Calling機能を統合した `call_llm_agentic` インフラを構築し、CreativeDirector、Integration Agent(行動決定)、DiaryGenerationAgentの3コアを、すべてツールの呼び出し可否を自律判断して自己完結する「Tool-using Autonomous Agent」へと置き換えた。
+
 ---
 
 ## パート3: プロジェクト管理
@@ -200,20 +206,19 @@ graph TB
 
 | ステージ | 状態 | 備考 |
 |---|---|---|
-| Stage 1: MVP | ✅ 構造完了 | APIキー設定後にE2Eテスト可能 |
-| Stage 2: 品質向上 | ⬜ 未着手 | Evaluator群の実装 |
-| Stage 3: UX改善 | ⬜ 未着手 | 共同編集・ストリーミング強化 |
-| Stage 4: 提出準備 | ⬜ 未着手 | 説明資料・比較実験 |
+| Stage 1: MVP | ✅ 実装完了 | 4層エージェント構造、日次ループ統合済 |
+| Stage 2: 品質向上 | ✅ 実装完了 | Evaluator群7種、再生成ループ統合完了 |
+| Stage 3: エージェント自律化 | ✅ 実装完了 | コア3種(Director, Action, Diary)のTool-Using化 |
+| Stage 4: UX改善 | ⬜ 未着手 | 共同編集・ストリーミング強化 |
+| Stage 5: 提出準備 | ⬜ 着手中 | E2Eテスト済（v10仕様到達、API制限注視） |
 
-### 次のアクション（優先順）
+### 次のアクション（現行ステータス: Stage 5 提出準備）
 
-1. **`.env` ファイルにAPIキーを設定** → E2Eテスト実行可能に
-2. **Draftプロファイルで1キャラクター生成テスト** → 各Phase出力の品質確認
-3. **翌日予定追加エージェント実装** → Day間の連続性強化
-4. **Stage 2 Evaluator実装** → SchemaValidator, BiasAuditor
-5. **提出用キャラクター生成** → High Qualityプロファイルで最終生成
+1. **品質の検証** → Agentic Loopで飛躍した日記やキャラクター造形を評価
+2. **提出用キャラクター生成** → High Qualityプロファイルで全EvaluatorをONにして実行
+3. **フロントエンド連携強化** → WebSocketでの思考ストリーミング確認
 
 ### ブロッカー
 
 > [!WARNING]
-> **Anthropic APIキーと Google AI Studio APIキーが未設定**。`.env` ファイルを作成し、APIキーを設定しないと生成テストを実行できません。
+> 一部のLLM API（特にAnthropic無料枠の404エラーや、Gemini APIの `FreeTier` トークンクォータ制限）による生成中断ログが確認されています。本稼働させる場合は有償Tierキーへ切り替えるか、リセット枠の回復をお待ちください。

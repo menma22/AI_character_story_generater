@@ -17,11 +17,11 @@ load_dotenv(Path(__file__).parent.parent / ".env")
 class LLMModels:
     """使用するLLMモデルの定義"""
     # Anthropic
-    OPUS = "claude-opus-4-20250514"
-    SONNET = "claude-sonnet-4-20250514"
+    OPUS = "claude-opus-4-6"
+    SONNET = "claude-sonnet-4-6"
     
     # Google AI Studio
-    GEMMA_4_MOE = "gemma-4-27b-it"
+    GEMMA_4_MOE = "models/gemma-4-31b-it"
 
 
 # ─── API キー ────────────────────────────────────────────────

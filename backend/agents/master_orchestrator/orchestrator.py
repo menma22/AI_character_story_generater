@@ -44,6 +44,52 @@ class MasterOrchestrator:
         """
         await self._notify("Master Orchestratorを起動します。全Phaseを順次実行します。")
         
+        from backend.agents.evaluators.pipeline import EvaluatorPipeline
+        evaluator = EvaluatorPipeline(profile=self.profile, ws_manager=self.ws)
+        
+        # 評価結果の集計用
+        all_eval_results = []
+        
+        async def _execute_phase_with_retry(phase_name: str, orch_class, orch_kwargs: dict, eval_func):
+            max_iter = self.profile.worker_regeneration_max_iterations
+            if max_iter < 1:
+                max_iter = 1
+                
+            best_result = None
+            best_evals = []
+            best_passed_count = -1
+            
+            for iteration in range(1, max_iter + 1):
+                if iteration > 1:
+                    await self._notify(f"{phase_name}: 再生成ループ {iteration}/{max_iter} を開始", "warning")
+                
+                # Phase実行
+                orch = orch_class(**orch_kwargs)
+                result = await orch.run()
+                
+                # Evaluator実行
+                evals = await eval_func(result)
+                
+                passed_count = sum(1 for e in evals if e.passed)
+                is_passed = all(e.passed for e in evals)
+                
+                # 暫定ベスト更新
+                if passed_count > best_passed_count:
+                    best_passed_count = passed_count
+                    best_result = result
+                    best_evals = evals
+                
+                if is_passed:
+                    all_eval_results.extend(best_evals)
+                    return best_result
+                else:
+                    errors = [e.error for e in evals if not e.passed]
+                    await self._notify(f"{phase_name} 評価Fail: {errors[0]}", "warning")
+                    
+            await self._notify(f"{phase_name}: 評価上限到達。暫定ベスト結果を採用します", "warning")
+            all_eval_results.extend(best_evals)
+            return best_result
+        
         # ─── Tier -1: Creative Director ───────────────────────
         await self._progress("creative_director", 0.0, "Creative Director起動中...")
         
@@ -60,12 +106,13 @@ class MasterOrchestrator:
         
         try:
             from backend.agents.phase_a1.orchestrator import PhaseA1Orchestrator
-            a1_orch = PhaseA1Orchestrator(
-                concept=concept,
-                profile=self.profile,
-                ws_manager=self.ws,
+            
+            macro_profile = await _execute_phase_with_retry(
+                "Phase A-1",
+                PhaseA1Orchestrator,
+                {"concept": concept, "profile": self.profile, "ws_manager": self.ws},
+                lambda res: evaluator.evaluate_phase_a1(res)
             )
-            macro_profile = await a1_orch.run()
             self.package.macro_profile = macro_profile
             
             await self._progress("phase_a1", 1.0, "Phase A-1完了")
@@ -80,13 +127,13 @@ class MasterOrchestrator:
         
         try:
             from backend.agents.phase_a2.orchestrator import PhaseA2Orchestrator
-            a2_orch = PhaseA2Orchestrator(
-                concept=concept,
-                macro_profile=macro_profile,
-                profile=self.profile,
-                ws_manager=self.ws,
+            
+            micro_params = await _execute_phase_with_retry(
+                "Phase A-2",
+                PhaseA2Orchestrator,
+                {"concept": concept, "macro_profile": macro_profile, "profile": self.profile, "ws_manager": self.ws},
+                lambda res: evaluator.evaluate_phase_a2(res)
             )
-            micro_params = await a2_orch.run()
             self.package.micro_parameters = micro_params
             
             await self._progress("phase_a2", 1.0, "Phase A-2完了")
@@ -101,14 +148,13 @@ class MasterOrchestrator:
         
         try:
             from backend.agents.phase_a3.orchestrator import PhaseA3Orchestrator
-            a3_orch = PhaseA3Orchestrator(
-                concept=concept,
-                macro_profile=macro_profile,
-                micro_parameters=micro_params,
-                profile=self.profile,
-                ws_manager=self.ws,
+            
+            episodes = await _execute_phase_with_retry(
+                "Phase A-3",
+                PhaseA3Orchestrator,
+                {"concept": concept, "macro_profile": macro_profile, "micro_parameters": micro_params, "profile": self.profile, "ws_manager": self.ws},
+                lambda res: evaluator.evaluate_phase_a3(res, concept, macro_profile)
             )
-            episodes = await a3_orch.run()
             self.package.autobiographical_episodes = episodes
             
             await self._progress("phase_a3", 1.0, "Phase A-3完了")
@@ -123,15 +169,13 @@ class MasterOrchestrator:
         
         try:
             from backend.agents.phase_d.orchestrator import PhaseDOrchestrator
-            d_orch = PhaseDOrchestrator(
-                concept=concept,
-                macro_profile=macro_profile,
-                micro_parameters=micro_params,
-                episodes=episodes,
-                profile=self.profile,
-                ws_manager=self.ws,
+            
+            events_store = await _execute_phase_with_retry(
+                "Phase D",
+                PhaseDOrchestrator,
+                {"concept": concept, "macro_profile": macro_profile, "micro_parameters": micro_params, "episodes": episodes, "profile": self.profile, "ws_manager": self.ws},
+                lambda res: evaluator.evaluate_phase_d(res, episodes)
             )
-            events_store = await d_orch.run()
             self.package.weekly_events_store = events_store
             
             await self._progress("phase_d", 1.0, "Phase D完了")
@@ -141,26 +185,32 @@ class MasterOrchestrator:
             await self._notify(f"Phase Dエラー: {str(e)}", "error")
             raise
         
-        # ─── Tier 3: Evaluator群（v2 §8）──────────────────────
-        await self._notify("Evaluator群を実行中...")
+        # ─── Tier 3: 最終クロス構成チェック (Consistency / Interestingness) ──
+        await self._notify("最終フェーズ横断Evaluatorを実行中...")
         
         try:
-            from backend.agents.evaluators.pipeline import EvaluatorPipeline
-            evaluator = EvaluatorPipeline(profile=self.profile, ws_manager=self.ws)
-            audit = await evaluator.evaluate_full(
-                concept=concept,
-                macro=macro_profile,
-                micro=micro_params,
-                episodes=episodes,
-                store=events_store,
-            )
-            self.package.audit_report = audit
+            # 各Phaseの評価は既に all_eval_results に入っている
+            from backend.agents.evaluators.pipeline import ConsistencyChecker, InterestingnessEvaluator
             
-            passed = audit["passed_count"]
-            total = audit["total_count"]
-            await self._notify(f"Evaluator完了: {passed}/{total} passed", "complete")
+            if self.profile.consistency_checker_enabled:
+                all_eval_results.append(await ConsistencyChecker.check(concept, macro_profile, micro_params, self.ws))
+            
+            if self.profile.interestingness_evaluator_enabled:
+                all_eval_results.append(await InterestingnessEvaluator.evaluate(concept, macro_profile, self.ws))
+            
+            passed = sum(1 for e in all_eval_results if e.passed)
+            total = len(all_eval_results)
+            
+            self.package.audit_report = {
+                "overall_passed": all(e.passed for e in all_eval_results),
+                "passed_count": passed,
+                "total_count": total,
+                "results": [r.model_dump() for r in all_eval_results],
+            }
+            
+            await self._notify(f"全評価完了: {passed}/{total} passed", "complete")
         except Exception as e:
-            logger.warning(f"Evaluator pipeline error: {e}")
+            logger.warning(f"最終Evaluator error: {e}")
             await self._notify(f"Evaluator警告: {str(e)}", "error")
         
         # ─── メタデータ更新 ──────────────────────────────────
