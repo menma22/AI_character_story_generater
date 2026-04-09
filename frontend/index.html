@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="AIキャラクターストーリー生成システム - 心理学的人格モデルに基づくキャラクター日記生成">
+    <title>AIキャラクターストーリー生成システム</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Noto+Sans+JP:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <!-- ─── ナビゲーション ─── -->
+    <nav id="main-nav">
+        <div class="nav-brand">
+            <span class="nav-icon">⬡</span>
+            <span class="nav-title">Script AI</span>
+            <span class="nav-version">v2.0</span>
+        </div>
+        <div class="nav-actions">
+            <div id="cost-display" class="cost-badge" title="推定コスト">
+                <span class="cost-icon">◈</span>
+                <span id="cost-value">$0.00</span>
+            </div>
+            <div id="status-indicator" class="status-dot offline" title="未接続">
+                <span class="status-text">Offline</span>
+            </div>
+        </div>
+    </nav>
+
+    <!-- ─── メインコンテナ ─── -->
+    <main id="app-container">
+        
+        <!-- 起動画面 -->
+        <section id="start-screen" class="screen active">
+            <div class="hero">
+                <div class="hero-glow"></div>
+                <h1 class="hero-title">
+                    <span class="hero-line-1">AI Character</span>
+                    <span class="hero-line-2">Story Generator</span>
+                </h1>
+                <p class="hero-subtitle">心理学的人格モデル × 7日間の物語生成</p>
+            </div>
+            
+            <div class="mode-cards">
+                <div class="mode-card" id="mode-auto" onclick="startGeneration('auto')">
+                    <div class="mode-icon">🎭</div>
+                    <h3>フルオート生成</h3>
+                    <p>テーマなし。AIが独自に面白いキャラクターを設計</p>
+                    <div class="mode-tag">おすすめ</div>
+                </div>
+                <div class="mode-card" id="mode-theme" onclick="showThemeInput()">
+                    <div class="mode-icon">🎯</div>
+                    <h3>テーマ指定</h3>
+                    <p>テーマやジャンルを指定してキャラクター生成</p>
+                </div>
+                <div class="mode-card" id="mode-history" onclick="showHistory()">
+                    <div class="mode-icon">📚</div>
+                    <h3>過去パッケージ</h3>
+                    <p>生成済みキャラクターの閲覧・日記生成</p>
+                </div>
+            </div>
+
+            <!-- テーマ入力（非表示） -->
+            <div id="theme-input-area" class="theme-area hidden">
+                <div class="theme-input-group">
+                    <label for="theme-input">テーマ・世界観を入力</label>
+                    <textarea id="theme-input" placeholder="例: 元ヤクザの料理人が下町で定食屋を営む。過去の暴力と向き合いながら..."></textarea>
+                    <div class="theme-actions">
+                        <select id="profile-select">
+                            <option value="draft">Draft（低コスト）</option>
+                            <option value="fast">Fast（バランス）</option>
+                            <option value="standard">Standard（推奨）</option>
+                            <option value="high_quality">High Quality（最高品質）</option>
+                        </select>
+                        <button class="btn-primary" onclick="startGeneration('theme')">生成開始</button>
+                        <button class="btn-ghost" onclick="hideThemeInput()">キャンセル</button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- 生成中画面 -->
+        <section id="generation-screen" class="screen">
+            <div class="gen-header">
+                <h2 id="gen-phase">キャラクター生成中...</h2>
+                <div class="progress-container">
+                    <div class="progress-bar" id="progress-bar" style="width: 0%"></div>
+                </div>
+                <p id="gen-detail" class="gen-detail"></p>
+            </div>
+            
+            <div class="thought-stream" id="thought-stream">
+                <div class="thought-header">
+                    <span class="thought-icon">⟡</span>
+                    <span>エージェント思考ログ</span>
+                </div>
+                <div id="thought-log" class="thought-log"></div>
+            </div>
+        </section>
+
+        <!-- 結果画面 -->
+        <section id="result-screen" class="screen">
+            <div class="result-tabs">
+                <button class="tab active" data-tab="concept" onclick="switchTab('concept')">コンセプト</button>
+                <button class="tab" data-tab="profile" onclick="switchTab('profile')">プロフィール</button>
+                <button class="tab" data-tab="parameters" onclick="switchTab('parameters')">パラメータ</button>
+                <button class="tab" data-tab="episodes" onclick="switchTab('episodes')">エピソード</button>
+                <button class="tab" data-tab="events" onclick="switchTab('events')">イベント</button>
+                <button class="tab" data-tab="diary" onclick="switchTab('diary')">日記</button>
+            </div>
+            
+            <div id="tab-concept" class="tab-content active">
+                <div id="concept-content"></div>
+            </div>
+            <div id="tab-profile" class="tab-content">
+                <div id="profile-content"></div>
+            </div>
+            <div id="tab-parameters" class="tab-content">
+                <div id="parameters-content"></div>
+            </div>
+            <div id="tab-episodes" class="tab-content">
+                <div id="episodes-content"></div>
+            </div>
+            <div id="tab-events" class="tab-content">
+                <div id="events-content"></div>
+            </div>
+            <div id="tab-diary" class="tab-content">
+                <div id="diary-content"></div>
+                <button class="btn-primary btn-large" id="btn-generate-diary" onclick="generateDiary()">
+                    日記生成を開始 (7日間)
+                </button>
+            </div>
+            
+            <div class="result-actions">
+                <button class="btn-ghost" onclick="downloadPackage()">📥 JSONダウンロード</button>
+                <button class="btn-ghost" onclick="backToStart()">← 戻る</button>
+            </div>
+        </section>
+
+        <!-- 履歴画面 -->
+        <section id="history-screen" class="screen">
+            <h2>生成済みパッケージ</h2>
+            <div id="history-list" class="history-list"></div>
+            <button class="btn-ghost" onclick="backToStart()">← 戻る</button>
+        </section>
+    </main>
+
+    <script src="/static/js/websocket.js"></script>
+    <script src="/static/js/renderer.js"></script>
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
