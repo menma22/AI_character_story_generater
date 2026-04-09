@@ -141,6 +141,28 @@ class MasterOrchestrator:
             await self._notify(f"Phase Dエラー: {str(e)}", "error")
             raise
         
+        # ─── Tier 3: Evaluator群（v2 §8）──────────────────────
+        await self._notify("Evaluator群を実行中...")
+        
+        try:
+            from backend.agents.evaluators.pipeline import EvaluatorPipeline
+            evaluator = EvaluatorPipeline(profile=self.profile, ws_manager=self.ws)
+            audit = await evaluator.evaluate_full(
+                concept=concept,
+                macro=macro_profile,
+                micro=micro_params,
+                episodes=episodes,
+                store=events_store,
+            )
+            self.package.audit_report = audit
+            
+            passed = audit["passed_count"]
+            total = audit["total_count"]
+            await self._notify(f"Evaluator完了: {passed}/{total} passed", "complete")
+        except Exception as e:
+            logger.warning(f"Evaluator pipeline error: {e}")
+            await self._notify(f"Evaluator警告: {str(e)}", "error")
+        
         # ─── メタデータ更新 ──────────────────────────────────
         cost = token_tracker.summary()
         self.package.metadata = PackageMetadata(
