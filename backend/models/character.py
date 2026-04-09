@@ -11,36 +11,42 @@ from datetime import datetime
 
 
 # ═══════════════════════════════════════════════════════════════
-# Tier -1: Creative Director 出力
+# Tier -1: Creative Director 出力（v2 §4.7 完全準拠）
 # ═══════════════════════════════════════════════════════════════
 
-class CharacterConcept(BaseModel):
-    """キャラクターの概念的な方向性"""
-    core_identity: str = Field(..., description="キャラの核心（1文）")
-    want: str = Field(..., description="本人が自覚している欲求")
-    need: str = Field(..., description="本人が気づいていない本当の必要")
-    internal_contradiction: str = Field(..., description="内部矛盾（面白さの源泉）")
+class ReferenceStory(BaseModel):
+    """参考となる既存物語"""
+    title: str = ""
+    author_or_source: str = ""
+    relevance: str = ""
+
+class WantAndNeed(BaseModel):
+    """Want/Need構造（McKee脚本論）"""
+    want: str = Field("", description="本人が自覚している外的目標")
+    need: str = Field("", description="本人が気づいていない本質的な内的必要")
+    tension: str = Field("", description="両者の緊張関係")
 
 class PsychologicalHints(BaseModel):
-    """心理学的パラメータの方向性"""
-    temperament_direction: str = Field(..., description="気質方向性への示唆")
-    values_direction: str = Field(..., description="価値観方向性への示唆")
-    key_tension: str = Field(..., description="気質と規範の間のギャップの設計意図")
-
-class StoryOutline(BaseModel):
-    """物語の骨格"""
-    narrative_theme: str = Field(..., description="通奏低音テーマ")
-    day5_climax_hint: str = Field(..., description="Day5山場の方向性")
-    emotional_arc: str = Field(..., description="感情アーク")
+    """心理学的パラメータの方向性（v2 §4.7準拠）"""
+    temperament_direction: str = Field("", description="Cloninger系の気質方向性")
+    values_direction: str = Field("", description="Schwartz系の価値観方向性")
+    want_and_need: WantAndNeed = Field(default_factory=WantAndNeed)
+    ghost_wound_hint: str = Field("", description="過去の傷の方向性")
+    lie_hint: str = Field("", description="誤った信念の方向性")
 
 class ConceptPackage(BaseModel):
-    """Creative Director の出力パッケージ（v2 §5.2準拠）"""
-    character_concept: CharacterConcept
-    genre_and_world: str = Field(..., description="ジャンルと世界観の方向性")
-    psychological_hints: PsychologicalHints
-    story_outline: StoryOutline
+    """Creative Director の出力パッケージ（v2 §4.7 完全準拠）"""
+    character_concept: str = Field("", description="キャラクター設定の大まかな概要（500-1000字の濃密な概念記述）")
+    story_outline: str = Field("", description="物語設定の大まかな概要（500-1000字の濃密な概念記述）")
+    narrative_theme: str = Field("", description="物語的テーマ（1-2文）")
     interestingness_hooks: list[str] = Field(default_factory=list, description="面白さのフック（3-5個）")
+    genre_and_world: str = Field("", description="ジャンルと世界観の方向性")
+    reference_stories: list[ReferenceStory] = Field(default_factory=list, description="参考となる既存物語")
     critical_design_notes: list[str] = Field(default_factory=list, description="下流への設計上の指示")
+    psychological_hints: PsychologicalHints = Field(default_factory=PsychologicalHints)
+    iteration_count: int = Field(0, description="Self-Critique反復回数")
+    self_critique_history: list[dict] = Field(default_factory=list)
+    verdict: str = Field("pass", description="最終判定")
 
 
 # ═══════════════════════════════════════════════════════════════

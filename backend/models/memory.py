@@ -27,6 +27,7 @@ class ShortTermMemoryDB(BaseModel):
     """短期記憶DB（2領域構造、v10 §5.1準拠）"""
     key_memories: list[KeyMemory] = Field(default_factory=list, description="7日間フル保持")
     normal_area: list[ShortTermMemoryNormal] = Field(default_factory=list, description="段階圧縮")
+    diary_store: list[str] = Field(default_factory=list, description="7日分の日記本文（圧縮せず全文保持）")
 
 
 class MoodState(BaseModel):
@@ -84,18 +85,39 @@ class ValuesViolationResult(BaseModel):
     violation_detected: bool = False
     violation_content: str = ""
     guilt_emotion: str = ""
+    violation_type: str = Field("", description="schwartz/mft/ideal/ought")
+    brief_reflection: str = Field("", description="簡易内省メモ")
+
+
+class ActivationLog(BaseModel):
+    """パラメータ動的活性化のログ（v10 §3.5準拠）"""
+    activated_temperament_ids: list[int] = Field(default_factory=list)
+    activated_personality_ids: list[int] = Field(default_factory=list)
+    activated_values: list[str] = Field(default_factory=list)
+    activation_reasoning: str = ""
+
+
+class NextDayPlan(BaseModel):
+    """翌日予定追加エージェントの出力（v10 §4.9.4準拠）"""
+    action: str = Field(..., description="何をするか（1-2文）")
+    preferred_time: str = Field(..., description="いつ頃やりたいか")
+    motivation: str = Field(..., description="なぜそれをしたいのか")
+    inserted: bool = Field(False, description="実際にイベント列に挿入されたか")
 
 
 class EventPackage(BaseModel):
     """1イベントの処理結果パッケージ（v10 §4.6d準拠）"""
     event_id: str
     event_content: str = ""
+    event_metadata: dict = Field(default_factory=dict, description="known/source/expectedness")
+    activation_log: ActivationLog = Field(default_factory=ActivationLog)
     perceiver_output: PerceiverOutput = Field(default_factory=PerceiverOutput)
     impulsive_output: ImpulsiveOutput = Field(default_factory=ImpulsiveOutput)
     reflective_output: ReflectiveOutput = Field(default_factory=ReflectiveOutput)
     integration_output: IntegrationOutput = Field(default_factory=IntegrationOutput)
     scene_narration: SceneNarration = Field(default_factory=SceneNarration)
     values_violation: ValuesViolationResult = Field(default_factory=ValuesViolationResult)
+    mood_before: MoodState = Field(default_factory=MoodState)
     mood_after: MoodState = Field(default_factory=MoodState)
 
 

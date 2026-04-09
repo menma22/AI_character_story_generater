@@ -9,26 +9,17 @@ const Renderer = {
      */
     renderConcept(concept) {
         if (!concept) return '<p class="text-muted">未生成</p>';
-        const cc = concept.character_concept || {};
         const ps = concept.psychological_hints || {};
-        const so = concept.story_outline || {};
+        const wn = ps.want_and_need || {};
         return `
             <div class="content-card">
                 <h3>キャラクターコンセプト</h3>
-                <div class="label">核心</div>
-                <div class="value">${cc.core_identity || ''}</div>
-                <div style="margin-top: var(--space-md)">
-                    <div class="label">Want（自覚的欲求）</div>
-                    <div class="value">${cc.want || ''}</div>
-                </div>
-                <div style="margin-top: var(--space-md)">
-                    <div class="label">Need（無自覚の必要）</div>
-                    <div class="value">${cc.need || ''}</div>
-                </div>
-                <div style="margin-top: var(--space-md)">
-                    <div class="label">内部矛盾</div>
-                    <div class="value">${cc.internal_contradiction || ''}</div>
-                </div>
+                <div class="value" style="white-space:pre-wrap; line-height:1.7">${concept.character_concept || ''}</div>
+            </div>
+            <div class="content-card">
+                <h3>物語骨格</h3>
+                <div class="value" style="white-space:pre-wrap; line-height:1.7">${concept.story_outline || ''}</div>
+                ${concept.narrative_theme ? `<div style="margin-top:var(--space-md)"><div class="label">通奏低音テーマ</div><div class="value">${concept.narrative_theme}</div></div>` : ''}
             </div>
             <div class="content-card">
                 <h3>ジャンル・世界観</h3>
@@ -36,34 +27,37 @@ const Renderer = {
             </div>
             <div class="content-card">
                 <h3>心理学的方向性</h3>
-                <div class="label">気質方向性</div>
+                <div class="label">気質方向性（Cloninger系）</div>
                 <div class="value">${ps.temperament_direction || ''}</div>
                 <div style="margin-top: var(--space-sm)">
-                    <div class="label">価値観方向性</div>
+                    <div class="label">価値観方向性（Schwartz系）</div>
                     <div class="value">${ps.values_direction || ''}</div>
                 </div>
-                <div style="margin-top: var(--space-sm)">
-                    <div class="label">キーテンション</div>
-                    <div class="value">${ps.key_tension || ''}</div>
-                </div>
-            </div>
-            <div class="content-card">
-                <h3>物語骨格</h3>
-                <div class="label">テーマ</div>
-                <div class="value">${so.narrative_theme || ''}</div>
-                <div style="margin-top: var(--space-sm)">
-                    <div class="label">Day5山場</div>
-                    <div class="value">${so.day5_climax_hint || ''}</div>
+                ${wn.want ? `
+                <div style="margin-top: var(--space-md)">
+                    <div class="label">Want（外的目標）</div>
+                    <div class="value">${wn.want}</div>
                 </div>
                 <div style="margin-top: var(--space-sm)">
-                    <div class="label">感情アーク</div>
-                    <div class="value">${so.emotional_arc || ''}</div>
+                    <div class="label">Need（内的必要）</div>
+                    <div class="value">${wn.need || ''}</div>
                 </div>
+                <div style="margin-top: var(--space-sm)">
+                    <div class="label">テンション</div>
+                    <div class="value">${wn.tension || ''}</div>
+                </div>` : ''}
+                ${ps.ghost_wound_hint ? `<div style="margin-top: var(--space-sm)"><div class="label">Ghost / Wound（過去の傷）</div><div class="value">${ps.ghost_wound_hint}</div></div>` : ''}
+                ${ps.lie_hint ? `<div style="margin-top: var(--space-sm)"><div class="label">Lie / Misbelief（誤った信念）</div><div class="value">${ps.lie_hint}</div></div>` : ''}
             </div>
             ${concept.interestingness_hooks?.length ? `
             <div class="content-card">
                 <h3>面白さのフック</h3>
                 <ul>${concept.interestingness_hooks.map(h => `<li>${h}</li>`).join('')}</ul>
+            </div>` : ''}
+            ${concept.reference_stories?.length ? `
+            <div class="content-card">
+                <h3>参考作品</h3>
+                ${concept.reference_stories.map(r => `<div style="margin-bottom:8px"><strong>${r.title}</strong> (${r.author_or_source || ''}) — <span style="color:var(--text-muted)">${r.relevance || ''}</span></div>`).join('')}
             </div>` : ''}
         `;
     },

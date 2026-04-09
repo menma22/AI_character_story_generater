@@ -52,7 +52,8 @@ class MasterOrchestrator:
         self.package.concept_package = concept
         
         await self._progress("creative_director", 1.0, "Creative Director完了")
-        await self._notify(f"concept_package確定: {concept.character_concept.core_identity}")
+        cc_preview = concept.character_concept[:60] if concept.character_concept else "(未定義)"
+        await self._notify(f"concept_package確定: {cc_preview}...")
         
         # ─── Phase A-1: マクロプロフィール生成 ────────────────
         await self._progress("phase_a1", 0.0, "Phase A-1: マクロプロフィール生成開始")

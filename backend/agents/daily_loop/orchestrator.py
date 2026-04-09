@@ -1,16 +1,33 @@
 """
-日次ループオーケストレータ
-v10 §4 に準拠した日記生成ワークフロー。
+日次ループオーケストレータ（v10 §4 完全準拠）
 
 外層ループ: Day 1 → Day 7
 内層ループ: 各日のイベント4-6個を順次処理
-各イベント処理: Perceiver → RIM(並列) → 統合 → 情景描写 → 違反チェック
-1日の終わり: 内省 → 日記生成 → key memory → 記憶圧縮 → 翌日予定
+各イベント処理:
+  §4.4 パラメータ動的活性化
+  §4.3 Perceiver
+  §4.6 Step 1 Impulsive Agent  } RIM並列
+  §4.6 Step 2 Reflective Agent }
+  §4.6b 裏方出力検証
+  §4.6 Step 3 統合エージェント（protagonist_plan対応）
+  §4.6 Step 4 情景描写・後日譚
+  §4.6c 価値観違反チェック
+  §4.6d イベントパッケージ完成
+  ムード更新（イベント単位）
+1日の終わり:
+  §4.7 内省フェーズ
+  §4.8 日記生成
+  §4.9.1 日記Self-Critic
+  §4.9.2 ムード更新（Peak-End Rule）
+  §4.9.3 key memory抽出 + 記憶圧縮
+  §4.9.4 翌日予定追加（Stage 1 + Stage 2）
+  §4.9.5 DB更新 + ムードcarry-over
 """
 
 import json
 import asyncio
 import logging
+import math
 from typing import Optional
 
 from backend.models.character import (
@@ -22,15 +39,19 @@ from backend.models.memory import (
     DayProcessingState, PerceiverOutput, ImpulsiveOutput,
     ReflectiveOutput, IntegrationOutput, SceneNarration,
     ValuesViolationResult, EventPackage, IntrospectionMemo,
-    DiaryEntry,
+    DiaryEntry, ActivationLog,
 )
 from backend.tools.llm_api import call_llm
+from backend.agents.daily_loop.activation import DynamicActivationAgent
+from backend.agents.daily_loop.verification import OutputVerificationAgent
+from backend.agents.daily_loop.next_day_planning import NextDayPlanningAgent
+from backend.agents.daily_loop.diary_critic import DiarySelfCritic
 
 logger = logging.getLogger(__name__)
 
 
 class DailyLoopOrchestrator:
-    """Day 1-7 日次ループオーケストレータ"""
+    """Day 1-7 日次ループオーケストレータ（v10 §4 完全準拠）"""
     
     def __init__(self, package: CharacterPackage, ws_manager=None):
         self.package = package
@@ -41,6 +62,23 @@ class DailyLoopOrchestrator:
         self.memory_db = ShortTermMemoryDB()
         self.day_results: list[DayProcessingState] = []
         self.action_buffer: list[str] = []
+        
+        # サブエージェント初期化
+        self.activation_agent = None
+        if self.package.micro_parameters:
+            self.activation_agent = DynamicActivationAgent(
+                self.package.micro_parameters, ws_manager
+            )
+        
+        self.verification_agent = OutputVerificationAgent(ws_manager)
+        self.next_day_agent = NextDayPlanningAgent(ws_manager)
+        
+        self.diary_critic = None
+        if (self.package.macro_profile and 
+            self.package.macro_profile.voice_fingerprint):
+            self.diary_critic = DiarySelfCritic(
+                self.package.macro_profile.voice_fingerprint, ws_manager
+            )
     
     async def _notify(self, content: str, status: str = "thinking"):
         if self.ws:
@@ -86,59 +124,101 @@ class DailyLoopOrchestrator:
         """行動履歴バッファ"""
         return "\n".join(self.action_buffer[-10:]) if self.action_buffer else "(行動履歴なし)"
     
-    # ─── Perceiver ────────────────────────────────────────────
-    async def _perceiver(self, event: Event) -> PerceiverOutput:
+    def _build_voice_context(self) -> str:
+        """言語的指紋のコンテキスト"""
+        if self.package.macro_profile and self.package.macro_profile.voice_fingerprint:
+            vf = self.package.macro_profile.voice_fingerprint
+            return (
+                f"一人称: {vf.first_person}\n"
+                f"口癖: {', '.join(vf.speech_patterns)}\n"
+                f"文末表現: {', '.join(vf.sentence_endings)}\n"
+                f"漢字/ひらがな: {vf.kanji_hiragana_tendency}\n"
+                f"避ける語彙: {', '.join(vf.avoided_words)}"
+            )
+        return ""
+    
+    # ─── §4.4 パラメータ動的活性化 ─────────────────────────────
+    async def _activate_params(self, event: Event) -> ActivationLog:
+        """動的活性化（§3.5, §4.4）"""
+        if self.activation_agent:
+            return await self.activation_agent.activate(event.content, self.current_mood)
+        return ActivationLog()
+    
+    # ─── §4.3 Perceiver ────────────────────────────────────────
+    async def _perceiver(self, event: Event, activation: ActivationLog) -> PerceiverOutput:
         """Perceiver: 現象的記述 + 反射感情 + 自動注意（v10 §4.3）"""
+        # 動的活性化されたパラメータのみを使用
+        activated_context = ""
+        if self.activation_agent:
+            activated_context = self.activation_agent.get_activated_params_text(activation)
+        
+        # イベントメタデータ
+        known_str = "既知（事前に知っている予定）" if event.known_to_protagonist else "未知（予想外の出来事）"
+        source_str = f"source: {event.source}" if event.source else ""
+        
         result = await call_llm(
             tier="gemma",
-            system_prompt="""あなたは主人公AIのPerceiver（知覚エージェント）です。
-与えられたイベントに対して、主人公がどう知覚するかを記述してください。
+            system_prompt="""あなたはこのキャラクターの「裏方の知覚エージェント（Perceiver）」です。
+キャラ本人には見えない気質・性格パラメータを読み取り、
+それに基づいて「今このキャラが知覚した内容」を生成してください。
+
+【出力する3要素のみ】
+1. 現象的記述（五感を使った描写、4-6文）
+2. 反射的感情反応（身体感覚レベルの情動、2-3文）
+3. 自動的注意配分（何に目が行き何が視界から消えたか、2-3文）
+
+【出してはいけないもの】
+- 価値判断（「自分が悪い」「上司はひどい」）
+- 原因帰属（「なぜそうなったか」の分析）
+- 行動意思決定（「どうすべきか」）
+- 自己特性の言語化（「自分は怒りっぽい」）
+- パラメータへの直接言及（「HA高」「感情パラメータ#5が発火」等）
 
 【出力形式】JSON:
 {
-  "phenomenal_description": "五感を使った現象的記述（何が見え、聞こえ、感じられるか）",
-  "reflexive_emotion": "反射的に浮かぶ感情（考える前の感覚）",
-  "automatic_attention": "自動的に注意が向く点（何が気になるか）"
+  "phenomenal_description": "五感を使った現象的記述（4-6文）",
+  "reflexive_emotion": "反射的に浮かぶ感情（身体感覚レベル、2-3文）",
+  "automatic_attention": "自動的に注意が向く点（2-3文）"
 }""",
             user_message=(
-                f"主人公プロフィール:\n{self._build_macro_context()}\n\n"
-                f"現在のムード: V={self.current_mood.valence:.1f} A={self.current_mood.arousal:.1f} D={self.current_mood.dominance:.1f}\n\n"
-                f"今日これまでの行動:\n{self._build_action_buffer()}\n\n"
-                f"【イベント】\n{event.content}\n（時間帯: {event.time_slot}）"
+                f"【活性化された気質・性格パラメータ】\n{activated_context}\n\n"
+                f"【マクロ層】\n{self._build_macro_context()[:400]}\n\n"
+                f"【現在ムード】V={self.current_mood.valence:.1f} A={self.current_mood.arousal:.1f} D={self.current_mood.dominance:.1f}\n\n"
+                f"【今日の行動履歴】\n{self._build_action_buffer()}\n\n"
+                f"【イベント】\n{event.content}\n"
+                f"（時間帯: {event.time_slot} | {known_str} {source_str} | 予想外度: {event.expectedness}）"
             ),
-            max_tokens=1000,
+            max_tokens=1200,
             json_mode=True,
         )
         data = result["content"] if isinstance(result["content"], dict) else {}
         return PerceiverOutput(**{k: data.get(k, "") for k in ["phenomenal_description", "reflexive_emotion", "automatic_attention"]})
     
-    # ─── Impulsive Agent ──────────────────────────────────────
-    async def _impulsive(self, event: Event, perceiver: PerceiverOutput) -> ImpulsiveOutput:
+    # ─── §4.6 Step 1: Impulsive Agent ────────────────────────
+    async def _impulsive(self, event: Event, perceiver: PerceiverOutput, activation: ActivationLog) -> ImpulsiveOutput:
         """Impulsive Agent: 気質・性格層への反射反応（v10 §4.6 Step 1）"""
-        # 隠蔽原則: このエージェントは気質・性格層にアクセス可能
-        temperament_context = ""
-        if self.package.micro_parameters:
-            temperament_context = json.dumps(
-                [p.model_dump(mode="json") for p in self.package.micro_parameters.temperament],
-                ensure_ascii=False
-            )
+        activated_context = ""
+        if self.activation_agent:
+            activated_context = self.activation_agent.get_activated_params_text(activation)
         
         result = await call_llm(
             tier="gemma",
             system_prompt="""あなたは主人公AIのImpulsive Agent（衝動系エージェント）です。
-気質・性格パラメータを参照し、このイベントに対する衝動的な反応を生成してください。
+活性化された気質・性格パラメータを参照し、このイベントに対する衝動的な反応を生成してください。
 これは「考える前の反応」です。理性的な判断はReflective Agentの仕事です。
 
 【出力形式】JSON:
 {
-  "impulse_reaction": "衝動的な反応（「思わず○○したくなった」形式）",
-  "bodily_sensation": "身体感覚（胃がきゅっとする、手に汗が、等）",
-  "action_tendency": "行動傾向（「○○しそうになる」形式）"
-}""",
+  "impulse_reaction": "衝動的な反応（「思わず○○したくなった」形式、2-3文）",
+  "bodily_sensation": "身体感覚（胃がきゅっとする、手に汗が、等、1-2文）",
+  "action_tendency": "行動傾向（「○○しそうになる」形式、1-2文）"
+}
+
+【禁止】パラメータ名・ID・学術用語の直接言及""",
             user_message=(
-                f"気質パラメータ:\n{temperament_context}\n\n"
-                f"知覚output:\n{json.dumps(perceiver.model_dump(mode='json'), ensure_ascii=False)}\n\n"
-                f"イベント: {event.content}"
+                f"【活性化パラメータ】\n{activated_context}\n\n"
+                f"【知覚output】\n{json.dumps(perceiver.model_dump(mode='json'), ensure_ascii=False)}\n\n"
+                f"【イベント】{event.content}"
             ),
             max_tokens=800,
             json_mode=True,
@@ -146,54 +226,61 @@ class DailyLoopOrchestrator:
         data = result["content"] if isinstance(result["content"], dict) else {}
         return ImpulsiveOutput(**{k: data.get(k, "") for k in ["impulse_reaction", "bodily_sensation", "action_tendency"]})
     
-    # ─── Reflective Agent ─────────────────────────────────────
-    async def _reflective(self, event: Event, perceiver: PerceiverOutput) -> ReflectiveOutput:
+    # ─── §4.6 Step 2: Reflective Agent ──────────────────────
+    async def _reflective(self, event: Event, perceiver: PerceiverOutput, activation: ActivationLog) -> ReflectiveOutput:
         """理性ブランチ: 規範層アクセス + 内面分析（v10 §4.6 Step 2）"""
-        # 隠蔽原則: このエージェントは気質・性格層にアクセス不可、規範層にアクセス可
+        # 隠蔽原則: 規範層のみアクセス、気質・性格層アクセス不可
         normative_context = ""
-        if self.package.micro_parameters:
-            normative_context = json.dumps({
-                "schwartz_values": self.package.micro_parameters.schwartz_values,
-                "ideal_self": self.package.micro_parameters.ideal_self,
-                "ought_self": self.package.micro_parameters.ought_self,
-                "goals": self.package.micro_parameters.goals,
-            }, ensure_ascii=False)
+        if self.activation_agent:
+            normative_context = self.activation_agent.get_activated_normative_text(activation)
         
         result = await call_llm(
             tier="gemma",
             system_prompt="""あなたは主人公AIの理性ブランチ（Reflective Agent）です。
-規範層（価値観、理想自己、義務自己）を参照し、このイベントに対する内面分析を行ってください。
-「何を考え、何を連想し、どう判断するか」を記述します。
+規範層（価値観、理想自己、義務自己）を参照し、このイベントに対する濃密な内面分析レポートを作成してください。
 
 【重要】あなたは気質・性格パラメータにアクセスできません。
 価値観と過去の記憶のみを根拠に分析してください。
 
+主務は「濃密な内面分析レポート」であり、示唆と予測を明示的に含めてください。
+
 【出力形式】JSON:
 {
-  "inner_analysis": "濃密な内面分析レポート（3-5文）",
-  "value_connections": "価値観・知識・過去経験との接続（2-3文）",
-  "suggestion": "この状況でどうすべきかの示唆",
-  "prediction": "理性ルートで行動した場合の予測"
+  "inner_analysis": "濃密な内面分析レポート（5-8文。何を考え、何を連想し、どう判断するかを記述）",
+  "value_connections": "価値観・知識・過去経験との接続（3-4文）",
+  "suggestion": "この状況でどうすべきかの示唆（1-2文）",
+  "prediction": "理性ルートで行動した場合の予測（1-2文）"
 }""",
             user_message=(
-                f"規範層:\n{normative_context}\n\n"
-                f"過去の記憶:\n{self._build_memory_context()}\n\n"
-                f"自伝的エピソード:\n{self._build_episodes_context()}\n\n"
-                f"知覚output:\n{json.dumps(perceiver.model_dump(mode='json'), ensure_ascii=False)}\n\n"
-                f"イベント: {event.content}"
+                f"【規範層（活性化済み）】\n{normative_context}\n\n"
+                f"【過去の記憶】\n{self._build_memory_context()}\n\n"
+                f"【自伝的エピソード】\n{self._build_episodes_context()[:600]}\n\n"
+                f"【知覚output】\n{json.dumps(perceiver.model_dump(mode='json'), ensure_ascii=False)}\n\n"
+                f"【イベント】{event.content}\n"
+                f"（known: {event.known_to_protagonist} | source: {event.source}）"
             ),
-            max_tokens=1200,
+            max_tokens=1500,
             json_mode=True,
         )
         data = result["content"] if isinstance(result["content"], dict) else {}
         return ReflectiveOutput(**{k: data.get(k, "") for k in ["inner_analysis", "value_connections", "suggestion", "prediction"]})
     
-    # ─── 統合エージェント ──────────────────────────────────────
+    # ─── §4.6 Step 3: 統合エージェント ─────────────────────
     async def _integration(self, event: Event, impulsive: ImpulsiveOutput, reflective: ReflectiveOutput) -> IntegrationOutput:
         """統合エージェント: 2ルート予測 + Higgins評価 + 行動決定（v10 §4.6 Step 3）"""
         normative_context = ""
         if self.package.micro_parameters:
             normative_context = f"理想自己: {self.package.micro_parameters.ideal_self}\n義務自己: {self.package.micro_parameters.ought_self}"
+        
+        # protagonist_plan 対応（§4.2, §4.6 Step 3）
+        protagonist_plan_note = ""
+        if event.source == "protagonist_plan":
+            protagonist_plan_note = (
+                "\n\n【重要: protagonist_plan】\n"
+                "このイベントは前日あなた（主人公）が日記の中で「やりたい」と計画したものです。\n"
+                "実際にやるかやらないか、どのようにやるかは、今のあなたの気分・状況・優先順位で判断してください。\n"
+                "計画を放棄することも、変形することも自由です。\n"
+            )
         
         result = await call_llm(
             tier="sonnet",
@@ -217,10 +304,10 @@ class DailyLoopOrchestrator:
   "emotion_change": "気持ちの変化の短文記述"
 }""",
             user_message=(
-                f"{normative_context}\n\n"
-                f"衝動反応:\n{json.dumps(impulsive.model_dump(mode='json'), ensure_ascii=False)}\n\n"
-                f"理性分析:\n{json.dumps(reflective.model_dump(mode='json'), ensure_ascii=False)}\n\n"
-                f"イベント: {event.content}"
+                f"{normative_context}{protagonist_plan_note}\n\n"
+                f"【衝動反応】\n{json.dumps(impulsive.model_dump(mode='json'), ensure_ascii=False)}\n\n"
+                f"【理性分析】\n{json.dumps(reflective.model_dump(mode='json'), ensure_ascii=False)}\n\n"
+                f"【イベント】{event.content}"
             ),
             max_tokens=1500,
             json_mode=True,
@@ -233,9 +320,11 @@ class DailyLoopOrchestrator:
             "final_action", "emotion_change",
         ]})
     
-    # ─── 情景描写・後日譚 ──────────────────────────────────────
+    # ─── §4.6 Step 4: 情景描写 ─────────────────────────────
     async def _scene_narration(self, event: Event, integration: IntegrationOutput) -> SceneNarration:
         """情景描写 + 後日譚（v10 §4.6 Step 4）"""
+        known_str = "既知イベント" if event.known_to_protagonist else "未知イベント（予想外）"
+        
         result = await call_llm(
             tier="gemma",
             system_prompt="""あなたは情景描写の執筆者です。
@@ -243,21 +332,22 @@ class DailyLoopOrchestrator:
 
 【出力形式】JSON:
 {
-  "scene_description": "濃密な情景描写（3-5文、五感を含む）",
-  "aftermath": "直後の後日譚（1-3文、行動の結果として何が起きたか）"
+  "scene_description": "濃密な情景描写（5-8文、五感を含む、その場の空気感・色彩・音・匂い）",
+  "aftermath": "直後の後日譚（2-4文、行動の結果として何が起きたか、周囲の反応）"
 }""",
             user_message=(
-                f"イベント: {event.content}\n\n"
-                f"行動決定: {integration.final_action}\n\n"
-                f"気持ち変化: {integration.emotion_change}"
+                f"【イベント】{event.content}\n"
+                f"（{known_str} | 予想外度: {event.expectedness}）\n\n"
+                f"【行動決定】{integration.final_action}\n\n"
+                f"【気持ち変化】{integration.emotion_change}"
             ),
-            max_tokens=800,
+            max_tokens=1000,
             json_mode=True,
         )
         data = result["content"] if isinstance(result["content"], dict) else {}
         return SceneNarration(**{k: data.get(k, "") for k in ["scene_description", "aftermath"]})
     
-    # ─── 価値観違反チェック ────────────────────────────────────
+    # ─── §4.6c: 価値観違反チェック ──────────────────────────
     async def _values_violation(self, integration: IntegrationOutput) -> ValuesViolationResult:
         """価値観違反チェック（v10 §4.6c）"""
         values_context = ""
@@ -273,26 +363,28 @@ class DailyLoopOrchestrator:
 {
   "violation_detected": true/false,
   "violation_content": "違反内容（なければ空）",
-  "guilt_emotion": "罪悪感の感情記述（なければ空）"
+  "guilt_emotion": "罪悪感の感情記述（なければ空）",
+  "violation_type": "schwartz/mft/ideal/ought/none",
+  "brief_reflection": "簡易内省メモ（違反時のみ、1-2文）"
 }""",
             user_message=(
-                f"価値観:\n{values_context}\n\n"
-                f"行動決定: {integration.final_action}\n\n"
-                f"Higgins Ideal gap: {integration.higgins_ideal_gap}\n"
-                f"Higgins Ought gap: {integration.higgins_ought_gap}"
+                f"【価値観】\n{values_context}\n\n"
+                f"【行動決定】{integration.final_action}\n\n"
+                f"【Higgins Ideal gap】{integration.higgins_ideal_gap}\n"
+                f"【Higgins Ought gap】{integration.higgins_ought_gap}"
             ),
             max_tokens=500,
             json_mode=True,
         )
         data = result["content"] if isinstance(result["content"], dict) else {}
         return ValuesViolationResult(**{k: data.get(k, v) for k, v in [
-            ("violation_detected", False), ("violation_content", ""), ("guilt_emotion", "")
+            ("violation_detected", False), ("violation_content", ""), ("guilt_emotion", ""),
+            ("violation_type", ""), ("brief_reflection", ""),
         ]})
     
-    # ─── ムード更新 ───────────────────────────────────────────
-    def _update_mood(self, integration: IntegrationOutput, violation: ValuesViolationResult):
-        """PADムード更新（簡易版、v10 §4.5）"""
-        # 感情慣性に基づく減衰
+    # ─── ムード更新（イベント単位、§4.5）─────────────────────
+    def _update_mood_per_event(self, integration: IntegrationOutput, violation: ValuesViolationResult):
+        """PADムード更新（イベント単位、v10 §4.5）"""
         inertia = 0.5
         if self.package.micro_parameters:
             inertia = self.package.micro_parameters.emotional_inertia
@@ -309,10 +401,68 @@ class DailyLoopOrchestrator:
             self.current_mood.valence = max(-5, self.current_mood.valence - 1.0)
             self.current_mood.dominance = max(-5, self.current_mood.dominance - 0.5)
     
-    # ─── 内省フェーズ ──────────────────────────────────────────
+    # ─── §4.9.2 ムード更新（Peak-End Rule、日次）──────────
+    def _update_mood_daily(self, day_state: DayProcessingState):
+        """Peak-End Rule による日次集約ムード（§4.9.2）"""
+        if not day_state.events_processed:
+            return
+        
+        # Peak の検出（最もValenceが極端だったイベント）
+        peak_v = 0.0
+        peak_a = 0.0
+        peak_d = 0.0
+        max_abs_v = 0.0
+        
+        for ep in day_state.events_processed:
+            v = ep.mood_after.valence
+            if abs(v) > max_abs_v:
+                max_abs_v = abs(v)
+                peak_v = v
+                peak_a = ep.mood_after.arousal
+                peak_d = ep.mood_after.dominance
+        
+        # End（最後のイベントのムード）
+        end = day_state.events_processed[-1].mood_after
+        
+        # Peak-End 加重平均（Peak 60%, End 40%）
+        self.current_mood.valence = peak_v * 0.6 + end.valence * 0.4
+        self.current_mood.arousal = peak_a * 0.6 + end.arousal * 0.4
+        self.current_mood.dominance = peak_d * 0.6 + end.dominance * 0.4
+        
+        # クリップ
+        self.current_mood.valence = max(-5, min(5, self.current_mood.valence))
+        self.current_mood.arousal = max(-5, min(5, self.current_mood.arousal))
+        self.current_mood.dominance = max(-5, min(5, self.current_mood.dominance))
+    
+    # ─── §4.9.5 ムードcarry-over ────────────────────────────
+    def _mood_carry_over(self):
+        """ムードcarry-over処理（§4.9.5）"""
+        decay = self.package.micro_parameters.decay_lambda if self.package.micro_parameters else {"V": 0.15, "A": 0.2, "D": 0.1}
+        threshold = 0.3
+        
+        # 減衰適用
+        self.current_mood.valence *= (1 - decay.get("V", 0.15))
+        self.current_mood.arousal *= (1 - decay.get("A", 0.2))
+        self.current_mood.dominance *= (1 - decay.get("D", 0.1))
+        
+        # 閾値以下ならリセット
+        if abs(self.current_mood.valence) < threshold:
+            self.current_mood.valence = 0.0
+        if abs(self.current_mood.arousal) < threshold:
+            self.current_mood.arousal = 0.0
+        if abs(self.current_mood.dominance) < threshold:
+            self.current_mood.dominance = 0.0
+    
+    # ─── 内省フェーズ（§4.7）─────────────────────────────────
     async def _introspection(self, day: int, events_processed: list[EventPackage]) -> IntrospectionMemo:
         """内省フェーズ: 3工程（v10 §4.7）"""
         action_summary = "\n".join([f"- {ep.integration_output.final_action[:80]}..." for ep in events_processed])
+        
+        # 活性化ログの要約（内省で参照可能）
+        activation_summary = ""
+        for ep in events_processed:
+            if ep.activation_log and ep.activation_log.activation_reasoning:
+                activation_summary += f"- [{ep.event_id}] {ep.activation_log.activation_reasoning[:60]}...\n"
         
         result = await call_llm(
             tier="sonnet",
@@ -327,16 +477,17 @@ class DailyLoopOrchestrator:
 
 【出力形式】JSON
 {
-  "self_perception": "自己推測（2-3文）",
-  "past_connection": "過去記録との統合（1-2文）",
-  "memory_reinterpretation": "記憶の再解釈（1-2文、なければ空）",
-  "full_memo": "内省メモ全文（200-400字、日記の素材となる）"
+  "self_perception": "自己推測（3-4文。「今日の私は〇〇な行動をとった。これは…」形式）",
+  "past_connection": "過去記録との統合（2-3文。接続点がなければその旨記述）",
+  "memory_reinterpretation": "記憶の再解釈（2-3文。なければ空）",
+  "full_memo": "内省メモ全文（200-400字。日記の素材となる。上記3工程の統合）"
 }""",
             user_message=(
                 f"Day {day}の行動まとめ:\n{action_summary}\n\n"
+                f"活性化されたパラメータの傾向:\n{activation_summary}\n\n"
                 f"現在のムード: V={self.current_mood.valence:.1f} A={self.current_mood.arousal:.1f} D={self.current_mood.dominance:.1f}\n\n"
                 f"記憶:\n{self._build_memory_context()}\n\n"
-                f"自伝的エピソード:\n{self._build_episodes_context()}"
+                f"自伝的エピソード:\n{self._build_episodes_context()[:600]}"
             ),
             max_tokens=1500,
             json_mode=True,
@@ -346,19 +497,10 @@ class DailyLoopOrchestrator:
             "self_perception", "past_connection", "memory_reinterpretation", "full_memo"
         ]})
     
-    # ─── 日記生成 ──────────────────────────────────────────────
+    # ─── §4.8 日記生成 ─────────────────────────────────────────
     async def _generate_diary(self, day: int, events: list[EventPackage], introspection: IntrospectionMemo) -> DiaryEntry:
         """日記生成（v10 §4.8）"""
-        voice = ""
-        if self.package.macro_profile and self.package.macro_profile.voice_fingerprint:
-            vf = self.package.macro_profile.voice_fingerprint
-            voice = (
-                f"一人称: {vf.first_person}\n"
-                f"口癖: {', '.join(vf.speech_patterns)}\n"
-                f"文末表現: {', '.join(vf.sentence_endings)}\n"
-                f"漢字/ひらがな: {vf.kanji_hiragana_tendency}\n"
-                f"避ける語彙: {', '.join(vf.avoided_words)}"
-            )
+        voice = self._build_voice_context()
         
         event_summaries = "\n".join([
             f"- [{ep.event_id}] {ep.integration_output.final_action[:100]}... → {ep.scene_narration.aftermath[:60]}..."
@@ -393,17 +535,15 @@ class DailyLoopOrchestrator:
         )
         data = result["content"] if isinstance(result["content"], dict) else {}
         
-        entry = DiaryEntry(
+        return DiaryEntry(
             day=day,
             content=data.get("diary_content", ""),
             mood_at_writing=self.current_mood.model_copy(),
         )
-        
-        return entry
     
-    # ─── key memory抽出 ───────────────────────────────────────
+    # ─── key memory抽出（§4.9.3.1）────────────────────────────
     async def _extract_key_memory(self, day: int, diary: DiaryEntry) -> KeyMemory:
-        """key memory抽出（v10 §5.1）"""
+        """key memory抽出（v10 §4.9.3.1）"""
         result = await call_llm(
             tier="gemma",
             system_prompt="""あなたはkey memory抽出エージェントです。
@@ -422,9 +562,9 @@ class DailyLoopOrchestrator:
             mood_at_extraction=self.current_mood.model_dump(),
         )
     
-    # ─── 記憶圧縮 ──────────────────────────────────────────────
-    def _compress_memories(self, day: int, diary: DiaryEntry):
-        """段階圧縮方式（v10 §5.2）"""
+    # ─── 記憶圧縮（§4.9.3.2）───────────────────────────────
+    async def _compress_memories(self, day: int, diary: DiaryEntry):
+        """段階圧縮方式（v10 §4.9.3.2）— LLMによる意味的要約"""
         # 新しい日の記録を追加
         self.memory_db.normal_area.append(ShortTermMemoryNormal(
             day=day,
@@ -433,7 +573,7 @@ class DailyLoopOrchestrator:
             char_count=len(diary.content),
         ))
         
-        # 段階をシフト
+        # 段階をシフト + 圧縮
         for mem in self.memory_db.normal_area:
             if mem.day < day:
                 diff = day - mem.day
@@ -441,14 +581,30 @@ class DailyLoopOrchestrator:
                     mem.stage = "one_day_ago"
                 elif diff == 2:
                     mem.stage = "two_days_ago"
-                    mem.summary = mem.summary[:len(mem.summary) * 2 // 3]
+                    # LLMで2/3に圧縮
+                    if mem.char_count > 200:
+                        compressed = await call_llm(
+                            tier="gemma",
+                            system_prompt="以下のテキストを、重要な出来事を保持しつつ元の2/3程度に圧縮してください。JSON: {\"compressed\": \"...\"}",
+                            user_message=mem.summary,
+                            max_tokens=500,
+                            json_mode=True,
+                        )
+                        d = compressed["content"] if isinstance(compressed["content"], dict) else {}
+                        mem.summary = d.get("compressed", mem.summary[:len(mem.summary) * 2 // 3])
+                        mem.char_count = len(mem.summary)
                 elif diff >= 3:
                     mem.stage = "three_plus_days_ago"
-                    mem.summary = mem.summary[:200]
+                    if mem.char_count > 200:
+                        mem.summary = mem.summary[:200]
+                        mem.char_count = 200
+        
+        # 日記をストアに追加
+        self.memory_db.diary_store.append(diary.content)
     
     # ─── メインループ ──────────────────────────────────────────
     async def run(self, days: int = 7) -> list[DayProcessingState]:
-        """日次ループを実行"""
+        """日次ループを実行（v10 §4 完全準拠）"""
         await self._notify(f"日次ループ開始: {days}日間")
         
         for day in range(1, days + 1):
@@ -462,72 +618,125 @@ class DailyLoopOrchestrator:
             day_state = DayProcessingState(day=day)
             self.action_buffer = []  # 日次リセット
             
-            # イベントループ
+            # ─── 内層イベントループ ─────────────────────────
             for i, event in enumerate(events):
                 await self._notify(f"  イベント {i+1}/{len(events)}: {event.content[:50]}...")
                 
-                # Perceiver
-                perceiver = await self._perceiver(event)
+                # §4.4 動的活性化
+                activation = await self._activate_params(event)
                 
-                # RIM並列処理
+                # §4.3 Perceiver
+                perceiver = await self._perceiver(event, activation)
+                
+                # §4.6 Step 1+2: RIM並列処理
                 impulsive, reflective = await asyncio.gather(
-                    self._impulsive(event, perceiver),
-                    self._reflective(event, perceiver),
+                    self._impulsive(event, perceiver, activation),
+                    self._reflective(event, perceiver, activation),
                 )
                 
-                # 統合
+                # §4.6b 裏方出力検証
+                verification = await self.verification_agent.verify(perceiver, impulsive)
+                if not verification["passed"]:
+                    if verification["corrected_perceiver"]:
+                        perceiver = verification["corrected_perceiver"]
+                    if verification["corrected_impulsive"]:
+                        impulsive = verification["corrected_impulsive"]
+                
+                # §4.6 Step 3: 統合
                 integration = await self._integration(event, impulsive, reflective)
                 
-                # 情景描写
+                # §4.6 Step 4: 情景描写
                 scene = await self._scene_narration(event, integration)
                 
-                # 価値観違反チェック
+                # §4.6c: 価値観違反チェック
                 violation = await self._values_violation(integration)
                 
-                # ムード更新
-                self._update_mood(integration, violation)
+                # ムード更新（イベント単位）
+                self._update_mood_per_event(integration, violation)
                 
                 # 行動バッファに追加
                 self.action_buffer.append(f"[{event.time_slot}] {integration.final_action[:100]}")
                 
-                # イベントパッケージ
+                # §4.6d: イベントパッケージ完成
                 event_pkg = EventPackage(
                     event_id=event.id,
                     event_content=event.content,
+                    event_metadata={
+                        "known_to_protagonist": event.known_to_protagonist,
+                        "source": event.source,
+                        "expectedness": event.expectedness,
+                    },
+                    activation_log=activation,
                     perceiver_output=perceiver,
                     impulsive_output=impulsive,
                     reflective_output=reflective,
                     integration_output=integration,
                     scene_narration=scene,
                     values_violation=violation,
+                    mood_before=self.current_mood.model_copy(),
                     mood_after=self.current_mood.model_copy(),
                 )
                 day_state.events_processed.append(event_pkg)
             
-            # 内省フェーズ
+            # ─── 外層（1日の終わり）────────────────────────
+            
+            # §4.7 内省フェーズ
             await self._notify(f"Day {day}: 内省フェーズ")
             introspection = await self._introspection(day, day_state.events_processed)
             day_state.introspection = introspection
             
-            # 日記生成
+            # §4.8 日記生成
             await self._notify(f"Day {day}: 日記生成")
             diary = await self._generate_diary(day, day_state.events_processed, introspection)
+            
+            # §4.9.1 日記Self-Critic
+            if self.diary_critic:
+                critique = await self.diary_critic.critique(diary, self.current_mood)
+                if not critique["passed"] and critique["corrected_diary"]:
+                    diary.content = critique["corrected_diary"]
+            
             day_state.diary = diary
             
             # 日記をストリーミング
             if self.ws:
                 await self.ws.send_diary_entry(day, diary.content)
             
-            # key memory抽出
+            # §4.9.2 ムード更新（Peak-End Rule）
+            self._update_mood_daily(day_state)
+            
+            # §4.9.3.1 key memory抽出
             key_mem = await self._extract_key_memory(day, diary)
             day_state.key_memory = key_mem
             self.memory_db.key_memories.append(key_mem)
             
-            # 記憶圧縮
-            self._compress_memories(day, diary)
+            # §4.9.3.2 記憶圧縮
+            await self._compress_memories(day, diary)
             
-            # ムード情報
+            # §4.9.4 翌日予定追加（Day 7以外）
+            if day < days:
+                await self._notify(f"Day {day}: 翌日予定の計画")
+                plans = await self.next_day_agent.stage1_protagonist_plan(
+                    day=day,
+                    diary=diary,
+                    introspection=introspection,
+                    current_mood=self.current_mood,
+                    macro_context=self._build_macro_context()[:500],
+                    voice_context=self._build_voice_context(),
+                )
+                
+                if plans and self.package.weekly_events_store:
+                    new_event = await self.next_day_agent.stage2_consistency_check(
+                        plans=plans,
+                        next_day=day + 1,
+                        events_store=self.package.weekly_events_store,
+                    )
+                    if new_event:
+                        self.package.weekly_events_store.events.append(new_event)
+                        day_state.next_day_plans = [p.model_dump() for p in plans]
+            
+            # §4.9.5 ムードcarry-over
             day_state.daily_mood = self.current_mood.model_copy()
+            self._mood_carry_over()
             
             self.day_results.append(day_state)
             await self._notify(f"=== Day {day} 完了 ===", "complete")
