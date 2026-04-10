@@ -12,32 +12,37 @@
 AI_character_story_generater/
 ├── backend/
 │   ├── main.py                                # FastAPI エントリポイント (WebSocket + REST API)
-│   ├── config.py                              # 設定管理 (APIキー, プロファイル, モデル定義)
+│   ├── config.py                              # 設定管理 (APIキー, 4段階プロファイル, モデル定義)
 │   ├── agents/
 │   │   ├── creative_director/
-│   │   │   └── director.py                    # Tier -1: Creative Director (Opus, Self-Critique)
+│   │   │   └── director.py                    # Tier -1: Creative Director (Opus, Self-Critique, Web検索, file_read)
 │   │   ├── master_orchestrator/
-│   │   │   └── orchestrator.py                # Tier 0: Phase A-1→A-2→A-3→D 順次制御
+│   │   │   └── orchestrator.py                # Tier 0: Phase A-1→A-2→A-3→D 順次制御 + Evaluator統合
 │   │   ├── phase_a1/
-│   │   │   └── orchestrator.py                # Phase A-1: マクロプロフィール (8 Workers)
+│   │   │   └── orchestrator.py                # Phase A-1: マクロプロフィール (8 Workers, 並列化)
 │   │   ├── phase_a2/
-│   │   │   └── orchestrator.py                # Phase A-2: ミクロパラメータ 52個 + 規範層
+│   │   │   └── orchestrator.py                # Phase A-2: ミクロパラメータ 52個 + 規範層 (15 Workers, v2 §6.4.2準拠)
 │   │   ├── phase_a3/
-│   │   │   └── orchestrator.py                # Phase A-3: 自伝的エピソード (McAdams)
+│   │   │   └── orchestrator.py                # Phase A-3: 自伝的エピソード (McAdams, redemption bias対策)
 │   │   ├── phase_d/
-│   │   │   └── orchestrator.py                # Phase D: 7日間イベント列 (28-42件)
+│   │   │   └── orchestrator.py                # Phase D: 7日間イベント列 (28-42件, 2軸メタデータ)
 │   │   ├── daily_loop/
-│   │   │   └── orchestrator.py                # Day 1-7 日次ループ (RIM + 内省 + 日記)
-│   │   └── evaluators/                        # Evaluator群 (品質評価・再生成管理)
+│   │   │   ├── orchestrator.py                # Day 1-7 日次ループ (RIM + 内省 + 日記, 自然言語出力)
+│   │   │   ├── activation.py                  # パラメータ動的活性化 (5-10個選択, v10 §3.5)
+│   │   │   ├── verification.py                # 裏方出力検証 (#1-#52漏洩チェック, v10 §4.6b)
+│   │   │   ├── diary_critic.py                # 日記Self-Critic (言語的指紋+AI臭さ検証)
+│   │   │   └── next_day_planning.py           # 翌日予定追加 (Stage1+2, protagonist_plan)
+│   │   └── evaluators/
+│   │       └── pipeline.py                    # Evaluator群7種 (SchemaValidator常時ON, LLM5種)
 │   ├── models/
-│   │   ├── character.py                       # Pydantic v2 データモデル (脚本パッケージ)
+│   │   ├── character.py                       # Pydantic v2 データモデル (v2 §6.3.4準拠スキーマ)
 │   │   └── memory.py                          # 記憶・ムード・イベント処理モデル
 │   ├── tools/
-│   │   └── llm_api.py                         # LLM API統合ラッパー (Anthropic + Gemma)
+│   │   ├── llm_api.py                         # LLM API統合ラッパー (Anthropic + Gemini + フォールバック)
+│   │   └── agent_utils.py                     # Worker検証 + Markdownセクションパーサー
 │   ├── websocket/
 │   │   └── handler.py                         # WebSocket接続管理 + 思考ストリーミング
-│   ├── schemas/                               # JSON Schema (今後定義)
-│   ├── reference/                             # 心理学理論参考資料 (今後追加)
+│   ├── reference/                             # 心理学理論参考資料 (Creative Directorのfile_readツール対象)
 │   └── storage/character_packages/            # 生成済みパッケージ保存先
 ├── frontend/
 │   ├── index.html                             # メインUI (4画面構成)
@@ -47,7 +52,6 @@ AI_character_story_generater/
 │       ├── renderer.js                        # データ → HTML レンダリング
 │       └── app.js                             # アプリケーションロジック
 ├── .env.example                               # 環境変数テンプレート
-├── .gitignore
 ├── requirements.txt                           # Python依存関係
 ├── specification_v10.md                       # コア仕様書 (v10)
 └── script_ai_app_specification_v2.md          # 脚本AI仕様書 (v2)
@@ -74,9 +78,10 @@ graph TB
         
         MO --> CD["creative_director.py"]
         MO --> PA1["phase_a1/orchestrator.py"]
-        MO --> PA2["phase_a2/orchestrator.py"]
+        MO --> PA2["phase_a2/orchestrator.py<br>(15 Workers)"]
         MO --> PA3["phase_a3/orchestrator.py"]
         MO --> PD["phase_d/orchestrator.py"]
+        MO --> EVAL["evaluators/pipeline.py"]
         
         CD --> LLM["tools/llm_api.py"]
         PA1 --> LLM
@@ -85,12 +90,19 @@ graph TB
         PD --> LLM
         DLO --> LLM
         
+        DLO --> ACT["activation.py"]
+        DLO --> VER["verification.py"]
+        DLO --> CRITIC["diary_critic.py"]
+        DLO --> NEXT["next_day_planning.py"]
+        
         CD --> Models["models/character.py"]
         PA1 --> Models
         PA2 --> Models
         PA3 --> Models
         PD --> Models
         DLO --> Memory["models/memory.py"]
+        
+        DLO --> Utils["tools/agent_utils.py<br>(parse_markdown_sections)"]
     end
 
     WSClient <-.->|"WebSocket"| WSHandler
@@ -123,61 +135,97 @@ graph TB
 #### コアロジック・ルール
 
 **4層エージェント階層（Day 0）:**
-1. **Tier -1 Creative Director** (Opus): Tool-Callingによる自律推敲ループ (Agentic Loop) でconcept_packageを生成・自己批評・修正。
-2. **Tier 0 Master Orchestrator** (Opus): Phase A-1→A-2→A-3→D順次制御
-3. **Phase Orchestrators**: 各Phase内のWorker群を管理
-4. **Workers** (Gemma 4 / Sonnet): 個別生成タスク
+1. **Tier -1 Creative Director** (Opus): Tool-Callingによる自律推敲ループ。search_web + file_read + request_critique + submit_final_concept の4ツール。Self-Critiqueチェックリスト [A]-[F] の6カテゴリ。
+2. **Tier 0 Master Orchestrator** (Opus): Phase A-1→A-2→A-3→D順次制御。各Phase完了後にEvaluator-Optimizerループで即時評価・再生成。
+3. **Phase Orchestrators**: 各Phase内のWorker群を管理。A-1=8 Workers、A-2=15 Workers（v2 §6.4.2準拠）、A-3=Planner+Writers、D=5 Workers。
+4. **Workers**: プロファイル別モデル（high_quality=sonnet, draft=gemma）。
+
+**Phase A-2 Worker 15分割構成（v2 §6.4.2準拠）:**
+```
+Step 1: パラメータ Worker 10基を並列実行
+  TemperamentWorker_A1 (情動反応系 #1-9)
+  TemperamentWorker_A2 (活性・エネルギー系 #10-14)
+  TemperamentWorker_A3 (社会的志向系 #15-18)
+  TemperamentWorker_A4 (認知スタイル系 #19-23)
+  PersonalityWorker_B1 (自己調整・目標追求系 #24-30)
+  PersonalityWorker_B2 (対人・社会的態度系 #31-38)
+  PersonalityWorker_B3 (経験への開放性系 #39-43)
+  PersonalityWorker_B4 (自己概念・実存系 #44-48)
+  PersonalityWorker_B5 (ライフスタイル・表出系 #49-50)
+  SocialCognitionWorker (対他者認知 #51-52)
+Step 2: 規範層 Worker 4基を並列実行
+  ValuesWorker (Schwartz 19価値)
+  MFTWorker (道徳基盤理論 6基盤)
+  IdealOughtSelfWorker (理想自己/義務自己)
+  GoalsDreamsWorker (長期・中期目標)
+Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
+```
 
 **日次ループ（Day 1-7）:**
 ```
-各日のイベント(4-6個) → Perceiver → [Impulsive | Reflective](並列)
-→ 統合(Higgins): Agentic行動決定(事前シミュレーションツール使用) → 情景描写
-→ 内省(Self-Perception + 過去統合 + 再解釈)
+各日のイベント(4-6個) → 動的活性化(5-10パラメータ選択)
+→ Perceiver(自然言語出力) → [Impulsive | Reflective](並列, 自然言語出力)
+→ 出力検証(#1-#52漏洩チェック)
+→ 統合(Higgins): Agentic行動決定(事前シミュレーションツール使用)
+→ 情景描写(自然言語出力) → 価値観違反チェック
+→ 内省(Self-Perception + 過去統合 + 再解釈, 自然言語出力)
 → 日記生成: Agentic日記執筆(言語的指紋・AI臭さツール検証込み)
-→ key memory抽出 + 記憶圧縮 + 翌日予定追加
+→ ムード更新(Peak-End Rule) → key memory抽出 + 記憶圧縮 + 翌日予定追加
+→ ムードcarry-over(減衰+閾値リセット)
 ```
+
+**出力形式の設計原則:**
+| 出力の用途 | 形式 | 例 |
+|-----------|------|-----|
+| システムがプログラム的にパースする値 | JSON | パラメータID、violation_detected(bool)、Tool Calling decision_package |
+| エージェント間でプロンプトとして渡すもの | 構造化Markdown/自然言語 | Perceiver出力、Impulsive/Reflective出力、内省メモ、情景描写 |
+| 最終出力 | 自然な文章 | 日記、ナラティブ |
 
 **隠蔽原則（implicit/explicit非対称）:**
 - Impulsive Agent: 気質・性格層にアクセス可 / 規範層にアクセス不可
 - Reflective Agent: 気質・性格層に隠蔽 / 規範層にアクセス可
 - 日記生成AI: 気質・性格パラメータを知らない（行動からの推測のみ）
 
-#### データモデル
+**品質プロファイル別モデル設定:**
+| Profile | director_tier | worker_tier | Evaluator | 備考 |
+|---------|--------------|-------------|-----------|------|
+| high_quality | opus | sonnet | 全7種ON | 本番提出用 |
+| standard | sonnet | sonnet | 5種ON | 推奨バランス |
+| fast | sonnet | gemini | 3種ON | 素早い確認 |
+| draft | sonnet | gemma | 2種ON | 最小コスト |
 
-| モデル | 用途 | Phase |
-|---|---|---|
-| `ConceptPackage` | キャラクター概念設計 | Tier -1 |
-| `MacroProfile` | マクロプロフィール（8セクション） | A-1 |
-| `MicroParameters` | 52パラメータ + 規範層 | A-2 |
-| `AutobiographicalEpisodes` | 自伝的エピソード（5-8個） | A-3 |
-| `WeeklyEventsStore` | 7日間イベント列（28-42件） | D |
-| `MoodState` | PAD 3次元ムード | 日次ループ |
-| `ShortTermMemoryDB` | 記憶（key memory + 段階圧縮） | 日次ループ |
-| `EventPackage` | 1イベント処理結果 | 日次ループ |
+#### データモデル（v2 §6.3.4準拠拡張済）
+
+| モデル | 用途 | Phase | 拡張フィールド |
+|---|---|---|---|
+| `ConceptPackage` | キャラクター概念設計 | Tier -1 | psychological_hints(want_and_need, ghost_wound, lie) |
+| `MacroProfile` | マクロプロフィール（9セクション） | A-1 | VoiceFingerprint拡張(二人称, 絵文字, 自問頻度, 比喩頻度) |
+| `MicroParameters` | 52パラメータ + 規範層 | A-2 | 15 Worker対応サブモデル(SchwartzValuesOutput等) |
+| `AutobiographicalEpisodes` | 自伝的エピソード（5-8個） | A-3 | McAdams 5カテゴリ + redemption bias対策 |
+| `WeeklyEventsStore` | 7日間イベント列（28-42件） | D | 2軸メタデータ(known/unknown x expectedness) |
+| `MoodState` | PAD 3次元ムード | 日次ループ | Peak-End Rule + carry-over |
+| `ShortTermMemoryDB` | 記憶（key memory + 段階圧縮） | 日次ループ | LLM段階圧縮(400→200→80→20字) |
+| `EventPackage` | 1イベント処理結果 | 日次ループ | 全エージェント出力を包含 |
 
 #### UI/UX
 
 - **フェーズ構成の区分化**: Day 0 ダッシュボード（キャラクター設定結果確認画面）と Day 1-7（日記生成）のシミュレーションループを明確にUI分割。
 - **4画面構成**: 起動 → 生成中（思考とフェーズトラッカー） → Day 0結果（6タブ・ダッシュボード） → 履歴
-- **生成進行UI（Phase Tracker）**: 生成中画面にて、現在のパイプライン実行状態（Creative Director → A-1 → A-2 → A-3 → D）をステップ形式で可視化するUIを導入。
-- **インライン日記生成とキャンセル機能**: 「日記」ダッシュボード内で、他画面に遷移せずインラインで思考ログと生成中の日記をリアルタイム表示。また、バックエンドでのタスク強制終了（asyncio.Task.cancel）を伴う「🛑 停止してリセット」機能を実装。
-- **エラー耐性と生成再開（Resume）**: Pydantic v2 の `field_validator` によるデータ型の自己修復機能、および各フェーズ完了ごとの「チェックポイント保存」を実装。エラー発生時に「中断した箇所から再開」ボタンを表示し、既存の進行状況を飛ばして再開することが可能。
-- **構成設定UI**: 生成画面にて、7種のEvaluator（Stage 2 品質評価層）のON/OFFをそれぞれ独立して切り替え可能、かつワンボタンで一括変更するトグルUIを実装。
-- **Day 0 の再生成**: ダッシュボードにて気に入らない設定をその場で「破棄して再生成」できる機能を追加。
-- **WebSocket**: エージェント思考のリアルタイム表示
-- **詳細進捗ハートビート**: 長時間かかるAI推論中、`[Step X/N]` 形式で進捗を逐次表示。
-- **デザイン**: プレミアムライトモード（以前のダークテーマから刷新）
-- **ログ品質向上**: 通信重複排除（Deduplication）の実装、および各思考ログへの使用モデル（Opus/Sonnet/Gemini）表示バッジを実装。
-- **安定性強化**: サーバーサイドの非同期処理最適化による「ハングアップ」の完全解消。ポート競合対策として 8001 番を使用。
-- **コスト表示**: リアルタイムトークン消費・推定コスト表示。Gemini 2.5 Pro のコスト集計にも対応。
+- **生成進行UI（Phase Tracker）**: 生成中画面にて、現在のパイプライン実行状態（Creative Director → A-1 → A-2 → A-3 → D）をステップ形式で可視化。
+- **インライン日記生成とキャンセル機能**: 「日記」ダッシュボード内で、他画面に遷移せずインラインで思考ログと生成中の日記をリアルタイム表示。
+- **エラー耐性と生成再開（Resume）**: Pydantic v2 の `field_validator` による自己修復 + 各Phase完了ごとのチェックポイント保存。
+- **構成設定UI**: 7種のEvaluatorのON/OFFを独立切り替え可能。
+- **WebSocket**: エージェント思考のリアルタイム表示。詳細進捗ハートビート。
+- **コスト表示**: リアルタイムトークン消費・推定コスト表示。
 
 #### データフロー・永続化仕様
 
 - **インメモリ共有**: 処理途中の全オブジェクト構成はPydanticスキーマによってメモリ上に保たれる
-- **MDファイル永続化DB**: キャラクター作成と日次ループ終了後、以下の構造でディスクへ自律保存される。
-  - `backend/storage/character_packages/{character_name}/00_profile.md` （事前生成のキャラクタープロファイル一式）
-  - `backend/storage/character_packages/{character_name}/agent_logs.json/.md` （エージェントの思考過程・エンジニアリングログ）
-  - `backend/storage/character_packages/{character_name}/daily_logs/Day_{N}.md` （日次イベント、行動、感情変化、内省、日記、記憶ログ）
+- **MDファイル永続化DB**: キャラクター作成と日次ループ終了後、以下の構造でディスクへ自律保存:
+  - `00_profile.md` — キャラクタープロファイル一式
+  - `agent_logs.json/.md` — エージェント思考ログ
+  - `daily_logs/Day_{N}.md` — 日次ログ（全エージェント出力・ムード変遷・内省・日記・key memory・翌日予定）
+  - `checkpoint.json` — 中断再開用チェックポイント
 
 #### エッジケース・制約
 
@@ -193,35 +241,52 @@ graph TB
 
 **(a) 当初設計**: 仕様書v2の4層階層を採用。評価(EvaluatorPipeline)はすべての生成が終わった最後にまとめて呼び出して成否をテストする想定。
 **(b) 変更・根拠**: 全工程終了後のテストでは、例えばPhase A-1（マクロ）で不合格が出た場合、既に無駄に消費したPhase Dまでのトークン生成が全て破棄されるというコスト破壊の問題が存在した。
-**(c) 採用プラクティス**: `MasterOrchestrator` の `run()` 内に「Evaluator-Optimizer ループ」を完全統合。各Phase（例えばPhase A-3完了直後）ごとに即座に評価を挟み、FailならそのPhaseだけを指定回数（最大4回）再生成（リトライ）させる堅牢な自律修正システムへ進化した。また、APIの404エラー障害に対してフォールバックルーティング（Anthropic → Gemini 2.5 Pro）を実装して安定化を図った。
+**(c) 採用プラクティス**: `MasterOrchestrator` の `run()` 内に「Evaluator-Optimizer ループ」を完全統合。各Phase完了直後に即座に評価を挟み、FailならそのPhaseだけを指定回数（最大4回）再生成させる堅牢な自律修正システムへ進化。
 
 ### 2. LLM API設計
 
-**(a) 当初設計**: Claude Agent SDK使用を前提。また、Opus 4.6やGemma 4などの指定について代替えの現行モデルを使用して検証していた。
-**(b) 変更・根拠**: SDK未確認のため、直接Anthropic APIおよびGoogle Generative AIに切替。さらに最新のAPIエコシステム（2026年現在）にて、 `claude-opus-4-6`, `claude-sonnet-4-6`, `models/gemma-4-31b-it` が実在・稼働していることが確認されたため。
-**(c) 採用プラクティス**: `call_llm()` 統一インターフェースで、実在する最新モデルID（`claude-opus-4-6`等）を直接指定。エラー時にはフォールバックルーティング（Anthropic → Gemini 2.5 Pro）が作動して安定化を図る設計とした。
+**(a) 当初設計**: Claude Agent SDK使用を前提。
+**(b) 変更・根拠**: SDK未確認のため、直接Anthropic APIおよびGoogle Generative AIに切替。
+**(c) 採用プラクティス**: `call_llm()` 統一インターフェースで、実在する最新モデルID（`claude-opus-4-6`等）を直接指定。エラー時にはフォールバックルーティング（Anthropic → Gemini 2.5 Pro）が作動。
 
 ### 3. 隠蔽原則の実装
 
 **(a) 当初設計**: 各エージェントに渡すコンテキストを関数引数レベルで制御
 **(b) 採用プラクティス**: 
-- Impulsive Agent: `micro_parameters.temperament` を直接渡す
-- Reflective Agent: `schwartz_values`, `ideal_self`, `ought_self` のみ渡す（気質パラメータは渡さない）
+- Impulsive Agent: 活性化された気質・性格パラメータを直接渡す
+- Reflective Agent: 活性化された規範層のみ渡す（気質パラメータは渡さない）
 - 日記生成AI: `voice_fingerprint` のみ渡す（パラメータ値は一切渡さない）
+- 検証エージェント: パラメータ名・ID (#1-#52) の漏洩をキーワード＋LLMで自動修正
 
 ### 4. コアAPI層の自律エージェント化 (Agentic Loops v10)
 
-**(a) 当初設計**: 各タスク（Creative Directorによるドラフト生成や、日記の評価）はPython側の固定化された順次・反復ループ構造（プロンプトチェイン）を用いて、外部からLLMをコントロールする「制御型フロー」だった。
-**(b) 変更・根拠**: V10仕様書に基づく「真のエージェンティックな振る舞い」を実現するため。LLMに対し、外部から判定を押し付けるのではなく、複数のツール（機能）を提供し、自ら考えて行動・検証させる方が高度な成果が得られる。
-**(c) 採用プラクティス**: Anthropic Tool Calling機能を統合した `call_llm_agentic` インフラを構築し、CreativeDirector、Integration Agent(行動決定)、DiaryGenerationAgentの3コアを、すべてツールの呼び出し可否を自律判断して自己完結する「Tool-using Autonomous Agent」へと置き換えた。
+**(a) 当初設計**: Python側の固定化された順次・反復ループ構造。
+**(b) 変更・根拠**: V10仕様書に基づく「真のエージェンティックな振る舞い」を実現するため。
+**(c) 採用プラクティス**: Anthropic Tool Calling機能を統合した `call_llm_agentic` インフラを構築し、CreativeDirector、Integration Agent(行動決定)、DiaryGenerationAgentの3コアを Tool-using Autonomous Agent へ置換。
 
-### 5. WebサーチおよびMDファイル保存ルーティング
+### 5. エージェント出力形式: JSON → 自然言語（構造化Markdown）
 
-**(a) 当初設計**: キャラクター作成はAI内テキスト生成のみに依存し、データ出力はJSONオブジェクトやインメモリ保持に留まっていた。
-**(b) 変更・根拠**: V10仕様上、世界観に深みを持たせるための既存物語の「リサーチ能力」と、生成ログやプロセスを読み物として美しく永続化するための「MDデータベース」が必要不可欠であった。
+**(a) 当初設計**: 全エージェント出力を `json_mode=True` で JSON 形式に統一し、Pydantic モデルで直接パースしていた。
+**(b) 変更・根拠**: JSON形式はシステムが値をプログラム的に処理する場面でのみ有効。エージェントがプロンプトとして受け取る記憶・ナラティブ・内省・情景描写等は、自然言語のほうがLLMの処理品質が高い。日記や情景描写にJSON制約を課すと文学的品質が大幅に低下する。
 **(c) 採用プラクティス**: 
-- クリエイティブディレクターにのみ特権的に `search_web`（duckduckgo-searchベース）を渡し、ドラフト前に自律検索を行うように `llm_api.py` のイテレーション枠を拡張。
-- `md_storage.py` を実装し、Master Orchestrator と Daily Loop の各完了フェーズにて、`00_profile.md` と `Day_x.md` を `backend/storage/character_packages/` フォルダへ自動保存させる堅牢な出力ルーティング（getattrベースの安全処理込み）を確立。
+- **JSON維持**: DynamicActivation(パラメータID)、ValuesViolation(bool判定)、Tool Calling(decision_package)
+- **自然言語化**: Perceiver、Impulsive、Reflective、SceneNarration、Introspectionの5エージェント出力を `## セクション名` 形式のMarkdownに変更
+- `parse_markdown_sections()` ユーティリティで各セクションをPydanticモデルのフィールドに分配
+- 統合エージェントへの入力も `json.dumps(model.model_dump())` から自然言語テキストに変更
+
+### 6. Phase A-2 Worker 細分化
+
+**(a) 当初設計**: MVP段階では4つの統合Worker（気質全部、性格全部、対他者認知、規範層）で実行。
+**(b) 変更・根拠**: v2 §6.4.2 で15 Workerへの分割が明確に規定。単一LLMが52パラメータを一度に生成するとコンテキスト負荷で品質が低下し、一部再生成も困難。
+**(c) 採用プラクティス**: v10 §3.3のカテゴリ分類（A1-A4, B1-B5）に沿って10パラメータWorker + 4規範層Worker + 1ルールベース導出の計15 Workerに分割。Step 1(10並列) → Step 2(4並列) → Step 3(逐次) の3段階で実行。
+
+### 7. WebサーチおよびMDファイル保存ルーティング
+
+**(a) 当初設計**: データ出力はJSONオブジェクトやインメモリ保持に留まっていた。
+**(b) 変更・根拠**: 世界観に深みを持たせるリサーチ能力と、人間可読なMD永続化が必要。
+**(c) 採用プラクティス**: 
+- Creative Directorに `search_web` + `file_read`（backend/reference/参照）の2ツールを付与。
+- `md_storage.py` で全エージェント出力・ムード変遷・内省・日記・key memoryを含む完全なDay_N.mdを自動生成。
 
 ---
 
@@ -234,13 +299,15 @@ graph TB
 | Stage 1: MVP | ✅ 実装完了 | 4層エージェント構造、日次ループ統合済 |
 | Stage 2: 品質向上 | ✅ 実装完了 | Evaluator群7種、再生成ループ統合完了 |
 | Stage 3: エージェント自律化 | ✅ 実装完了 | コア3種(Director, Action, Diary)のTool-Using化 |
-| Stage 4: UX改善 | ⬜ 未着手 | 共同編集・ストリーミング強化 |
+| Stage 4: UX改善 | ⬜ 未着手 | 共同編集モード（v2 §3.4）|
 | Stage 5: インフラ・完成 | ✅ 実装完了 | Webサーチ・MD永続化・E2Eテスト済 |
+| Stage 6: 仕様書完全準拠 | ✅ 実装完了 | バグ修正5件、JSON→自然言語化、スキーマ拡張、A-2 15Worker化、Creative Director強化 |
 
-### 次のアクション（現行ステータス: Stage 5 完了 -> 本稼働テスト）
+### 次のアクション
 
-1. **提出用キャラクター生成** → High Qualityプロファイルで全EvaluatorをONにし、MDデータベース出力まで通して実行する。
-2. **フロントエンド連携強化** → WebSocketでの思考ストリーミング確認とアプリ統合。（Stage 4への移行）
+1. **E2Eテスト実行** → draftプロファイルでキャラクター生成 + 日記生成を通しで実行し、全パイプラインの動作を確認する
+2. **提出用キャラクター生成** → High Qualityプロファイルで全EvaluatorをONにし、MDデータベース出力まで通して実行する
+3. **Phase A-1 Workerプロンプト更新** → 追加されたMacroProfileフィールド（second_person_by_context, emoji_usage等）を生成するようWorkerプロンプトを拡充する
 
 ### ブロッカー
 
