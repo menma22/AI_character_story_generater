@@ -284,25 +284,37 @@ async def call_llm(
     """
     統一LLM呼び出しインターフェース
     
-    Args:
-        tier: "opus" | "sonnet" | "gemma"
-        その他: 各API固有の引数
+    Claude優先フォールバック方式:
+    - tier="opus"/"sonnet" → まずClaudeを試行。失敗時にGemini 2.5 Proへ自動フォールバック。
+    - tier="gemini" → Gemini 2.5 Pro直接指定。
+    - tier="gemma" → Gemma 4直接指定。
     
     Returns:
         {"content": str or dict, "usage": dict}
     """
     if tier in ("opus", "sonnet"):
         model_name = LLMModels.OPUS if tier == "opus" else LLMModels.SONNET
-        return await call_anthropic(
-            model=model_name,
-            system_prompt=system_prompt,
-            user_message=user_message,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            cache_system=cache_system,
-            cache_context=cache_context,
-            json_mode=json_mode,
-        )
+        try:
+            return await call_anthropic(
+                model=model_name,
+                system_prompt=system_prompt,
+                user_message=user_message,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                cache_system=cache_system,
+                cache_context=cache_context,
+                json_mode=json_mode,
+            )
+        except Exception as e:
+            logger.warning(f"[call_llm] Claude ({tier}) failed: {e}. Falling back to Gemini 2.5 Pro.")
+            # フォールバック: Gemini 2.5 Pro を使用
+            return await call_gemma(
+                user_message=f"{system_prompt}\n\n---\n\n{user_message}" if system_prompt else user_message,
+                model=LLMModels.GEMINI_2_5_PRO,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                json_mode=json_mode,
+            )
             
     if tier == "gemini":
         return await call_gemma(
@@ -323,6 +335,7 @@ async def call_llm(
         )
     else:
         raise ValueError(f"Unknown tier: {tier}")
+
 
 
 # ─── 真の自律型エージェントループ (Agentic Execution Loop) ────────
@@ -566,7 +579,7 @@ async def call_llm_agentic_gemini(
             final_text = part.text
             logger.warning("[call_llm_agentic_gemini] Returned without tool_use.")
             # ツール使用を強制するためのメッセージを追加
-            current_message = "指示: 用意されたツールのいずれかを呼び出してください。プロファイルを提出する場合は submit_concept を使用してください。"
+            current_message = "指示: 用意されたツールのいずれかを呼び出してください。最終的な回答を提出したい場合は提供された `submit_` ツールを使用してください。"
 
     logger.warning("[call_llm_agentic_gemini] Hit max iterations.")
     return chat.history[-1].parts[0].text

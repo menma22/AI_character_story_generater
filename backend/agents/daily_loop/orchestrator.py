@@ -668,13 +668,23 @@ class DailyLoopOrchestrator:
         await self._notify("日記生成エージェントを自律モードで起動...")
         
         if self.profile.worker_tier in ("opus", "sonnet"):
-            await call_llm_agentic(
-                tier=self.profile.worker_tier,
-                system_prompt=system_prompt,
-                user_message=user_message,
-                tools=tools,
-                max_iterations=6,
-            )
+            try:
+                await call_llm_agentic(
+                    tier=self.profile.worker_tier,
+                    system_prompt=system_prompt,
+                    user_message=user_message,
+                    tools=tools,
+                    max_iterations=6,
+                )
+            except Exception as e:
+                logger.warning(f"[DailyLoop] Claude ({self.profile.worker_tier}) agentic failed: {e}. Falling back to Gemini.")
+                from backend.tools.llm_api import call_llm_agentic_gemini
+                await call_llm_agentic_gemini(
+                    system_prompt=system_prompt,
+                    user_message=user_message,
+                    tools=tools,
+                    max_iterations=6,
+                )
         elif self.profile.worker_tier == "gemini":
             from backend.tools.llm_api import call_llm_agentic_gemini
             await call_llm_agentic_gemini(

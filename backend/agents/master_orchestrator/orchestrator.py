@@ -35,6 +35,7 @@ class MasterOrchestrator:
             await self.ws.send_progress(phase, progress, detail)
 
     async def _checkpoint(self):
+        try:
             from backend.storage.md_storage import save_checkpoint, save_character_profile, save_logs
             # 名前が未定義の場合はSession IDを使用
             cname = self.session_id
