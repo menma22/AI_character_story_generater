@@ -105,7 +105,7 @@ PROFILES = {
 class AppConfig:
     """アプリケーション全体の設定"""
     HOST = os.getenv("HOST", "0.0.0.0")
-    PORT = int(os.getenv("PORT", "8000"))
+    PORT = int(os.getenv("PORT", "8001"))
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
     DEFAULT_PROFILE = os.getenv("DEFAULT_PROFILE", "draft")
     

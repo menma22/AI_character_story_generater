@@ -18,9 +18,14 @@ from backend.websocket.handler import manager
 from backend.tools.llm_api import token_tracker
 
 # ロギング設定
+log_file = Path(__file__).parent.parent / "app.log"
 logging.basicConfig(
     level=getattr(logging, AppConfig.LOG_LEVEL),
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler(log_file, encoding="utf-8")
+    ]
 )
 logger = logging.getLogger(__name__)
 
@@ -104,6 +109,15 @@ async def get_package(package_name: str):
     return {"error": "パッケージが見つかりません"}
 
 
+@app.get("/api/debug/thoughts")
+async def get_debug_thoughts():
+    """現在の接続マネージャー内の思考ログ履歴を取得"""
+    return {
+        "count": len(manager.thought_history),
+        "history": manager.thought_history
+    }
+
+
 # ─── WebSocket エンドポイント ─────────────────────────────────
 
 # クライアントごとに実行中のタスクを保持（キャンセル機能のため）
@@ -127,6 +141,7 @@ async def websocket_endpoint(websocket: WebSocket):
 async def handle_ws_message(data: dict, websocket: WebSocket):
     """WebSocketメッセージの処理"""
     action = data.get("action", "")
+    logger.debug(f"[WS] Received action: {action} with data: {data}")
     
     if action == "generate_character":
         # キャラクター生成開始
@@ -299,6 +314,6 @@ if __name__ == "__main__":
         "backend.main:app",
         host=AppConfig.HOST,
         port=AppConfig.PORT,
-        reload=True,
+        reload=False,
         log_level=AppConfig.LOG_LEVEL.lower(),
     )

@@ -289,6 +289,10 @@ class CreativeDirector:
         
         # 指定されたTierに応じて独立したAgentic Loopを呼び出す
         # Claude優先: opus/sonnet指定時はまずClaudeを試行し、失敗時にGeminiへフォールバック
+        logger.info(f"[CreativeDirector] Starting agentic loop for theme: {theme}")
+        if self.ws:
+            await self.ws.send_agent_thought("Creative Director", f"テーマ '{theme}' に基づくキャラクター設計を開始します。エージェンティック・ループを起動します...", "thinking")
+        
         if self.profile.director_tier in ("opus", "sonnet"):
             try:
                 await call_llm_agentic(

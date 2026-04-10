@@ -522,13 +522,29 @@ async def call_llm_agentic_gemini(
         )
     )
     
+    from backend.websocket.handler import manager
+    
     chat = gmodel.start_chat(history=[])
     current_message = user_message
     
     for i in range(max_iterations):
-        logger.info(f"[call_llm_agentic_gemini] Iteration {i+1}/{max_iterations}")
+        step_info = f"[Step {i+1}/{max_iterations}] リサーチと推論を行っています..."
+        logger.info(f"[call_llm_agentic_gemini] {step_info}")
+        if manager:
+            await manager.send_agent_thought("Creative Director (Gemini)", step_info, "thinking")
         
-        response = await asyncio.to_thread(chat.send_message, current_message)
+        # タイムアウト付きでAPI呼び出し
+        try:
+            response = await asyncio.wait_for(
+                asyncio.to_thread(chat.send_message, current_message),
+                timeout=300.0
+            )
+        except asyncio.TimeoutError:
+            error_msg = "Gemini APIの応答がタイムアウトしました(5分)。負荷が高いか、複雑すぎる指示の可能性があります。"
+            logger.error(f"[call_llm_agentic_gemini] {error_msg}")
+            if manager:
+                await manager.send_error(error_msg)
+            raise TimeoutError(error_msg)
         
         # トークン記録
         usage = {
@@ -542,7 +558,10 @@ async def call_llm_agentic_gemini(
         
         if part.function_call:
             call = part.function_call
-            logger.info(f"[call_llm_agentic_gemini] Tool called: {call.name}")
+            tool_msg = f"ツールを実行中: {call.name} (引数: {call.args})"
+            logger.info(f"[call_llm_agentic_gemini] {tool_msg}")
+            if manager:
+                await manager.send_agent_thought("Creative Director (Gemini)", tool_msg, "thinking")
             
             if call.name in tool_map:
                 try:
@@ -565,10 +584,12 @@ async def call_llm_agentic_gemini(
                 result_data = {"error": f"Tool '{call.name}' not found."}
                 is_error = True
             
-            # ツール結果を返信してループ継続
-            current_message = genai.types.Part.from_function_response(
-                name=call.name,
-                response=result_data
+            # ツール結果を返信してループ継続 (Google SDKの内部プロトコルに準拠)
+            current_message = genai.protos.Part(
+                function_response=genai.protos.FunctionResponse(
+                    name=call.name,
+                    response=result_data
+                )
             )
             
             # submit_ツールが成功したなら終了
