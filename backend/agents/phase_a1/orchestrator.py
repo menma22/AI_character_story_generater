@@ -13,9 +13,9 @@ from backend.config import EvaluationProfile
 from backend.models.character import (
     ConceptPackage, MacroProfile, BasicInfo, SocialPosition,
     FamilyAndIntimacy, CurrentLifeOutline, DreamTimeline,
-    VoiceFingerprint, ValuesCore, Secret, RelationshipEntry,
+    VoiceFingerprint, ValuesCore, Secret, RelationshipEntry, RelationshipNetwork,
 )
-from backend.tools.llm_api import call_llm
+from backend.tools.agent_utils import run_worker_with_validation
 
 logger = logging.getLogger(__name__)
 
@@ -196,98 +196,63 @@ class PhaseA1Orchestrator:
         
         # Step 1: BasicInfo（最上流、他の全Workerが参照）
         await self._notify("Step 1: BasicInfoWorker")
-        basic_data = await run_worker(
+        basic_info = await run_worker_with_validation(
             "BasicInfoWorker",
             BASIC_INFO_PROMPT,
             f"concept_package:\n{concept_json}",
+            BasicInfo,
             self.ws,
         )
-        basic_info = BasicInfo(**{k: basic_data.get(k, "") for k in ["name", "age", "gender", "appearance", "occupation"]})
-        if isinstance(basic_info.age, str):
-            try:
-                basic_info.age = int(basic_info.age)
-            except ValueError:
-                basic_info.age = 30
         
-        basic_json = json.dumps(basic_data, ensure_ascii=False)
+        basic_json = json.dumps(basic_info.model_dump(mode="json"), ensure_ascii=False)
         
         # Step 2: 並列実行可能なWorker群
         await self._notify("Step 2: Family, Lifestyle, Dream, Voice, ValuesCore を並列実行")
         
         results = await asyncio.gather(
-            run_worker("FamilyWorker", FAMILY_PROMPT,
-                       f"concept_package:\n{concept_json}\n\nbasic_info:\n{basic_json}", self.ws),
-            run_worker("LifestyleWorker", LIFESTYLE_PROMPT,
-                       f"concept_package:\n{concept_json}\n\nbasic_info:\n{basic_json}", self.ws),
-            run_worker("DreamWorker", DREAM_PROMPT,
-                       f"concept_package:\n{concept_json}\n\nbasic_info:\n{basic_json}", self.ws),
-            run_worker("VoiceWorker", VOICE_PROMPT,
-                       f"concept_package:\n{concept_json}\n\nbasic_info:\n{basic_json}", self.ws),
-            run_worker("ValuesCoreWorker", VALUES_CORE_PROMPT,
-                       f"concept_package:\n{concept_json}\n\nbasic_info:\n{basic_json}", self.ws),
+            run_worker_with_validation("FamilyWorker", FAMILY_PROMPT,
+                       f"concept_package:\n{concept_json}\n\nbasic_info:\n{basic_json}", FamilyAndIntimacy, self.ws),
+            run_worker_with_validation("LifestyleWorker", LIFESTYLE_PROMPT,
+                       f"concept_package:\n{concept_json}\n\nbasic_info:\n{basic_json}", CurrentLifeOutline, self.ws),
+            run_worker_with_validation("DreamWorker", DREAM_PROMPT,
+                       f"concept_package:\n{concept_json}\n\nbasic_info:\n{basic_json}", DreamTimeline, self.ws),
+            run_worker_with_validation("VoiceWorker", VOICE_PROMPT,
+                       f"concept_package:\n{concept_json}\n\nbasic_info:\n{basic_json}", VoiceFingerprint, self.ws),
+            run_worker_with_validation("ValuesCoreWorker", VALUES_CORE_PROMPT,
+                       f"concept_package:\n{concept_json}\n\nbasic_info:\n{basic_json}", ValuesCore, self.ws),
         )
         
-        family_data, lifestyle_data, dream_data, voice_data, values_data = results
+        family_obj, lifestyle_obj, dream_obj, voice_obj, values_obj = results
         
         # Step 3: Secret（ValuesCore依存）
         await self._notify("Step 3: SecretWorker")
-        secret_data = await run_worker(
+        secret_obj = await run_worker_with_validation(
             "SecretWorker", SECRET_PROMPT,
-            f"concept_package:\n{concept_json}\n\nbasic_info:\n{basic_json}\n\nvalues_core:\n{json.dumps(values_data, ensure_ascii=False)}",
+            f"concept_package:\n{concept_json}\n\nbasic_info:\n{basic_json}\n\nvalues_core:\n{json.dumps(values_obj.model_dump(mode='json'), ensure_ascii=False)}",
+            Secret,
             self.ws,
         )
         
         # Step 4: RelationshipNetwork（Family依存）
         await self._notify("Step 4: RelationshipNetworkWorker")
-        rel_data = await run_worker(
+        rel_net_obj = await run_worker_with_validation(
             "RelationshipNetworkWorker", RELATIONSHIP_PROMPT,
-            f"concept_package:\n{concept_json}\n\nbasic_info:\n{basic_json}\n\nfamily:\n{json.dumps(family_data, ensure_ascii=False)}",
+            f"concept_package:\n{concept_json}\n\nbasic_info:\n{basic_json}\n\nfamily:\n{json.dumps(family_obj.model_dump(mode='json'), ensure_ascii=False)}",
+            RelationshipNetwork,
             self.ws,
         )
         
-        # MacroProfile組み立て
+        # MacroProfile構築
         macro = MacroProfile(
             basic_info=basic_info,
-            social_position=SocialPosition(
-                occupation_detail=basic_data.get("occupation", ""),
-                living_area=lifestyle_data.get("living_situation", ""),
-            ),
-            family_and_intimacy=FamilyAndIntimacy(
-                family_structure=family_data.get("family_structure", ""),
-                key_relationships=family_data.get("key_relationships", []),
-            ),
-            current_life_outline=CurrentLifeOutline(
-                daily_routine=lifestyle_data.get("daily_routine", ""),
-                weekly_schedule=lifestyle_data.get("weekly_schedule", []),
-                living_situation=lifestyle_data.get("living_situation", ""),
-            ),
-            dream_timeline=DreamTimeline(
-                childhood_dream=dream_data.get("childhood_dream", ""),
-                current_dream=dream_data.get("current_dream", ""),
-                dream_origin=dream_data.get("dream_origin", ""),
-                timeline=dream_data.get("timeline", []),
-            ),
-            voice_fingerprint=VoiceFingerprint(
-                first_person=voice_data.get("first_person", ""),
-                speech_patterns=voice_data.get("speech_patterns", []),
-                sentence_endings=voice_data.get("sentence_endings", []),
-                kanji_hiragana_tendency=voice_data.get("kanji_hiragana_tendency", ""),
-                avoided_words=voice_data.get("avoided_words", []),
-            ),
-            values_core=ValuesCore(
-                most_important=values_data.get("most_important", ""),
-                absolutely_unforgivable=values_data.get("absolutely_unforgivable", ""),
-                pride=values_data.get("pride", ""),
-                shame=values_data.get("shame", ""),
-            ),
-            secrets=Secret(
-                public_secrets=secret_data.get("public_secrets", []),
-                private_secrets=secret_data.get("private_secrets", []),
-            ),
-            relationship_network=[
-                RelationshipEntry(**r) for r in rel_data.get("relationships", [])
-                if isinstance(r, dict) and "name" in r
-            ],
+            social_position=SocialPosition(), # Todo: 適切な初期化
+            family_and_intimacy=family_obj,
+            current_life_outline=lifestyle_obj,
+            dream_timeline=dream_obj,
+            voice_fingerprint=voice_obj,
+            values_core=values_obj,
+            secret=secret_obj,
+            relationship_network=rel_net_obj.relationships,
         )
         
         await self._notify(f"Phase A-1完了: {macro.basic_info.name}", "complete")

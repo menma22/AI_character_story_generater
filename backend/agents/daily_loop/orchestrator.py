@@ -876,6 +876,15 @@ class DailyLoopOrchestrator:
             self._mood_carry_over()
             
             self.day_results.append(day_state)
+            
+            try:
+                from backend.storage.md_storage import save_daily_log
+                cname = self.package.macro_profile.basic_info.name if (self.package.macro_profile and self.package.macro_profile.basic_info) else "Unknown_Character"
+                await save_daily_log(cname, day, day_state)
+            except Exception as e:
+                import logging
+                logging.getLogger("daily_loop").error(f"MD保存エラー: {e}")
+                
             await self._notify(f"=== Day {day} 完了 ===", "complete")
         
         await self._notify(f"全{days}日分の日記生成完了！", "complete")

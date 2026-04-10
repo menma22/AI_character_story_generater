@@ -11,8 +11,9 @@ import logging
 from backend.config import EvaluationProfile
 from backend.models.character import (
     ConceptPackage, MacroProfile, MicroParameters, ParameterEntry,
+    ParameterList, NormativeLayer,
 )
-from backend.tools.llm_api import call_llm
+from backend.tools.agent_utils import run_worker_with_validation
 
 logger = logging.getLogger(__name__)
 
@@ -97,73 +98,46 @@ class PhaseA2Orchestrator:
             await self.ws.send_agent_thought("[A-2] Orchestrator", content, status)
     
     async def _generate_params(self, param_list: list, category: str) -> list[ParameterEntry]:
-        """パラメータ群を一括生成"""
+        """パラメータ群を一括生成（バリデーション付き）"""
         param_desc = "\n".join([f"  #{p[0]} {p[1]} ({p[2]})" for p in param_list])
         
-        result = await call_llm(
-            tier="gemma",
-            system_prompt=GENERATION_PROMPT,
-            user_message=(
+        result = await run_worker_with_validation(
+            f"ParamWorker:{category}",
+            GENERATION_PROMPT,
+            (
                 f"concept_package:\n{json.dumps(self.concept.model_dump(mode='json'), ensure_ascii=False, indent=2)}\n\n"
                 f"macro_profile (basic_info):\n{json.dumps(self.macro.basic_info.model_dump(mode='json'), ensure_ascii=False)}\n\n"
                 f"values_core:\n{json.dumps(self.macro.values_core.model_dump(mode='json'), ensure_ascii=False)}\n\n"
                 f"カテゴリ: {category}\n"
                 f"以下のパラメータを生成してください:\n{param_desc}\n\n"
-                f"出力形式: {{'parameters': [{{'id': 番号, 'name': '英語名', 'name_en': '英語名', 'value': 1.0-5.0, 'natural_language': '自然言語記述'}}]}}"
+                f"出力形式: {{'parameters': [{{'id': 番号, 'name': '英語名', 'value': 1.0-5.0, 'natural_language': '詳細'}}]}}"
             ),
-            max_tokens=4000,
-            json_mode=True,
+            ParameterList,
+            self.ws
         )
         
-        data = result["content"] if isinstance(result["content"], dict) else {}
-        params_raw = data.get("parameters", [])
-        
-        entries = []
-        for p in params_raw:
-            if isinstance(p, dict):
-                try:
-                    entry = ParameterEntry(
-                        id=int(p.get("id", 0)),
-                        name=p.get("name", ""),
-                        name_en=p.get("name_en", p.get("name", "")),
-                        value=float(p.get("value", 3.0)),
-                        natural_language=p.get("natural_language", ""),
-                    )
-                    entries.append(entry)
-                except Exception as e:
-                    logger.warning(f"Parameter parse error: {e}")
-        
-        return entries
+        return result.parameters
     
-    async def _generate_values(self) -> dict:
-        """Schwartz 19価値 + 道徳基盤 + 理想自己/義務自己を生成"""
-        result = await call_llm(
-            tier="gemma",
-            system_prompt="""あなたはキャラクターの規範層（価値観）を生成するWorkerです。
+    async def _generate_values(self) -> NormativeLayer:
+        """Schwartz 19価値 + 道徳基盤 + 理想自己/義務自己を生成（バリデーション付き）"""
+        result = await run_worker_with_validation(
+            "ValuesWorker",
+            """あなたはキャラクターの規範層（価値観）を生成するWorkerです。
 Schwartz 19価値それぞれにstrong/medium/weakを付与し、
 道徳基盤、理想自己、義務自己、目標も生成してください。
 
 【重要】気質・性格層と規範層は独立に決定されるべき（v10 §3.2）。
-気質で「怠惰」でも、規範層で「達成 = strong（勤勉であるべき）」は許容される。
-
-出力形式: JSON
-{
-  "schwartz_values": {"Self-Direction-Thought": "strong/medium/weak", ...全19個},
-  "moral_foundations": {"Care": "strong/medium/weak", ...},
-  "ideal_self": "理想自己の記述",
-  "ought_self": "義務自己の記述",
-  "goals": ["目標1", "目標2", ...]
-}""",
-            user_message=(
+出力形式: JSON""",
+            (
                 f"concept_package:\n{json.dumps(self.concept.model_dump(mode='json'), ensure_ascii=False, indent=2)}\n\n"
                 f"macro_profile (values_core):\n{json.dumps(self.macro.values_core.model_dump(mode='json'), ensure_ascii=False)}\n\n"
                 f"規範層を生成してください。"
             ),
-            max_tokens=3000,
-            json_mode=True,
+            NormativeLayer,
+            self.ws
         )
         
-        return result["content"] if isinstance(result["content"], dict) else {}
+        return result
     
     async def run(self) -> MicroParameters:
         """Phase A-2を実行"""
@@ -177,8 +151,10 @@ Schwartz 19価値それぞれにstrong/medium/weakを付与し、
         other_task = self._generate_params(OTHER_COGNITION_PARAMS, "対他者認知")
         values_task = self._generate_values()
         
-        temperament, personality, other_cognition, values_data = await asyncio.gather(
-            temperament_task, personality_task, other_task, values_task
+        values_obj = await values_task
+        
+        temperament, personality, other_cognition = await asyncio.gather(
+            temperament_task, personality_task, other_task
         )
         
         # 認知パラメータの自動導出（v10 §3.3）
@@ -199,11 +175,11 @@ Schwartz 19価値それぞれにstrong/medium/weakを付与し、
             temperament=temperament,
             personality=personality,
             other_cognition=other_cognition,
-            schwartz_values=values_data.get("schwartz_values", {}),
-            moral_foundations=values_data.get("moral_foundations", {}),
-            ideal_self=values_data.get("ideal_self", ""),
-            ought_self=values_data.get("ought_self", ""),
-            goals=values_data.get("goals", []),
+            schwartz_values=values_obj.schwartz_values,
+            moral_foundations=values_obj.moral_foundations,
+            ideal_self=values_obj.ideal_self,
+            ought_self=values_obj.ought_self,
+            goals=values_obj.goals,
             learning_rate_alpha=round(learning_rate, 3),
             emotional_inertia=round(emotional_inertia, 3),
             rpe_sensitivity=round(rpe_sensitivity, 3),

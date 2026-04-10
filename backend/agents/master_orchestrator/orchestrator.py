@@ -19,10 +19,12 @@ logger = logging.getLogger(__name__)
 class MasterOrchestrator:
     """Tier 0: Master Orchestrator"""
     
-    def __init__(self, profile: EvaluationProfile, ws_manager=None):
+    def __init__(self, profile: EvaluationProfile, ws_manager=None, existing_package: Optional[CharacterPackage] = None, session_id: Optional[str] = None):
         self.profile = profile
         self.ws = ws_manager
-        self.package = CharacterPackage()
+        self.package = existing_package or CharacterPackage()
+        from datetime import datetime
+        self.session_id = session_id or f"SID_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     
     async def _notify(self, content: str, status: str = "thinking"):
         if self.ws:
@@ -31,6 +33,20 @@ class MasterOrchestrator:
     async def _progress(self, phase: str, progress: float, detail: str = ""):
         if self.ws:
             await self.ws.send_progress(phase, progress, detail)
+
+    async def _checkpoint(self):
+        """現在の状態を保存"""
+        try:
+            from backend.storage.md_storage import save_checkpoint
+            # 名前が未定義の場合はSession IDを使用
+            cname = self.session_id
+            if self.package.macro_profile and self.package.macro_profile.basic_info:
+                if self.package.macro_profile.basic_info.name:
+                    cname = self.package.macro_profile.basic_info.name
+            
+            await save_checkpoint(cname, self.package)
+        except Exception as e:
+            logger.warning(f"Checkpoint save failed: {e}")
     
     async def run(self, theme: Optional[str] = None) -> CharacterPackage:
         """
@@ -60,130 +76,153 @@ class MasterOrchestrator:
             best_passed_count = -1
             
             for iteration in range(1, max_iter + 1):
-                if iteration > 1:
-                    await self._notify(f"{phase_name}: 再生成ループ {iteration}/{max_iter} を開始", "warning")
-                
-                # Phase実行
-                orch = orch_class(**orch_kwargs)
-                result = await orch.run()
-                
-                # Evaluator実行
-                evals = await eval_func(result)
-                
-                passed_count = sum(1 for e in evals if e.passed)
-                is_passed = all(e.passed for e in evals)
-                
-                # 暫定ベスト更新
-                if passed_count > best_passed_count:
-                    best_passed_count = passed_count
-                    best_result = result
-                    best_evals = evals
-                
-                if is_passed:
-                    all_eval_results.extend(best_evals)
-                    return best_result
-                else:
-                    errors = [e.error for e in evals if not e.passed]
-                    await self._notify(f"{phase_name} 評価Fail: {errors[0]}", "warning")
+                try:
+                    if iteration > 1:
+                        await self._notify(f"{phase_name}: 再生成ループ {iteration}/{max_iter} を開始", "warning")
+                    
+                    # Phase実行
+                    orch = orch_class(**orch_kwargs)
+                    result = await orch.run()
+                    
+                    # Evaluator実行
+                    evals = await eval_func(result)
+                    
+                    passed_count = sum(1 for e in evals if e.passed)
+                    is_passed = all(e.passed for e in evals)
+                    
+                    # 暫定ベスト更新
+                    if passed_count > best_passed_count:
+                        best_passed_count = passed_count
+                        best_result = result
+                        best_evals = evals
+                    
+                    if is_passed:
+                        all_eval_results.extend(best_evals)
+                        return best_result
+                    else:
+                        errors = [e.error for e in evals if not e.passed]
+                        await self._notify(f"{phase_name} 評価Fail: {errors[0]}", "warning")
+                except Exception as e:
+                    logger.error(f"Error in {phase_name} (iter {iteration}): {e}", exc_info=True)
+                    await self._notify(f"{phase_name} コード実行エラー: {str(e)}", "error")
+                    if iteration == max_iter:
+                        raise
                     
             await self._notify(f"{phase_name}: 評価上限到達。暫定ベスト結果を採用します", "warning")
             all_eval_results.extend(best_evals)
             return best_result
         
         # ─── Tier -1: Creative Director ───────────────────────
-        await self._progress("creative_director", 0.0, "Creative Director起動中...")
-        
-        director = CreativeDirector(profile=self.profile, ws_manager=self.ws)
-        concept = await director.run(theme=theme)
-        self.package.concept_package = concept
-        
-        await self._progress("creative_director", 1.0, "Creative Director完了")
+        if not self.package.concept_package:
+            await self._progress("creative_director", 0.0, "Creative Director起動中...")
+            director = CreativeDirector(profile=self.profile, ws_manager=self.ws)
+            concept = await director.run(theme=theme)
+            self.package.concept_package = concept
+            await self._checkpoint()
+            await self._progress("creative_director", 1.0, "Creative Director完了")
+        else:
+            await self._notify("Creative Director: 既存のコンセプトを読み込み完了 (Skip)")
+            concept = self.package.concept_package
+            await self._progress("creative_director", 1.0)
+            
         cc_preview = concept.character_concept[:60] if concept.character_concept else "(未定義)"
         await self._notify(f"concept_package確定: {cc_preview}...")
         
         # ─── Phase A-1: マクロプロフィール生成 ────────────────
-        await self._progress("phase_a1", 0.0, "Phase A-1: マクロプロフィール生成開始")
-        
-        try:
-            from backend.agents.phase_a1.orchestrator import PhaseA1Orchestrator
-            
-            macro_profile = await _execute_phase_with_retry(
-                "Phase A-1",
-                PhaseA1Orchestrator,
-                {"concept": concept, "profile": self.profile, "ws_manager": self.ws},
-                lambda res: evaluator.evaluate_phase_a1(res)
-            )
-            self.package.macro_profile = macro_profile
-            
-            await self._progress("phase_a1", 1.0, "Phase A-1完了")
-            await self._notify(f"macro_profile確定: {macro_profile.basic_info.name}")
-        except Exception as e:
-            logger.error(f"Phase A-1 failed: {e}", exc_info=True)
-            await self._notify(f"Phase A-1エラー: {str(e)}", "error")
-            raise
+        if not self.package.macro_profile:
+            await self._progress("phase_a1", 0.0, "Phase A-1: マクロプロフィール生成開始")
+            try:
+                from backend.agents.phase_a1.orchestrator import PhaseA1Orchestrator
+                macro_profile = await _execute_phase_with_retry(
+                    "Phase A-1",
+                    PhaseA1Orchestrator,
+                    {"concept": concept, "profile": self.profile, "ws_manager": self.ws},
+                    lambda res: evaluator.evaluate_phase_a1(res)
+                )
+                self.package.macro_profile = macro_profile
+                await self._checkpoint()
+                await self._progress("phase_a1", 1.0, "Phase A-1完了")
+                await self._notify(f"macro_profile確定: {macro_profile.basic_info.name}")
+            except Exception as e:
+                logger.error(f"Phase A-1 failed: {e}", exc_info=True)
+                await self._notify(f"Phase A-1エラー: {str(e)}", "error")
+                raise
+        else:
+            await self._notify("Phase A-1: 既存のマクロプロフィールを読み込み完了 (Skip)")
+            macro_profile = self.package.macro_profile
+            await self._progress("phase_a1", 1.0)
         
         # ─── Phase A-2: ミクロパラメータ生成 ──────────────────
-        await self._progress("phase_a2", 0.0, "Phase A-2: ミクロパラメータ生成開始")
-        
-        try:
-            from backend.agents.phase_a2.orchestrator import PhaseA2Orchestrator
-            
-            micro_params = await _execute_phase_with_retry(
-                "Phase A-2",
-                PhaseA2Orchestrator,
-                {"concept": concept, "macro_profile": macro_profile, "profile": self.profile, "ws_manager": self.ws},
-                lambda res: evaluator.evaluate_phase_a2(res)
-            )
-            self.package.micro_parameters = micro_params
-            
-            await self._progress("phase_a2", 1.0, "Phase A-2完了")
-            await self._notify(f"micro_parameters確定: 気質{len(micro_params.temperament)}個 + 性格{len(micro_params.personality)}個")
-        except Exception as e:
-            logger.error(f"Phase A-2 failed: {e}", exc_info=True)
-            await self._notify(f"Phase A-2エラー: {str(e)}", "error")
-            raise
+        if not self.package.micro_parameters:
+            await self._progress("phase_a2", 0.0, "Phase A-2: ミクロパラメータ生成開始")
+            try:
+                from backend.agents.phase_a2.orchestrator import PhaseA2Orchestrator
+                micro_params = await _execute_phase_with_retry(
+                    "Phase A-2",
+                    PhaseA2Orchestrator,
+                    {"concept": concept, "macro_profile": macro_profile, "profile": self.profile, "ws_manager": self.ws},
+                    lambda res: evaluator.evaluate_phase_a2(res)
+                )
+                self.package.micro_parameters = micro_params
+                await self._checkpoint()
+                await self._progress("phase_a2", 1.0, "Phase A-2完了")
+                await self._notify(f"micro_parameters確定: 気質{len(micro_params.temperament)}個 + 性格{len(micro_params.personality)}個")
+            except Exception as e:
+                logger.error(f"Phase A-2 failed: {e}", exc_info=True)
+                await self._notify(f"Phase A-2エラー: {str(e)}", "error")
+                raise
+        else:
+            await self._notify("Phase A-2: 既存のミクロパラメータを読み込み完了 (Skip)")
+            micro_params = self.package.micro_parameters
+            await self._progress("phase_a2", 1.0)
         
         # ─── Phase A-3: 自伝的エピソード生成 ──────────────────
-        await self._progress("phase_a3", 0.0, "Phase A-3: 自伝的エピソード生成開始")
-        
-        try:
-            from backend.agents.phase_a3.orchestrator import PhaseA3Orchestrator
-            
-            episodes = await _execute_phase_with_retry(
-                "Phase A-3",
-                PhaseA3Orchestrator,
-                {"concept": concept, "macro_profile": macro_profile, "micro_parameters": micro_params, "profile": self.profile, "ws_manager": self.ws},
-                lambda res: evaluator.evaluate_phase_a3(res, concept, macro_profile)
-            )
-            self.package.autobiographical_episodes = episodes
-            
-            await self._progress("phase_a3", 1.0, "Phase A-3完了")
-            await self._notify(f"autobiographical_episodes確定: {len(episodes.episodes)}個のエピソード")
-        except Exception as e:
-            logger.error(f"Phase A-3 failed: {e}", exc_info=True)
-            await self._notify(f"Phase A-3エラー: {str(e)}", "error")
-            raise
+        if not self.package.autobiographical_episodes:
+            await self._progress("phase_a3", 0.0, "Phase A-3: 自伝的エピソード生成開始")
+            try:
+                from backend.agents.phase_a3.orchestrator import PhaseA3Orchestrator
+                episodes = await _execute_phase_with_retry(
+                    "Phase A-3",
+                    PhaseA3Orchestrator,
+                    {"concept": concept, "macro_profile": macro_profile, "micro_parameters": micro_params, "profile": self.profile, "ws_manager": self.ws},
+                    lambda res: evaluator.evaluate_phase_a3(res, concept, macro_profile)
+                )
+                self.package.autobiographical_episodes = episodes
+                await self._checkpoint()
+                await self._progress("phase_a3", 1.0, "Phase A-3完了")
+                await self._notify(f"autobiographical_episodes確定: {len(episodes.episodes)}個のエピソード")
+            except Exception as e:
+                logger.error(f"Phase A-3 failed: {e}", exc_info=True)
+                await self._notify(f"Phase A-3エラー: {str(e)}", "error")
+                raise
+        else:
+            await self._notify("Phase A-3: 既存の自伝的エピソードを読み込み完了 (Skip)")
+            episodes = self.package.autobiographical_episodes
+            await self._progress("phase_a3", 1.0)
         
         # ─── Phase D: イベント列生成 ──────────────────────────
-        await self._progress("phase_d", 0.0, "Phase D: 7日分イベント列生成開始")
-        
-        try:
-            from backend.agents.phase_d.orchestrator import PhaseDOrchestrator
-            
-            events_store = await _execute_phase_with_retry(
-                "Phase D",
-                PhaseDOrchestrator,
-                {"concept": concept, "macro_profile": macro_profile, "micro_parameters": micro_params, "episodes": episodes, "profile": self.profile, "ws_manager": self.ws},
-                lambda res: evaluator.evaluate_phase_d(res, episodes)
-            )
-            self.package.weekly_events_store = events_store
-            
-            await self._progress("phase_d", 1.0, "Phase D完了")
-            await self._notify(f"weekly_events_store確定: {len(events_store.events)}件のイベント")
-        except Exception as e:
-            logger.error(f"Phase D failed: {e}", exc_info=True)
-            await self._notify(f"Phase Dエラー: {str(e)}", "error")
-            raise
+        if not self.package.weekly_events_store:
+            await self._progress("phase_d", 0.0, "Phase D: 7日分イベント列生成開始")
+            try:
+                from backend.agents.phase_d.orchestrator import PhaseDOrchestrator
+                events_store = await _execute_phase_with_retry(
+                    "Phase D",
+                    PhaseDOrchestrator,
+                    {"concept": concept, "macro_profile": macro_profile, "micro_parameters": micro_params, "episodes": episodes, "profile": self.profile, "ws_manager": self.ws},
+                    lambda res: evaluator.evaluate_phase_d(res, episodes)
+                )
+                self.package.weekly_events_store = events_store
+                await self._checkpoint()
+                await self._progress("phase_d", 1.0, "Phase D完了")
+                await self._notify(f"weekly_events_store確定: {len(events_store.events)}件のイベント")
+            except Exception as e:
+                logger.error(f"Phase D failed: {e}", exc_info=True)
+                await self._notify(f"Phase Dエラー: {str(e)}", "error")
+                raise
+        else:
+            await self._notify("Phase D: 既存のイベント列を読み込み完了 (Skip)")
+            events_store = self.package.weekly_events_store
+            await self._progress("phase_d", 1.0)
         
         # ─── Tier 3: 最終クロス構成チェック (Consistency / Interestingness) ──
         await self._notify("最終フェーズ横断Evaluatorを実行中...")
@@ -224,5 +263,12 @@ class MasterOrchestrator:
         
         if self.ws:
             await self.ws.send_cost_update(cost)
+            
+        try:
+            from backend.storage.md_storage import save_character_profile
+            cname = self.package.macro_profile.basic_info.name if (self.package.macro_profile and self.package.macro_profile.basic_info) else "Unknown_Character"
+            await save_character_profile(cname, self.package)
+        except Exception as e:
+            logger.error(f"MD保存失敗: {e}")
         
         return self.package

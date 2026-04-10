@@ -76,6 +76,22 @@
                         <button class="btn-primary" onclick="startGeneration('theme')">生成開始</button>
                         <button class="btn-ghost" onclick="hideThemeInput()">キャンセル</button>
                     </div>
+                    
+                    <div class="evaluator-settings" style="margin-top: 1rem; padding: 1rem; background: rgba(255, 255, 255, 0.05); border-radius: 8px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                            <label style="margin: 0; font-weight: 500;">Evaluator 個別設定 (Stage 2品質評価)</label>
+                            <button class="btn-ghost" style="padding: 0.2rem 0.5rem; font-size: 0.8rem;" onclick="toggleAllEvaluators()">一括オフ / オン</button>
+                        </div>
+                        <div id="evaluator-checkboxes" style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; font-size: 0.9rem;">
+                            <label><input type="checkbox" id="eval-schema" checked> Schema Validator</label>
+                            <label><input type="checkbox" id="eval-consistency" checked> Consistency Checker</label>
+                            <label><input type="checkbox" id="eval-bias" checked> Bias Auditor</label>
+                            <label><input type="checkbox" id="eval-interestingness" checked> Interestingness Evaluator</label>
+                            <label><input type="checkbox" id="eval-event" checked> Event Metadata Auditor</label>
+                            <label><input type="checkbox" id="eval-distribution" checked> Distribution Validator</label>
+                            <label><input type="checkbox" id="eval-narrative" checked> Narrative Connection</label>
+                        </div>
+                    </div>
                 </div>
             </div>
         </section>
@@ -83,7 +99,18 @@
         <!-- 生成中画面 -->
         <section id="generation-screen" class="screen">
             <div class="gen-header">
-                <h2 id="gen-phase">キャラクター生成中...</h2>
+                <h2 id="gen-phase">処理開始中...</h2>
+                <div id="phase-tracker-container" class="phase-tracker" style="display: none;">
+                    <div class="phase-step" id="step-creative_director"><div class="step-circle">1</div><div class="step-label">Concept / Director</div></div>
+                    <div class="phase-line"></div>
+                    <div class="phase-step" id="step-phase_a1"><div class="step-circle">2</div><div class="step-label">Macro Profile</div></div>
+                    <div class="phase-line"></div>
+                    <div class="phase-step" id="step-phase_a2"><div class="step-circle">3</div><div class="step-label">Micro Params</div></div>
+                    <div class="phase-line"></div>
+                    <div class="phase-step" id="step-phase_a3"><div class="step-circle">4</div><div class="step-label">Episodes</div></div>
+                    <div class="phase-line"></div>
+                    <div class="phase-step" id="step-phase_d"><div class="step-circle">5</div><div class="step-label">Events</div></div>
+                </div>
                 <div class="progress-container">
                     <div class="progress-bar" id="progress-bar" style="width: 0%"></div>
                 </div>
@@ -99,8 +126,13 @@
             </div>
         </section>
 
-        <!-- 結果画面 -->
+        <!-- 結果画面 (Day 0 Dashboard) -->
         <section id="result-screen" class="screen">
+            <div class="dashboard-header" style="margin-bottom: 2rem;">
+                <h2>Day 0 構成ダッシュボード</h2>
+                <p style="color: var(--text-muted);">キャラクターの初期設定（人格骨格〜各種パラメータ、イベントチェーン）が確定しました。</p>
+            </div>
+            
             <div class="result-tabs">
                 <button class="tab active" data-tab="concept" onclick="switchTab('concept')">コンセプト</button>
                 <button class="tab" data-tab="profile" onclick="switchTab('profile')">プロフィール</button>
@@ -126,15 +158,45 @@
                 <div id="events-content"></div>
             </div>
             <div id="tab-diary" class="tab-content">
-                <div id="diary-content"></div>
-                <button class="btn-primary btn-large" id="btn-generate-diary" onclick="generateDiary()">
-                    日記生成を開始 (7日間)
-                </button>
+                <div id="diary-content" style="margin-bottom: 1.5rem;"></div>
+                
+                <!-- 初期案内パネル -->
+                <div id="diary-start-panel" class="diary-start-panel" style="padding: 1.5rem; background: rgba(255, 255, 255, 0.05); border-radius: 8px; text-align: center;">
+                    <h3 style="margin-bottom: 1rem;">シミュレーション開始</h3>
+                    <p style="margin-bottom: 1.5rem; font-size: 0.95rem; color: var(--text-muted); text-align: left; line-height: 1.6;">
+                        Day 0の全パラメータが確定しました。上記の各種情報（人格、生い立ち、価値観、テンション、記憶イベント等）をすべて引き継ぎ、
+                        自律的な生活シミュレーションおよび7日間にわたる内省・日記生成ループを開始します。
+                    </p>
+                    <button class="btn-primary btn-large" onclick="generateDiary()">
+                        Day 1〜7 日記生成を開始
+                    </button>
+                </div>
+
+                <!-- インライン生成領域 (デフォルト非表示) -->
+                <div id="diary-generation-area" style="display: none; padding: 1.5rem; background: rgba(0, 0, 0, 0.2); border: 1px solid var(--border-subtle); border-radius: 8px; margin-top: 1rem;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                        <h3 id="diary-gen-phase" style="color: var(--accent-secondary); margin: 0;">日記シミュレーション進行中...</h3>
+                        <button class="btn-ghost" style="color: var(--accent-error); border-color: rgba(239, 68, 68, 0.5); padding: 0.4rem 0.8rem; font-size: 0.8rem;" onclick="cancelDiary()">🛑 停止してリセット</button>
+                    </div>
+                    <div class="progress-container" style="margin-bottom: 1rem;">
+                        <div class="progress-bar" id="diary-progress-bar" style="width: 0%; background: var(--accent-secondary);"></div>
+                    </div>
+                    <p id="diary-gen-detail" class="gen-detail" style="margin-bottom: 1.5rem;"></p>
+                    
+                    <div class="thought-stream" style="border: 1px solid rgba(255, 255, 255, 0.05);">
+                        <div class="thought-header">
+                            <span class="thought-icon" style="color: var(--accent-secondary);">⟡</span>
+                            <span>生活エージェント（RIM）思考ログ</span>
+                        </div>
+                        <div id="diary-thought-log" class="thought-log" style="max-height: 200px;"></div>
+                    </div>
+                </div>
             </div>
             
             <div class="result-actions">
-                <button class="btn-ghost" onclick="downloadPackage()">📥 JSONダウンロード</button>
-                <button class="btn-ghost" onclick="backToStart()">← 戻る</button>
+                <button class="btn-ghost" style="color: var(--accent-error); border-color: rgba(239, 68, 68, 0.3);" onclick="regenerateCharacter()">🗑️ 破棄して再生成</button>
+                <button class="btn-ghost" onclick="downloadPackage()">📥 JSON保存</button>
+                <button class="btn-ghost" onclick="backToStart()">← Topへ</button>
             </div>
         </section>
 

@@ -106,6 +106,9 @@ async def get_package(package_name: str):
 
 # ─── WebSocket エンドポイント ─────────────────────────────────
 
+# クライアントごとに実行中のタスクを保持（キャンセル機能のため）
+ws_active_tasks = {}
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     """メインWebSocket接続"""
@@ -129,14 +132,34 @@ async def handle_ws_message(data: dict, websocket: WebSocket):
         # キャラクター生成開始
         profile_name = data.get("profile", AppConfig.DEFAULT_PROFILE)
         theme = data.get("theme", None)
-        asyncio.create_task(run_character_generation(profile_name, theme))
+        evaluators_override = data.get("evaluators_override", {})
+        asyncio.create_task(run_character_generation(profile_name, theme, evaluators_override))
+    
+    elif action == "resume_generation":
+        # チェックポイントから再開
+        character_name = data.get("character_name", "")
+        profile_name = data.get("profile", AppConfig.DEFAULT_PROFILE)
+        evaluators_override = data.get("evaluators_override", {})
+        asyncio.create_task(resume_character_generation(character_name, profile_name, evaluators_override))
     
     elif action == "generate_diary":
         # 日記生成開始
         package_name = data.get("package_name", "")
         days = data.get("days", 7)
-        asyncio.create_task(run_diary_generation(package_name, days))
+        task = asyncio.create_task(run_diary_generation(package_name, days))
+        ws_active_tasks[id(websocket)] = task
+        
+        # 完了時に辞書から削除
+        task.add_done_callback(lambda t: ws_active_tasks.pop(id(websocket), None))
     
+    elif action == "cancel_diary":
+        # 現在実行中のタスクがあればキャンセル
+        task_id = id(websocket)
+        if task_id in ws_active_tasks:
+            logger.info("Cancelling diary generation task per user request.")
+            ws_active_tasks[task_id].cancel()
+            ws_active_tasks.pop(task_id, None)
+            
     elif action == "get_status":
         await websocket.send_json({
             "type": "status",
@@ -150,43 +173,85 @@ async def handle_ws_message(data: dict, websocket: WebSocket):
         })
 
 
-async def run_character_generation(profile_name: str, theme: str = None):
+async def run_character_generation(profile_name: str, theme: str = None, evaluators_override: dict = None):
     """キャラクター生成パイプライン全体を実行"""
     from backend.agents.master_orchestrator.orchestrator import MasterOrchestrator
+    import dataclasses
     
-    profile = PROFILES.get(profile_name, PROFILES["draft"])
+    base_profile = PROFILES.get(profile_name, PROFILES["draft"])
+    target_profile = base_profile
+    if evaluators_override:
+        target_profile = dataclasses.replace(base_profile, **{
+            k: v for k, v in evaluators_override.items() 
+            if hasattr(base_profile, k)
+        })
+    
+    from datetime import datetime
+    session_id = f"SID_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     
     await manager.send_progress("init", 0.0, "キャラクター生成を開始します...")
+    # クライアントにセッションIDを通知（中断時の再開キーとして使用）
+    await manager.send_agent_thought("System", f"Session ID: {session_id}", "info")
     
     try:
-        orchestrator = MasterOrchestrator(profile=profile, ws_manager=manager)
+        orchestrator = MasterOrchestrator(profile=target_profile, ws_manager=manager, session_id=session_id)
         package = await orchestrator.run(theme=theme)
-        
-        # 保存
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        char_name = "unknown"
-        if package.macro_profile and package.macro_profile.basic_info:
-            char_name = package.macro_profile.basic_info.name
-        
-        save_dir = AppConfig.STORAGE_DIR / f"{char_name}_{timestamp}"
-        save_dir.mkdir(parents=True, exist_ok=True)
-        
-        pkg_json = package.model_dump(mode="json")
-        (save_dir / "package.json").write_text(
-            json.dumps(pkg_json, ensure_ascii=False, indent=2),
-            encoding="utf-8"
-        )
-        
-        await manager.send_progress("complete", 1.0, f"キャラクター「{char_name}」の生成が完了しました")
-        await manager.send_phase_result("complete", {
-            "package_name": save_dir.name,
-            "character_name": char_name,
-            "cost": token_tracker.summary(),
-        })
-        
+        await _finalize_character_generation(package)
     except Exception as e:
         logger.error(f"Character generation failed: {e}", exc_info=True)
         await manager.send_error(f"キャラクター生成エラー: {str(e)}")
+
+async def resume_character_generation(character_name: str, profile_name: str, evaluators_override: dict = None):
+    """チェックポイントから再開"""
+    from backend.agents.master_orchestrator.orchestrator import MasterOrchestrator
+    from backend.storage.md_storage import load_checkpoint
+    import dataclasses
+    
+    await manager.send_agent_thought("System", f"{character_name} の復旧を開始します...", "thinking")
+    
+    package = await load_checkpoint(character_name)
+    if not package:
+        await manager.send_error(f"チェックポイントが見つかりませんでした: {character_name}")
+        return
+        
+    base_profile = PROFILES.get(profile_name, PROFILES["draft"])
+    target_profile = base_profile
+    if evaluators_override:
+        target_profile = dataclasses.replace(base_profile, **{
+            k: v for k, v in evaluators_override.items() 
+            if hasattr(base_profile, k)
+        })
+        
+    orchestrator = MasterOrchestrator(profile=target_profile, ws_manager=manager, existing_package=package, session_id=character_name) # character_name が事実上のSession ID
+    try:
+        package = await orchestrator.run()
+        await _finalize_character_generation(package)
+    except Exception as e:
+        logger.error(f"Resume failed: {e}", exc_info=True)
+        await manager.send_error(f"再開エラー: {str(e)}")
+
+async def _finalize_character_generation(package):
+    """生成完了後の保存と通知"""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    char_name = "unknown"
+    if package.macro_profile and package.macro_profile.basic_info:
+        char_name = package.macro_profile.basic_info.name
+    
+    save_dir = AppConfig.STORAGE_DIR / f"{char_name}_{timestamp}"
+    save_dir.mkdir(parents=True, exist_ok=True)
+    
+    pkg_json = package.model_dump(mode="json")
+    (save_dir / "package.json").write_text(
+        json.dumps(pkg_json, ensure_ascii=False, indent=2),
+        encoding="utf-8"
+    )
+    
+    await manager.send_progress("complete", 1.0, f"キャラクター「{char_name}」の生成が完了しました")
+    await manager.send_phase_result("complete", {
+        "package_name": save_dir.name,
+        "character_name": char_name,
+        "cost": token_tracker.summary(),
+    })
 
 
 async def run_diary_generation(package_name: str, days: int = 7):

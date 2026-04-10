@@ -171,14 +171,37 @@ class CreativeDirector:
         
         await self._notify("Creative Directorを起動します（エージェンティック・モード）...")
         
-        user_msg = "独創的で面白いキャラクターのconcept_packageを生成してください。character_conceptは必ず500字以上、story_outlineも500字以上で具体的に書いてください。"
+        user_msg = "独創的で面白いキャラクターのconcept_packageを生成してください。必ず事前にsearch_webを用いて面白い関連アイデアや記事を複数回検索し、リサーチを行ってからドラフトを作成してください。character_conceptは500字以上、story_outlineも500字以上で具体的に書いてください。"
         if theme:
-            user_msg = f"以下のテーマに基づいて、独創的で面白いキャラクターのconcept_packageを生成してください。\n\nテーマ: {theme}"
+            user_msg = f"以下のテーマに基づいて、独創的で面白いキャラクターのconcept_packageを生成してください。必ず事前にsearch_webを用いて面白くユニークな関連情報をリサーチし、インスピレーションを得てからドラフトを作成してください。\n\nテーマ: {theme}"
         
         final_concept_data = None
         self_critique_history = []
         critique_iteration = 0
         
+        async def search_web(query: str = None, max_results: int = 3) -> dict:
+            """指定したキーワードでWeb検索を行い、上位記事の要約や関連情報を取得する"""
+            if not query:
+                return {"status": "FAILED", "message": "ERROR: query引数が欠落しています。検索キーワードを指定してください。"}
+            
+            await self._notify(f"Web検索中: {query}")
+            try:
+                from duckduckgo_search import DDGS
+                
+                results = []
+                with DDGS() as ddgs:
+                    for r in ddgs.text(query, max_results=max_results):
+                        results.append(r)
+                
+                if results:
+                    return {"status": "SUCCESS", "results": results}
+                else:
+                    return {"status": "SUCCESS", "message": "No results found."}
+            except Exception as e:
+                import logging
+                logging.getLogger("creative_director").error(f"Web search failed: {e}")
+                return {"status": "FAILED", "message": f"Web search explicitly failed: {e}"}
+
         async def request_critique(concept_package: dict = None) -> dict:
             """現在のドラフトに対する批判的フィードバック（心理学的な矛盾や面白さの採点）を要求する"""
             if not concept_package:
@@ -223,6 +246,19 @@ class CreativeDirector:
             return {"status": "SUCCESS", "message": "Task complete. Thank you."}
 
         tools = [
+            AgentTool(
+                name="search_web",
+                description="指定したキーワードでWeb検索を行い、記事や情報を取得します。キャラクター設定や物語のネタ集め、面白い設定の調査など、執筆前のリサーチに必ず使用してください。複数回呼び出すことも可能です。",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "検索キーワード"},
+                        "max_results": {"type": "integer", "description": "取得する検索結果の最大数 (デフォルト3)"}
+                    },
+                    "required": ["query"]
+                },
+                handler=search_web
+            ),
             AgentTool(
                 name="request_critique",
                 description="現在のconcept_packageドラフトを厳しく評価し、面白さや心理学的深さ、Redemption Biasの有無を判定してもらいます。結果が 'pass' になるまで必ず繰り返してください。",

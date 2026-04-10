@@ -6,7 +6,7 @@ specification_v10.md および script_ai_app_specification_v2.md に基づく
 
 from __future__ import annotations
 from typing import Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from datetime import datetime
 
 
@@ -55,11 +55,28 @@ class ConceptPackage(BaseModel):
 
 class BasicInfo(BaseModel):
     """基本情報"""
-    name: str
-    age: int
-    gender: str
+    name: str = ""
+    age: int = 30
+    gender: str = ""
     appearance: str = ""
     occupation: str = ""
+
+    @field_validator("age", mode="before")
+    @classmethod
+    def parse_age(cls, v):
+        if isinstance(v, str):
+            if v.strip() == "":
+                return 30
+            try:
+                return int(v)
+            except ValueError:
+                # 数字が含まれている場合は抽出を試みる
+                import re
+                nums = re.findall(r"\d+", v)
+                if nums:
+                    return int(nums[0])
+                return 30
+        return v
 
 class SocialPosition(BaseModel):
     """社会的位置"""
@@ -112,6 +129,10 @@ class RelationshipEntry(BaseModel):
     quality: str = Field("", description="好き/苦手/複雑 等")
     brief_note: str = ""
 
+class RelationshipNetwork(BaseModel):
+    """関係性ネットワーク全体 (A-1 Worker出力用)"""
+    relationships: list[RelationshipEntry] = Field(default_factory=list)
+
 class MacroProfile(BaseModel):
     """マクロプロフィール（Phase A-1出力、v10 §3.1準拠）"""
     basic_info: BasicInfo
@@ -137,6 +158,18 @@ class ParameterEntry(BaseModel):
     value: float = Field(..., ge=1.0, le=5.0, description="1-5の連続値")
     natural_language: str = Field("", description="自然言語での記述")
     biological_basis: str = Field("", description="生物学的基盤（参考情報）")
+
+class ParameterList(BaseModel):
+    """パラメータ群 (A-2 Worker一括出力用)"""
+    parameters: list[ParameterEntry] = Field(default_factory=list)
+
+class NormativeLayer(BaseModel):
+    """規範層 (A-2 Worker出力用)"""
+    schwartz_values: dict[str, str] = Field(default_factory=dict)
+    moral_foundations: dict[str, str] = Field(default_factory=dict)
+    ideal_self: str = ""
+    ought_self: str = ""
+    goals: list[str] = Field(default_factory=list)
 
 class MicroParameters(BaseModel):
     """ミクロパラメータ（Phase A-2出力, v10 §3.3準拠）"""

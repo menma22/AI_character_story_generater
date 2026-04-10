@@ -52,7 +52,7 @@ class EvaluationProfile:
 PROFILES = {
     "high_quality": EvaluationProfile(
         name="high_quality",
-        director_self_critique_max_iterations=4,
+        director_self_critique_max_iterations=10,
         consistency_checker_enabled=True,
         bias_auditor_enabled=True,
         bias_auditor_phases=["A-3"],
@@ -63,7 +63,7 @@ PROFILES = {
     ),
     "standard": EvaluationProfile(
         name="standard",
-        director_self_critique_max_iterations=3,
+        director_self_critique_max_iterations=8,
         consistency_checker_enabled=True,
         bias_auditor_enabled=True,
         bias_auditor_phases=["A-3"],

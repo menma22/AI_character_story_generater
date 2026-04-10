@@ -4,6 +4,7 @@
  */
 
 let currentPackage = null;
+let currentSessionId = null;
 let diaryEntries = [];
 
 // ─── 初期化 ──────────────────────────────────────────────
@@ -20,6 +21,7 @@ function setupWSHandlers() {
 
     wsManager.on('progress', (data) => {
         updateProgress(data.phase, data.progress, data.detail);
+        updatePhaseTracker(data.phase, data.progress);
     });
 
     wsManager.on('phase_result', (data) => {
@@ -36,8 +38,22 @@ function setupWSHandlers() {
         document.getElementById('cost-value').textContent = `$${(data.data?.estimated_cost_usd || 0).toFixed(2)}`;
     });
 
+    wsManager.on('agent_thought', (data) => {
+        addThought(data.agent, data.content, data.status);
+        
+        // Session IDの抽出（バックエンドからの通知）
+        if (data.agent === 'System' && data.content.includes('Session ID:')) {
+            currentSessionId = data.content.split('Session ID:')[1].trim();
+        }
+    });
+
     wsManager.on('error', (data) => {
         addThought('System', data.content, 'error');
+        
+        // キャラクター生成中のエラーなら再開ボタンを表示
+        if (currentSessionId && !currentPackage) {
+            showResumeButton();
+        }
     });
 }
 
@@ -53,6 +69,14 @@ function backToStart() {
     showScreen('start-screen');
 }
 
+function regenerateCharacter() {
+    if (confirm("現在作成したDay 0のキャラクター設定を破棄して、もう一度最初から作り直しますか？")) {
+        currentPackage = null;
+        diaryEntries = [];
+        backToStart();
+    }
+}
+
 function showThemeInput() {
     document.getElementById('theme-input-area').classList.remove('hidden');
 }
@@ -66,22 +90,45 @@ function showHistory() {
     loadHistory();
 }
 
+function toggleAllEvaluators() {
+    const checkboxes = document.querySelectorAll('#evaluator-checkboxes input[type="checkbox"]');
+    if (!checkboxes || checkboxes.length === 0) return;
+    
+    // Check if at least one is unchecked. If so, turn all ON. Otherwise turn all OFF.
+    let anyUnchecked = false;
+    checkboxes.forEach(cb => { if (!cb.checked) anyUnchecked = true; });
+    
+    checkboxes.forEach(cb => { cb.checked = anyUnchecked; });
+}
+
 // ─── キャラクター生成 ────────────────────────────────────
 
 function startGeneration(mode) {
     showScreen('generation-screen');
     document.getElementById('thought-log').innerHTML = '';
     document.getElementById('progress-bar').style.width = '0%';
+    document.getElementById('phase-tracker-container').style.display = 'flex';
+    resetPhaseTracker();
 
     const profileSelect = document.getElementById('profile-select');
     const profile = profileSelect ? profileSelect.value : 'draft';
 
+    const evaluators = {
+        schema_validator_enabled: document.getElementById('eval-schema')?.checked ?? true,
+        consistency_checker_enabled: document.getElementById('eval-consistency')?.checked ?? false,
+        bias_auditor_enabled: document.getElementById('eval-bias')?.checked ?? false,
+        interestingness_evaluator_enabled: document.getElementById('eval-interestingness')?.checked ?? false,
+        event_metadata_auditor_enabled: document.getElementById('eval-event')?.checked ?? false,
+        distribution_validator_enabled: document.getElementById('eval-distribution')?.checked ?? true,
+        narrative_connection_auditor_enabled: document.getElementById('eval-narrative')?.checked ?? false
+    };
+
     if (mode === 'theme') {
         const theme = document.getElementById('theme-input').value.trim();
-        wsManager.send('generate_character', { profile, theme: theme || null });
+        wsManager.send('generate_character', { profile, theme: theme || null, evaluators_override: evaluators });
         addThought('System', `テーマ指定モードで生成開始 (${profile})`, 'thinking');
     } else {
-        wsManager.send('generate_character', { profile, theme: null });
+        wsManager.send('generate_character', { profile, theme: null, evaluators_override: evaluators });
         addThought('System', `フルオート生成開始 (${profile})`, 'thinking');
     }
 }
@@ -106,23 +153,88 @@ function onGenerationComplete(result) {
         setTimeout(() => showScreen('result-screen'), 1500);
     }
 }
+function resumeGeneration() {
+    if (!currentSessionId) {
+        alert("再開可能なセッションが見つかりません");
+        return;
+    }
+    
+    // UIを生成中モードに維持/再セット
+    document.querySelector('.thought-entry.error')?.remove();
+    const btn = document.getElementById('resume-btn');
+    if (btn) btn.remove();
+    
+    const profileSelect = document.getElementById('profile-select');
+    const profile = profileSelect ? profileSelect.value : 'draft';
+
+    const evaluators = {};
+    document.querySelectorAll('#evaluator-checkboxes input[type="checkbox"]').forEach(cb => {
+        evaluators[cb.name] = cb.checked;
+    });
+
+    wsManager.send('resume_generation', {
+        character_name: currentSessionId,
+        profile: profile,
+        evaluators_override: evaluators
+    });
+    
+    addThought('System', 'チェックポイントから再開中...', 'thinking');
+}
+
+function showResumeButton() {
+    const log = document.getElementById('thought-log');
+    if (!log) return;
+    
+    if (document.getElementById('resume-btn')) return;
+
+    const btn = document.createElement('button');
+    btn.id = 'resume-btn';
+    btn.className = 'btn-primary';
+    btn.style.marginTop = '1rem';
+    btn.style.width = '100%';
+    btn.textContent = '🔄 中断した箇所から再開する';
+    btn.onclick = resumeGeneration;
+    
+    log.appendChild(btn);
+    log.scrollTop = log.scrollHeight;
+}
 
 // ─── 日記生成 ─────────────────────────────────────────────
 
 function generateDiary() {
     if (!currentPackage?.metadata) {
-        addThought('System', '先にキャラクターを生成してください', 'error');
+        alert('先にキャラクターを生成してください');
         return;
     }
     
-    showScreen('generation-screen');
-    document.getElementById('thought-log').innerHTML = '';
-    document.getElementById('gen-phase').textContent = '日記生成中...';
+    // UIをインライン生成モードに切り替え
+    document.getElementById('diary-start-panel').style.display = 'none';
+    document.getElementById('diary-generation-area').style.display = 'block';
+    document.getElementById('diary-thought-log').innerHTML = '';
+    document.getElementById('diary-progress-bar').style.width = '0%';
+    document.getElementById('diary-gen-detail').textContent = '開始準備中...';
     
-    // TODO: package_name を適切に取得
+    // 既存の日記表示をクリア
+    diaryEntries = [];
+    document.getElementById('diary-content').innerHTML = '';
+    
     const pkgName = currentPackage._package_name || 'unknown';
     wsManager.send('generate_diary', { package_name: pkgName, days: 7 });
+    
     addThought('System', '7日分の日記生成を開始', 'thinking');
+}
+
+function cancelDiary() {
+    wsManager.send('cancel_diary', {});
+    
+    // UIを初期状態へ戻す
+    document.getElementById('diary-generation-area').style.display = 'none';
+    document.getElementById('diary-start-panel').style.display = 'block';
+    
+    diaryEntries = [];
+    document.getElementById('diary-content').innerHTML = '';
+    
+    addThought('System', '日記生成をキャンセルしてリセットしました', 'error');
 }
 
 function addDiaryEntry(day, content) {
@@ -139,7 +251,10 @@ function addDiaryEntry(day, content) {
 // ─── 思考ログ ─────────────────────────────────────────────
 
 function addThought(agent, content, status) {
-    const log = document.getElementById('thought-log');
+    // 日記生成エリアがアクティブならそちらに出力、それ以外はDay0用に出力
+    const isDiaryMode = document.getElementById('diary-generation-area')?.style.display === 'block';
+    const log = isDiaryMode ? document.getElementById('diary-thought-log') : document.getElementById('thought-log');
+    
     if (!log) return;
 
     const entry = document.createElement('div');
@@ -156,10 +271,14 @@ function addThought(agent, content, status) {
 
 function updateProgress(phase, progress, detail) {
     const bar = document.getElementById('progress-bar');
+    const diaryBar = document.getElementById('diary-progress-bar');
     const phaseEl = document.getElementById('gen-phase');
     const detailEl = document.getElementById('gen-detail');
+    const diaryDetailEl = document.getElementById('diary-gen-detail');
     
-    if (bar) bar.style.width = `${Math.min(progress * 100, 100)}%`;
+    const percent = `${Math.min(progress * 100, 100)}%`;
+    if (bar) bar.style.width = percent;
+    if (diaryBar) diaryBar.style.width = percent;
     
     const phaseNames = {
         'creative_director': 'Creative Director',
@@ -171,8 +290,49 @@ function updateProgress(phase, progress, detail) {
         'complete': '完了！',
     };
     
+    // 「完了」や「daily_loop」の時、日記側の詳細表示も更新する
     if (phaseEl) phaseEl.textContent = phaseNames[phase] || phase;
     if (detailEl) detailEl.textContent = detail || '';
+    if (diaryDetailEl && (phase === 'daily_loop' || phase === 'complete')) {
+        diaryDetailEl.textContent = detail || '';
+    }
+}
+
+// ─── フェーズトラッカー ────────────────────────────────ーー
+
+const PHASE_ORDER = ['creative_director', 'phase_a1', 'phase_a2', 'phase_a3', 'phase_d'];
+
+function resetPhaseTracker() {
+    PHASE_ORDER.forEach(p => {
+        const el = document.getElementById(`step-${p}`);
+        if (el) {
+            el.classList.remove('active', 'completed');
+        }
+    });
+}
+
+function updatePhaseTracker(phase, progress) {
+    if (phase === 'init') {
+        resetPhaseTracker();
+        return;
+    }
+    
+    const currentIndex = PHASE_ORDER.indexOf(phase);
+    
+    PHASE_ORDER.forEach((p, index) => {
+        const el = document.getElementById(`step-${p}`);
+        if (!el) return;
+        
+        if (index < currentIndex || (index === currentIndex && progress >= 1.0)) {
+            el.classList.add('completed');
+            el.classList.remove('active');
+        } else if (index === currentIndex) {
+            el.classList.add('active');
+            el.classList.remove('completed');
+        } else {
+            el.classList.remove('active', 'completed');
+        }
+    });
 }
 
 // ─── 結果表示 ──────────────────────────────────────────────
