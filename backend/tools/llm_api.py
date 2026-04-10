@@ -37,6 +37,8 @@ class TokenTracker:
         self.sonnet_cache_read = 0
         self.gemma_input = 0
         self.gemma_output = 0
+        self.gemini_input = 0
+        self.gemini_output = 0
         self.total_calls = 0
     
     def record(self, model: str, usage: dict):
@@ -56,6 +58,9 @@ class TokenTracker:
             self.sonnet_output += output_tokens
             self.sonnet_cache_write += cache_write
             self.sonnet_cache_read += cache_read
+        elif "gemini" in model.lower():
+            self.gemini_input += input_tokens
+            self.gemini_output += output_tokens
         else:
             self.gemma_input += input_tokens
             self.gemma_output += output_tokens
@@ -64,7 +69,8 @@ class TokenTracker:
         """推定コスト（USD）"""
         opus_cost = (self.opus_input * 15 + self.opus_output * 75) / 1_000_000
         sonnet_cost = (self.sonnet_input * 3 + self.sonnet_output * 15) / 1_000_000
-        return opus_cost + sonnet_cost
+        gemini_cost = (self.gemini_input * 1.25 + self.gemini_output * 3.75) / 1_000_000
+        return opus_cost + sonnet_cost + gemini_cost
     
     def summary(self) -> dict:
         return {
@@ -73,6 +79,7 @@ class TokenTracker:
                      "cache_write": self.opus_cache_write, "cache_read": self.opus_cache_read},
             "sonnet": {"input": self.sonnet_input, "output": self.sonnet_output,
                        "cache_write": self.sonnet_cache_write, "cache_read": self.sonnet_cache_read},
+            "gemini": {"input": self.gemini_input, "output": self.gemini_output},
             "gemma": {"input": self.gemma_input, "output": self.gemma_output},
             "estimated_cost_usd": round(self.estimated_cost_usd(), 4),
         }
@@ -170,12 +177,12 @@ async def call_anthropic(
                     lines = text.split("\n")
                     text = "\n".join(lines[1:-1]) if lines[-1].strip() == "```" else "\n".join(lines[1:])
                 parsed = json.loads(text)
-                return {"content": parsed, "raw": content, "usage": usage}
+                return {"content": parsed, "raw": content, "usage": usage, "model": model}
             except json.JSONDecodeError:
                 logger.warning(f"JSON parse failed, returning raw text")
-                return {"content": content, "raw": content, "usage": usage}
+                return {"content": content, "raw": content, "usage": usage, "model": model}
         
-        return {"content": content, "usage": usage}
+        return {"content": content, "usage": usage, "model": model}
         
     except Exception as e:
         logger.error(f"[Anthropic] Error calling {model}: {e}")
@@ -250,12 +257,12 @@ async def call_gemma(
                     lines = text.split("\n")
                     text = "\n".join(lines[1:-1]) if lines[-1].strip() == "```" else "\n".join(lines[1:])
                 parsed = json.loads(text)
-                return {"content": parsed, "raw": content, "usage": usage}
+                return {"content": parsed, "raw": content, "usage": usage, "model": model}
             except json.JSONDecodeError:
                 logger.warning(f"JSON parse failed from Gemma, returning raw text")
-                return {"content": content, "raw": content, "usage": usage}
+                return {"content": content, "raw": content, "usage": usage, "model": model}
         
-        return {"content": content, "usage": usage}
+        return {"content": content, "usage": usage, "model": model}
         
     except Exception as e:
         logger.error(f"[Gemma] Error calling {model}: {e}")
@@ -298,9 +305,18 @@ async def call_llm(
                 json_mode=json_mode,
             )
         except Exception as e:
-            logger.warning(f"[llm_api] Anthropic fallback triggered due to: {e}. Falling back to Gemma.")
-            # エラー時はGemmaへフォールバック
-            tier = "gemma"
+            logger.warning(f"[llm_api] Anthropic fallback triggered due to: {e}. Falling back to Gemini 2.5 Pro.")
+            # エラー時はGemini 2.5 Proへフォールバック
+            tier = "gemini"
+            
+    if tier == "gemini":
+        return await call_gemma(
+            user_message=f"{system_prompt}\n\n---\n\n{user_message}" if system_prompt else user_message,
+            model=LLMModels.GEMINI_2_5_PRO,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            json_mode=json_mode,
+        )
             
     if tier == "gemma":
         return await call_gemma(

@@ -21,6 +21,7 @@ class LLMModels:
     SONNET = "claude-sonnet-4-6"
     
     # Google AI Studio
+    GEMINI_2_5_PRO = "models/gemini-2.5-pro"
     GEMMA_4_MOE = "models/gemma-4-31b-it"
 
 

@@ -13,6 +13,14 @@ class WSManager {
     }
 
     connect() {
+        // 既存の接続があれば閉じる（重複防止）
+        if (this.ws) {
+            console.log('[WS] Closing existing connection before re-connect');
+            this.ws.onclose = null; // 切断時のリトライを一時停止
+            this.ws.close();
+            this.ws = null;
+        }
+
         const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
         const url = `${protocol}//${location.host}/ws`;
 
@@ -61,6 +69,11 @@ class WSManager {
 
     on(type, handler) {
         if (!this.handlers[type]) this.handlers[type] = [];
+        // 同じ関数が既に登録されている場合はスキップ（多重登録防止）
+        if (this.handlers[type].includes(handler)) {
+            console.warn(`[WS] Handler for ${type} already registered, skipping`);
+            return;
+        }
         this.handlers[type].push(handler);
     }
 

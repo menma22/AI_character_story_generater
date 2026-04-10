@@ -35,9 +35,7 @@ class MasterOrchestrator:
             await self.ws.send_progress(phase, progress, detail)
 
     async def _checkpoint(self):
-        """現在の状態を保存"""
-        try:
-            from backend.storage.md_storage import save_checkpoint
+            from backend.storage.md_storage import save_checkpoint, save_character_profile, save_logs
             # 名前が未定義の場合はSession IDを使用
             cname = self.session_id
             if self.package.macro_profile and self.package.macro_profile.basic_info:
@@ -45,6 +43,11 @@ class MasterOrchestrator:
                     cname = self.package.macro_profile.basic_info.name
             
             await save_checkpoint(cname, self.package)
+            await save_character_profile(cname, self.package)
+            
+            # 思考ログの保存
+            if self.ws and hasattr(self.ws, "thought_history"):
+                await save_logs(cname, self.ws.thought_history)
         except Exception as e:
             logger.warning(f"Checkpoint save failed: {e}")
     

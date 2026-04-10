@@ -296,8 +296,7 @@ class CreativeDirector:
         )
         
         if not final_concept_data:
-            logger.warning("Agentic loop finished without submitting final concept. Falling back to empty or partial.")
-            final_concept_data = {}
+            raise RuntimeError("Creative Directorがコンセプトの提出（submit_final_concept）を行わずに終了しました。リサーチ不足またはAIの判断エラーの可能性があります。")
             
         final_concept_data["iteration_count"] = critique_iteration
         final_concept_data["self_critique_history"] = self_critique_history

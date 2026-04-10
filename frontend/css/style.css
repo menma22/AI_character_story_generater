@@ -4,31 +4,31 @@
 
 /* ─── CSS Variables ────────────────────────────────────── */
 :root {
-    /* Core Colors */
-    --bg-primary: #0a0a0f;
-    --bg-secondary: #12121a;
-    --bg-tertiary: #1a1a2e;
-    --bg-card: #16161f;
-    --bg-card-hover: #1e1e2d;
+    /* Core Colors - Light Mode */
+    --bg-primary: #ffffff;
+    --bg-secondary: #f8faff;
+    --bg-tertiary: #f0f2f5;
+    --bg-card: #ffffff;
+    --bg-card-hover: #f1f3f9;
     
-    /* Accent Colors */
-    --accent-primary: #7c5bf5;
-    --accent-primary-glow: rgba(124, 91, 245, 0.3);
-    --accent-secondary: #5ce1e6;
-    --accent-tertiary: #ff6b9d;
-    --accent-success: #4ade80;
-    --accent-warning: #fbbf24;
-    --accent-error: #f87171;
+    /* Accent Colors - Refined for Light Mode */
+    --accent-primary: #5c3cd1;
+    --accent-primary-glow: rgba(92, 60, 209, 0.15);
+    --accent-secondary: #0891b2;
+    --accent-tertiary: #db2777;
+    --accent-success: #16a34a;
+    --accent-warning: #d97706;
+    --accent-error: #dc2626;
     
     /* Text Colors */
-    --text-primary: #e8e6f0;
-    --text-secondary: #9896a8;
-    --text-muted: #5c5a6e;
-    --text-accent: #b4a5ff;
+    --text-primary: #1a1a1e;
+    --text-secondary: #4b5563;
+    --text-muted: #9ca3af;
+    --text-accent: #5c3cd1;
     
     /* Borders */
-    --border-subtle: rgba(255, 255, 255, 0.06);
-    --border-active: rgba(124, 91, 245, 0.4);
+    --border-subtle: rgba(0, 0, 0, 0.08);
+    --border-active: rgba(92, 60, 209, 0.3);
     
     /* Gradients */
     --gradient-primary: linear-gradient(135deg, #7c5bf5 0%, #5ce1e6 100%);
@@ -86,9 +86,10 @@ body {
     justify-content: space-between;
     align-items: center;
     padding: var(--space-sm) var(--space-xl);
-    background: rgba(10, 10, 15, 0.85);
+    background: rgba(255, 255, 255, 0.9);
     backdrop-filter: blur(20px);
     border-bottom: 1px solid var(--border-subtle);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
 }
 
 .nav-brand {
@@ -667,6 +668,24 @@ body {
     min-width: 200px;
     font-size: 0.8rem;
     color: var(--text-secondary);
+}
+
+.par.agent-name {
+    font-weight: 700;
+    margin-right: 0.5rem;
+    color: var(--accent-primary);
+}
+
+.model-badge {
+    font-size: 0.7rem;
+    background: var(--bg-secondary);
+    color: var(--text-muted);
+    padding: 1px 6px;
+    border-radius: 4px;
+    margin-right: 0.8rem;
+    border: 1px solid var(--border-color);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
 }
 
 .param-bar {

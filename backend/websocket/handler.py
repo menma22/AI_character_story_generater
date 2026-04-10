@@ -17,16 +17,19 @@ class ConnectionManager:
     
     def __init__(self):
         self.active_connections: list[WebSocket] = []
+        self.thought_history: list[dict] = []  # 現在のセッションの思考ログ
     
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
-        self.active_connections.append(websocket)
-        logger.info(f"WebSocket connected. Active: {len(self.active_connections)}")
+        # 同一オブジェクトの重複登録防止
+        if websocket not in self.active_connections:
+            self.active_connections.append(websocket)
+        logger.info(f"WebSocket connected (ID:{id(websocket)}). Active: {len(self.active_connections)}")
     
     def disconnect(self, websocket: WebSocket):
         if websocket in self.active_connections:
             self.active_connections.remove(websocket)
-        logger.info(f"WebSocket disconnected. Active: {len(self.active_connections)}")
+        logger.info(f"WebSocket disconnected (ID:{id(websocket)}). Active: {len(self.active_connections)}")
     
     async def broadcast(self, message: dict):
         """全接続にメッセージをブロードキャスト"""
@@ -39,14 +42,21 @@ class ConnectionManager:
         for ws in disconnected:
             self.disconnect(ws)
     
-    async def send_agent_thought(self, agent_name: str, content: str, status: str = "thinking"):
+    async def send_agent_thought(self, agent_name: str, content: str, status: str = "thinking", model: Optional[str] = None):
         """エージェントの思考をストリーミング"""
-        await self.broadcast({
+        payload = {
             "type": "agent_thought",
             "agent": agent_name,
             "content": content,
             "status": status,  # thinking / complete / error
-        })
+            "model": model,    # 使用されたLLMモデル名
+        }
+        self.thought_history.append(payload)
+        await self.broadcast(payload)
+    
+    def clear_history(self):
+        """ログ履歴をクリア"""
+        self.thought_history = []
     
     async def send_progress(self, phase: str, progress: float, detail: str = ""):
         """進捗更新"""

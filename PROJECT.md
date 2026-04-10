@@ -165,14 +165,16 @@ graph TB
 - **構成設定UI**: 生成画面にて、7種のEvaluator（Stage 2 品質評価層）のON/OFFをそれぞれ独立して切り替え可能、かつワンボタンで一括変更するトグルUIを実装。
 - **Day 0 の再生成**: ダッシュボードにて気に入らない設定をその場で「破棄して再生成」できる機能を追加。
 - **WebSocket**: エージェント思考のリアルタイム表示
-- **デザイン**: プレミアムダークテーマ（glassmorphism + gradient accents）
-- **コスト表示**: リアルタイムトークン消費・推定コスト表示
+- **デザイン**: プレミアムライトモード（以前のダークテーマから刷新）
+- **ログ品質向上**: 通信重複排除（Deduplication）の実装、および各思考ログへの使用モデル（Opus/Sonnet/Gemini）表示バッジを実装。
+- **コスト表示**: リアルタイムトークン消費・推定コスト表示。Gemini 2.5 Pro のコスト集計にも対応。
 
 #### データフロー・永続化仕様
 
 - **インメモリ共有**: 処理途中の全オブジェクト構成はPydanticスキーマによってメモリ上に保たれる
 - **MDファイル永続化DB**: キャラクター作成と日次ループ終了後、以下の構造でディスクへ自律保存される。
   - `backend/storage/character_packages/{character_name}/00_profile.md` （事前生成のキャラクタープロファイル一式）
+  - `backend/storage/character_packages/{character_name}/agent_logs.json/.md` （エージェントの思考過程・エンジニアリングログ）
   - `backend/storage/character_packages/{character_name}/daily_logs/Day_{N}.md` （日次イベント、行動、感情変化、内省、日記、記憶ログ）
 
 #### エッジケース・制約
@@ -189,13 +191,13 @@ graph TB
 
 **(a) 当初設計**: 仕様書v2の4層階層を採用。評価(EvaluatorPipeline)はすべての生成が終わった最後にまとめて呼び出して成否をテストする想定。
 **(b) 変更・根拠**: 全工程終了後のテストでは、例えばPhase A-1（マクロ）で不合格が出た場合、既に無駄に消費したPhase Dまでのトークン生成が全て破棄されるというコスト破壊の問題が存在した。
-**(c) 採用プラクティス**: `MasterOrchestrator` の `run()` 内に「Evaluator-Optimizer ループ」を完全統合。各Phase（例えばPhase A-3完了直後）ごとに即座に評価を挟み、FailならそのPhaseだけを指定回数（最大4回）再生成（リトライ）させる堅牢な自律修正システムへ進化した。また、APIの404エラー障害に対してフォールバックルーティング（Anthropic → Google Gemini）を実装して安定化を図った。
+**(c) 採用プラクティス**: `MasterOrchestrator` の `run()` 内に「Evaluator-Optimizer ループ」を完全統合。各Phase（例えばPhase A-3完了直後）ごとに即座に評価を挟み、FailならそのPhaseだけを指定回数（最大4回）再生成（リトライ）させる堅牢な自律修正システムへ進化した。また、APIの404エラー障害に対してフォールバックルーティング（Anthropic → Gemini 2.5 Pro）を実装して安定化を図った。
 
 ### 2. LLM API設計
 
 **(a) 当初設計**: Claude Agent SDK使用を前提。また、Opus 4.6やGemma 4などの指定について代替えの現行モデルを使用して検証していた。
 **(b) 変更・根拠**: SDK未確認のため、直接Anthropic APIおよびGoogle Generative AIに切替。さらに最新のAPIエコシステム（2026年現在）にて、 `claude-opus-4-6`, `claude-sonnet-4-6`, `models/gemma-4-31b-it` が実在・稼働していることが確認されたため。
-**(c) 採用プラクティス**: `call_llm()` 統一インターフェースで、実在する最新モデルID（`claude-opus-4-6`等）を直接指定。エラー時にはフォールバックルーティング（Anthropic → Google Gemini）が作動して安定化を図る設計とした。
+**(c) 採用プラクティス**: `call_llm()` 統一インターフェースで、実在する最新モデルID（`claude-opus-4-6`等）を直接指定。エラー時にはフォールバックルーティング（Anthropic → Gemini 2.5 Pro）が作動して安定化を図る設計とした。
 
 ### 3. 隠蔽原則の実装
 

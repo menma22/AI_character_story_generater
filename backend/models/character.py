@@ -41,12 +41,20 @@ class ConceptPackage(BaseModel):
     narrative_theme: str = Field("", description="物語的テーマ（1-2文）")
     interestingness_hooks: list[str] = Field(default_factory=list, description="面白さのフック（3-5個）")
     genre_and_world: str = Field("", description="ジャンルと世界観の方向性")
+    raw_prose_markdown: str = Field("", description="コンセプト・あらすじ等のMarkdown全文")
     reference_stories: list[ReferenceStory] = Field(default_factory=list, description="参考となる既存物語")
     critical_design_notes: list[str] = Field(default_factory=list, description="下流への設計上の指示")
     psychological_hints: PsychologicalHints = Field(default_factory=PsychologicalHints)
     iteration_count: int = Field(0, description="Self-Critique反復回数")
     self_critique_history: list[dict] = Field(default_factory=list)
     verdict: str = Field("pass", description="最終判定")
+
+    @field_validator("character_concept", "story_outline")
+    @classmethod
+    def check_not_empty(cls, v: str) -> str:
+        if not v or v.strip() == "":
+            raise ValueError("このフィールドは空にできません。生成に失敗した可能性があります。")
+        return v
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -144,6 +152,7 @@ class MacroProfile(BaseModel):
     values_core: ValuesCore = Field(default_factory=ValuesCore)
     secrets: Secret = Field(default_factory=Secret)
     relationship_network: list[RelationshipEntry] = Field(default_factory=list)
+    raw_prose_markdown: str = Field("", description="マクロプロフィール全体のMarkdown記述")
 
 
 # ═══════════════════════════════════════════════════════════════

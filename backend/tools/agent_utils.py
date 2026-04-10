@@ -30,7 +30,6 @@ async def run_worker_with_validation(
             await ws_manager.send_agent_thought(f"Worker:{worker_name}", status, "thinking")
 
         # LLM呼び出し
-        # 2回目以降は履歴を考慮した形式にする（現在は簡易的にメッセージに詰め込む）
         result = await call_llm(
             tier=tier,
             system_prompt=system_prompt,
@@ -40,13 +39,20 @@ async def run_worker_with_validation(
         )
         
         data = result["content"] if isinstance(result["content"], dict) else {}
+        # モデル名の取得 (モデル情報は config.py または llm_api.py の LLMModels から推測)
+        actual_model = result.get("model", tier) 
         
         try:
             # バリデーション実行
             validated_data = schema_model(**data)
             
             if ws_manager:
-                await ws_manager.send_agent_thought(f"Worker:{worker_name}", f"完了 (試行:{attempts}) ✓", "complete")
+                await ws_manager.send_agent_thought(
+                    f"Worker:{worker_name}", 
+                    f"完了 (試行:{attempts}) ✓", 
+                    "complete",
+                    model=actual_model
+                )
             
             return validated_data
             

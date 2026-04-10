@@ -6,6 +6,8 @@
 let currentPackage = null;
 let currentSessionId = null;
 let diaryEntries = [];
+let isWSHandlersSetup = false;
+let recentThoughts = new Set(); // 重複排除用
 
 // ─── 初期化 ──────────────────────────────────────────────
 
@@ -15,8 +17,15 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function setupWSHandlers() {
+    if (isWSHandlersSetup) return;
+    
     wsManager.on('agent_thought', (data) => {
-        addThought(data.agent, data.content, data.status);
+        addThought(data.agent, data.content, data.status, data.model);
+        
+        // Session IDの抽出（バックエンドからの通知）
+        if (data.agent === 'System' && data.content.includes('Session ID:')) {
+            currentSessionId = data.content.split('Session ID:')[1].trim();
+        }
     });
 
     wsManager.on('progress', (data) => {
@@ -38,14 +47,6 @@ function setupWSHandlers() {
         document.getElementById('cost-value').textContent = `$${(data.data?.estimated_cost_usd || 0).toFixed(2)}`;
     });
 
-    wsManager.on('agent_thought', (data) => {
-        addThought(data.agent, data.content, data.status);
-        
-        // Session IDの抽出（バックエンドからの通知）
-        if (data.agent === 'System' && data.content.includes('Session ID:')) {
-            currentSessionId = data.content.split('Session ID:')[1].trim();
-        }
-    });
 
     wsManager.on('error', (data) => {
         addThought('System', data.content, 'error');
@@ -55,6 +56,8 @@ function setupWSHandlers() {
             showResumeButton();
         }
     });
+
+    isWSHandlersSetup = true;
 }
 
 // ─── 画面遷移 ────────────────────────────────────────────
@@ -187,15 +190,31 @@ function showResumeButton() {
     
     if (document.getElementById('resume-btn')) return;
 
+    const container = document.createElement('div');
+    container.id = 'resume-btn-container';
+    container.style.padding = '1.5rem';
+    container.style.background = 'var(--bg-secondary)';
+    container.style.border = '1px solid rgba(239, 68, 68, 0.2)';
+    container.style.borderRadius = '12px';
+    container.style.marginTop = '1rem';
+    container.style.textAlign = 'center';
+
+    const msg = document.createElement('p');
+    msg.textContent = 'エラーが発生しましたが、チェックポイントが保存されています。';
+    msg.style.marginBottom = '1rem';
+    msg.style.color = 'var(--accent-error)';
+    msg.style.fontSize = '0.9rem';
+    container.appendChild(msg);
+
     const btn = document.createElement('button');
     btn.id = 'resume-btn';
     btn.className = 'btn-primary';
-    btn.style.marginTop = '1rem';
-    btn.style.width = '100%';
+    btn.style.padding = '0.8rem 1.5rem';
     btn.textContent = '🔄 中断した箇所から再開する';
     btn.onclick = resumeGeneration;
+    container.appendChild(btn);
     
-    log.appendChild(btn);
+    log.appendChild(container);
     log.scrollTop = log.scrollHeight;
 }
 
@@ -250,7 +269,13 @@ function addDiaryEntry(day, content) {
 
 // ─── 思考ログ ─────────────────────────────────────────────
 
-function addThought(agent, content, status) {
+function addThought(agent, content, status, model = null) {
+    // 重複排除ロジック
+    const hash = `${agent}|${content}|${status}|${model}`;
+    if (recentThoughts.has(hash)) return;
+    recentThoughts.add(hash);
+    setTimeout(() => recentThoughts.delete(hash), 500);
+
     // 日記生成エリアがアクティブならそちらに出力、それ以外はDay0用に出力
     const isDiaryMode = document.getElementById('diary-generation-area')?.style.display === 'block';
     const log = isDiaryMode ? document.getElementById('diary-thought-log') : document.getElementById('thought-log');
@@ -261,7 +286,14 @@ function addThought(agent, content, status) {
     entry.className = `thought-entry ${status || ''}`;
     
     const time = new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-    entry.innerHTML = `<span style="color:var(--text-muted)">${time}</span> <span class="agent-name">${agent}</span> ${content.replace(/\n/g, '<br>')}`;
+    const modelBadge = model ? `<span class="model-badge">${model}</span>` : '';
+    
+    entry.innerHTML = `
+        <span style="color:var(--text-muted)">${time}</span> 
+        <span class="agent-name">${agent}</span>
+        ${modelBadge}
+        ${content.replace(/\n/g, '<br>')}
+    `;
     
     log.appendChild(entry);
     log.scrollTop = log.scrollHeight;

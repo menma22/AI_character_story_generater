@@ -26,6 +26,35 @@ async def save_checkpoint(character_name: str, package: CharacterPackage):
     checkpoint_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     return checkpoint_path
 
+async def save_logs(character_name: str, logs: list[dict]):
+    """思考ログをJSONとMarkdownで保存"""
+    if not character_name or not logs:
+        return
+        
+    char_dir = STORAGE_ROOT / safe_name(character_name)
+    _ensure_dir(char_dir)
+    
+    # JSON保存
+    json_path = char_dir / "agent_logs.json"
+    json_path.write_text(json.dumps(logs, ensure_ascii=False, indent=2), encoding="utf-8")
+    
+    # Markdown保存 (人間可読)
+    md_path = char_dir / "agent_logs.md"
+    md_content = f"# Agent Thought Logs: {character_name}\n\n"
+    for log in logs:
+        agent = log.get("agent", "Unknown")
+        content = log.get("content", "")
+        status = log.get("status", "thinking")
+        model = log.get("model", "")
+        model_str = f" [{model}]" if model else ""
+        
+        md_content += f"### {agent}{model_str} ({status})\n"
+        md_content += f"{content}\n\n"
+        md_content += "---\n\n"
+        
+    md_path.write_text(md_content, encoding="utf-8")
+    return json_path
+
 async def load_checkpoint(character_name: str) -> Optional[CharacterPackage]:
     """Loads a previously saved checkpoint"""
     char_dir = STORAGE_ROOT / safe_name(character_name)
@@ -55,30 +84,38 @@ async def save_character_profile(character_name: str, package: CharacterPackage)
     
     # 1. Concept
     if package.concept_package:
-        md_content += "## 1. Concept Package\n\n"
-        md_content += f"**Concept:**\n{package.concept_package.character_concept}\n\n"
-        md_content += f"**Story Outline:**\n{package.concept_package.story_outline}\n\n"
-        md_content += f"**Interestingness Hooks:**\n"
-        for feature in package.concept_package.interestingness_hooks:
-            md_content += f"- {feature}\n"
-        md_content += "\n"
+        if package.concept_package.raw_prose_markdown:
+            md_content += "## 1. Concept Summary\n\n"
+            md_content += f"{package.concept_package.raw_prose_markdown}\n\n"
+        else:
+            md_content += "## 1. Concept Package\n\n"
+            md_content += f"**Concept:**\n{package.concept_package.character_concept}\n\n"
+            md_content += f"**Story Outline:**\n{package.concept_package.story_outline}\n\n"
+            md_content += f"**Interestingness Hooks:**\n"
+            for feature in package.concept_package.interestingness_hooks:
+                md_content += f"- {feature}\n"
+            md_content += "\n"
     
     # 2. Macro Profile
     if package.macro_profile:
-        md_content += "## 2. Macro Profile\n\n"
-        basic = getattr(package.macro_profile, "basic_info", None)
-        if basic:
-            md_content += f"- **Name:** {getattr(basic, 'name', '')}\n"
-            md_content += f"- **Age:** {getattr(basic, 'age', '')}\n"
-            md_content += f"- **Gender:** {getattr(basic, 'gender', '')}\n"
-            md_content += f"- **Occupation:** {getattr(basic, 'occupation', '')}\n\n"
-        
-        md_content += f"### Psychological Features\n"
-        psy = getattr(package.macro_profile, "psychological_features", None)
-        if psy:
-            md_content += f"- **Core Desire:** {getattr(psy, 'core_desire', '')}\n"
-            md_content += f"- **Core Fear:** {getattr(psy, 'core_fear', '')}\n"
-            md_content += f"- **Life Goal:** {getattr(psy, 'life_goal', '')}\n\n"
+        if package.macro_profile.raw_prose_markdown:
+            md_content += "## 2. Macro Profile\n\n"
+            md_content += f"{package.macro_profile.raw_prose_markdown}\n\n"
+        else:
+            md_content += "## 2. Macro Profile\n\n"
+            basic = getattr(package.macro_profile, "basic_info", None)
+            if basic:
+                md_content += f"- **Name:** {getattr(basic, 'name', '')}\n"
+                md_content += f"- **Age:** {getattr(basic, 'age', '')}\n"
+                md_content += f"- **Gender:** {getattr(basic, 'gender', '')}\n"
+                md_content += f"- **Occupation:** {getattr(basic, 'occupation', '')}\n\n"
+            
+            md_content += f"### Psychological Features\n"
+            psy = getattr(package.macro_profile, "psychological_features", None)
+            if psy:
+                md_content += f"- **Core Desire:** {getattr(psy, 'core_desire', '')}\n"
+                md_content += f"- **Core Fear:** {getattr(psy, 'core_fear', '')}\n"
+                md_content += f"- **Life Goal:** {getattr(psy, 'life_goal', '')}\n\n"
     
     # 3. Micro Parameters (Dump as JSON block for exact parameters)
     if package.micro_parameters:

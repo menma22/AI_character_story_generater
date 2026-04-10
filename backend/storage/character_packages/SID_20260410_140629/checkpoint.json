@@ -1,0 +1,39 @@
+{
+  "metadata": {
+    "version": "2.0",
+    "generated_at": "2026-04-10T14:06:29.827471",
+    "generator": "script-ai-app v2",
+    "upstream_spec": "specification_v10.md",
+    "total_llm_calls": 0,
+    "total_cost_usd": 0.0
+  },
+  "concept_package": {
+    "character_concept": "",
+    "story_outline": "",
+    "narrative_theme": "",
+    "interestingness_hooks": [],
+    "genre_and_world": "",
+    "raw_prose_markdown": "",
+    "reference_stories": [],
+    "critical_design_notes": [],
+    "psychological_hints": {
+      "temperament_direction": "",
+      "values_direction": "",
+      "want_and_need": {
+        "want": "",
+        "need": "",
+        "tension": ""
+      },
+      "ghost_wound_hint": "",
+      "lie_hint": ""
+    },
+    "iteration_count": 0,
+    "self_critique_history": [],
+    "verdict": "pass"
+  },
+  "macro_profile": null,
+  "micro_parameters": null,
+  "autobiographical_episodes": null,
+  "weekly_events_store": null,
+  "audit_report": {}
+}
