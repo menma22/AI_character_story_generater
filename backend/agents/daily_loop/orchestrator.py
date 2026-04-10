@@ -42,6 +42,8 @@ from backend.models.memory import (
     DiaryEntry, ActivationLog,
 )
 from backend.tools.llm_api import call_llm
+from backend.tools.agent_utils import parse_markdown_sections
+from backend.config import EvaluationProfile
 from backend.agents.daily_loop.activation import DynamicActivationAgent
 from backend.agents.daily_loop.verification import OutputVerificationAgent
 from backend.agents.daily_loop.next_day_planning import NextDayPlanningAgent
@@ -164,23 +166,23 @@ class DailyLoopOrchestrator:
 それに基づいて「今このキャラが知覚した内容」を生成してください。
 
 【出力する3要素のみ】
-1. 現象的記述（五感を使った描写、4-6文）
-2. 反射的感情反応（身体感覚レベルの情動、2-3文）
-3. 自動的注意配分（何に目が行き何が視界から消えたか、2-3文）
+以下の3セクションを、Markdownのセクションヘッダー（##）で区切って出力してください。
+
+## 現象的記述
+（五感を使った描写、4-6文。視覚・聴覚・触覚・嗅覚を含む具体的な知覚描写）
+
+## 反射的感情反応
+（身体感覚レベルの情動、2-3文。「胸がざわつく」「手のひらに汗がにじむ」等）
+
+## 自動的注意配分
+（何に目が行き何が視界から消えたか、2-3文）
 
 【出してはいけないもの】
 - 価値判断（「自分が悪い」「上司はひどい」）
 - 原因帰属（「なぜそうなったか」の分析）
 - 行動意思決定（「どうすべきか」）
 - 自己特性の言語化（「自分は怒りっぽい」）
-- パラメータへの直接言及（「HA高」「感情パラメータ#5が発火」等）
-
-【出力形式】JSON:
-{
-  "phenomenal_description": "五感を使った現象的記述（4-6文）",
-  "reflexive_emotion": "反射的に浮かぶ感情（身体感覚レベル、2-3文）",
-  "automatic_attention": "自動的に注意が向く点（2-3文）"
-}""",
+- パラメータへの直接言及（「HA高」「感情パラメータ#5が発火」等）""",
             user_message=(
                 f"【活性化された気質・性格パラメータ】\n{activated_context}\n\n"
                 f"【マクロ層】\n{self._build_macro_context()[:400]}\n\n"
@@ -190,10 +192,15 @@ class DailyLoopOrchestrator:
                 f"（時間帯: {event.time_slot} | {known_str} {source_str} | 予想外度: {event.expectedness}）"
             ),
             max_tokens=1200,
-            json_mode=True,
+            json_mode=False,
         )
-        data = result["content"] if isinstance(result["content"], dict) else {}
-        return PerceiverOutput(**{k: data.get(k, "") for k in ["phenomenal_description", "reflexive_emotion", "automatic_attention"]})
+        raw_text = result["content"] if isinstance(result["content"], str) else str(result["content"])
+        sections = parse_markdown_sections(raw_text)
+        return PerceiverOutput(
+            phenomenal_description=sections.get("現象的記述", raw_text),
+            reflexive_emotion=sections.get("反射的感情反応", ""),
+            automatic_attention=sections.get("自動的注意配分", ""),
+        )
     
     # ─── §4.6 Step 1: Impulsive Agent ────────────────────────
     async def _impulsive(self, event: Event, perceiver: PerceiverOutput, activation: ActivationLog) -> ImpulsiveOutput:
@@ -202,30 +209,46 @@ class DailyLoopOrchestrator:
         if self.activation_agent:
             activated_context = self.activation_agent.get_activated_params_text(activation)
         
+        # Perceiverの出力を自然言語でそのまま渡す
+        perceiver_text = (
+            f"## 現象的記述\n{perceiver.phenomenal_description}\n\n"
+            f"## 反射的感情反応\n{perceiver.reflexive_emotion}\n\n"
+            f"## 自動的注意配分\n{perceiver.automatic_attention}"
+        )
+
         result = await call_llm(
             tier="gemma",
             system_prompt="""あなたは主人公AIのImpulsive Agent（衝動系エージェント）です。
 活性化された気質・性格パラメータを参照し、このイベントに対する衝動的な反応を生成してください。
 これは「考える前の反応」です。理性的な判断はReflective Agentの仕事です。
 
-【出力形式】JSON:
-{
-  "impulse_reaction": "衝動的な反応（「思わず○○したくなった」形式、2-3文）",
-  "bodily_sensation": "身体感覚（胃がきゅっとする、手に汗が、等、1-2文）",
-  "action_tendency": "行動傾向（「○○しそうになる」形式、1-2文）"
-}
+以下の3セクションを、Markdownのセクションヘッダー（##）で区切って出力してください。
+
+## 衝動的反応
+（「思わず○○したくなった」形式、2-3文。理性が介入する前の生の反応）
+
+## 身体感覚
+（胃がきゅっとする、手に汗が、肩に力が入る等、1-2文）
+
+## 行動傾向
+（approach/avoid/freeze のいずれかの方向性で「○○しそうになる」形式、1-2文）
 
 【禁止】パラメータ名・ID・学術用語の直接言及""",
             user_message=(
                 f"【活性化パラメータ】\n{activated_context}\n\n"
-                f"【知覚output】\n{json.dumps(perceiver.model_dump(mode='json'), ensure_ascii=False)}\n\n"
+                f"【知覚の記述】\n{perceiver_text}\n\n"
                 f"【イベント】{event.content}"
             ),
             max_tokens=800,
-            json_mode=True,
+            json_mode=False,
         )
-        data = result["content"] if isinstance(result["content"], dict) else {}
-        return ImpulsiveOutput(**{k: data.get(k, "") for k in ["impulse_reaction", "bodily_sensation", "action_tendency"]})
+        raw_text = result["content"] if isinstance(result["content"], str) else str(result["content"])
+        sections = parse_markdown_sections(raw_text)
+        return ImpulsiveOutput(
+            impulse_reaction=sections.get("衝動的反応", raw_text),
+            bodily_sensation=sections.get("身体感覚", ""),
+            action_tendency=sections.get("行動傾向", ""),
+        )
     
     # ─── §4.6 Step 2: Reflective Agent ──────────────────────
     async def _reflective(self, event: Event, perceiver: PerceiverOutput, activation: ActivationLog) -> ReflectiveOutput:
@@ -235,6 +258,13 @@ class DailyLoopOrchestrator:
         if self.activation_agent:
             normative_context = self.activation_agent.get_activated_normative_text(activation)
         
+        # Perceiverの出力を自然言語でそのまま渡す
+        perceiver_text = (
+            f"## 現象的記述\n{perceiver.phenomenal_description}\n\n"
+            f"## 反射的感情反応\n{perceiver.reflexive_emotion}\n\n"
+            f"## 自動的注意配分\n{perceiver.automatic_attention}"
+        )
+
         result = await call_llm(
             tier="gemma",
             system_prompt="""あなたは主人公AIの理性ブランチ（Reflective Agent）です。
@@ -245,26 +275,38 @@ class DailyLoopOrchestrator:
 
 主務は「濃密な内面分析レポート」であり、示唆と予測を明示的に含めてください。
 
-【出力形式】JSON:
-{
-  "inner_analysis": "濃密な内面分析レポート（5-8文。何を考え、何を連想し、どう判断するかを記述）",
-  "value_connections": "価値観・知識・過去経験との接続（3-4文）",
-  "suggestion": "この状況でどうすべきかの示唆（1-2文）",
-  "prediction": "理性ルートで行動した場合の予測（1-2文）"
-}""",
+以下の4セクションを、Markdownのセクションヘッダー（##）で区切って出力してください。
+
+## 内面分析
+（5-8文の濃密な内面分析レポート。「なぜそう感じるのか」「この状況は自分にとって何を意味するか」「価値観・知識・過去経験との接続」を記述）
+
+## 価値観との接続
+（3-4文。動的活性化された価値観・理想自己・義務自己との関連を明示的に記述）
+
+## 示唆
+（1-2文。この状況でどうすべきかの理性的な示唆）
+
+## 予測
+（1-2文。理性ルートで行動した場合の予測）""",
             user_message=(
                 f"【規範層（活性化済み）】\n{normative_context}\n\n"
                 f"【過去の記憶】\n{self._build_memory_context()}\n\n"
                 f"【自伝的エピソード】\n{self._build_episodes_context()[:600]}\n\n"
-                f"【知覚output】\n{json.dumps(perceiver.model_dump(mode='json'), ensure_ascii=False)}\n\n"
+                f"【知覚の記述】\n{perceiver_text}\n\n"
                 f"【イベント】{event.content}\n"
                 f"（known: {event.known_to_protagonist} | source: {event.source}）"
             ),
             max_tokens=1500,
-            json_mode=True,
+            json_mode=False,
         )
-        data = result["content"] if isinstance(result["content"], dict) else {}
-        return ReflectiveOutput(**{k: data.get(k, "") for k in ["inner_analysis", "value_connections", "suggestion", "prediction"]})
+        raw_text = result["content"] if isinstance(result["content"], str) else str(result["content"])
+        sections = parse_markdown_sections(raw_text)
+        return ReflectiveOutput(
+            inner_analysis=sections.get("内面分析", raw_text),
+            value_connections=sections.get("価値観との接続", ""),
+            suggestion=sections.get("示唆", ""),
+            prediction=sections.get("予測", ""),
+        )
     
     # ─── §4.6 Step 3: 統合エージェント (Agentic Loop) ────────
     async def _integration(self, event: Event, impulsive: ImpulsiveOutput, reflective: ReflectiveOutput) -> IntegrationOutput:
@@ -364,10 +406,23 @@ class DailyLoopOrchestrator:
 2. 複数の選択肢で迷うなら、複数回シミュレーションツールを使って比較してください。
 3. 最もキャラクターらしく、かつ物語として面白いと確信した行動案を `submit_final_decision` ツールで提出してください。"""
 
+        # 衝動・理性ブランチの出力を自然言語のまま渡す
+        impulsive_text = (
+            f"## 衝動的反応\n{impulsive.impulse_reaction}\n\n"
+            f"## 身体感覚\n{impulsive.bodily_sensation}\n\n"
+            f"## 行動傾向\n{impulsive.action_tendency}"
+        )
+        reflective_text = (
+            f"## 内面分析\n{reflective.inner_analysis}\n\n"
+            f"## 価値観との接続\n{reflective.value_connections}\n\n"
+            f"## 示唆\n{reflective.suggestion}\n\n"
+            f"## 予測\n{reflective.prediction}"
+        )
+
         user_message = (
             f"{normative_context}{protagonist_plan_note}\n\n"
-            f"【衝動反応パラメタ】\n{json.dumps(impulsive.model_dump(mode='json'), ensure_ascii=False)}\n\n"
-            f"【理性分析パラメタ】\n{json.dumps(reflective.model_dump(mode='json'), ensure_ascii=False)}\n\n"
+            f"【衝動ブランチの報告】\n{impulsive_text}\n\n"
+            f"【理性ブランチの報告】\n{reflective_text}\n\n"
             f"【現在発生しているイベント】\n{event.content}"
         )
         
@@ -408,11 +463,15 @@ class DailyLoopOrchestrator:
             system_prompt="""あなたは情景描写の執筆者です。
 行動決定に基づいて、その場面の濃密な情景描写と、直後の後日譚を書いてください。
 
-【出力形式】JSON:
-{
-  "scene_description": "濃密な情景描写（5-8文、五感を含む、その場の空気感・色彩・音・匂い）",
-  "aftermath": "直後の後日譚（2-4文、行動の結果として何が起きたか、周囲の反応）"
-}""",
+以下の2セクションを、Markdownのセクションヘッダー（##）で区切って出力してください。
+
+## 情景描写
+（5-8文の濃密な描写。その場の空気感・色彩・音・匂い・温度・触感を含む。
+周囲の人物の表情や仕草、会話の具体的なやりとりも書く。文学的な品質を意識すること）
+
+## 後日譚
+（2-4文。行動の直後に起こったこと。周囲の反応、場の空気の変化、
+その行動がもたらした小さな波紋を描写する）""",
             user_message=(
                 f"【イベント】{event.content}\n"
                 f"（{known_str} | 予想外度: {event.expectedness}）\n\n"
@@ -420,10 +479,14 @@ class DailyLoopOrchestrator:
                 f"【気持ち変化】{integration.emotion_change}"
             ),
             max_tokens=1000,
-            json_mode=True,
+            json_mode=False,
         )
-        data = result["content"] if isinstance(result["content"], dict) else {}
-        return SceneNarration(**{k: data.get(k, "") for k in ["scene_description", "aftermath"]})
+        raw_text = result["content"] if isinstance(result["content"], str) else str(result["content"])
+        sections = parse_markdown_sections(raw_text)
+        return SceneNarration(
+            scene_description=sections.get("情景描写", raw_text),
+            aftermath=sections.get("後日譚", ""),
+        )
     
     # ─── §4.6c: 価値観違反チェック ──────────────────────────
     async def _values_violation(self, integration: IntegrationOutput) -> ValuesViolationResult:
@@ -553,13 +616,21 @@ class DailyLoopOrchestrator:
 2. 過去記録との統合: 記憶にある過去の出来事と今日の出来事に接続点があるか
 3. 薄れた記憶の再解釈: 過去の出来事を今日の経験を通じて新たに意味づける
 
-【出力形式】JSON
-{
-  "self_perception": "自己推測（3-4文。「今日の私は〇〇な行動をとった。これは…」形式）",
-  "past_connection": "過去記録との統合（2-3文。接続点がなければその旨記述）",
-  "memory_reinterpretation": "記憶の再解釈（2-3文。なければ空）",
-  "full_memo": "内省メモ全文（200-400字。日記の素材となる。上記3工程の統合）"
-}""",
+以下の4セクションを、Markdownのセクションヘッダー（##）で区切って出力してください。
+
+## 自己推測
+（3-4文。「今日の私は〇〇な行動をとった。これは…」形式。
+行動パターンから自分がどういう人間かを推測する。気質パラメータは知らない前提）
+
+## 過去記録との統合
+（2-3文。記憶にある過去の出来事と今日の出来事の接続点。なければその旨記述）
+
+## 記憶の再解釈
+（2-3文。過去の出来事を今日の経験を通じて新たに意味づける。
+「あの時のあれは、こういうことだったのかもしれない」形式。なければ省略可）
+
+## 内省メモ全文
+（200-400字。日記の素材となる統合的な内省。上記3工程を自然に統合した文章）""",
             user_message=(
                 f"Day {day}の行動まとめ:\n{action_summary}\n\n"
                 f"活性化されたパラメータの傾向:\n{activation_summary}\n\n"
@@ -568,12 +639,16 @@ class DailyLoopOrchestrator:
                 f"自伝的エピソード:\n{self._build_episodes_context()[:600]}"
             ),
             max_tokens=1500,
-            json_mode=True,
+            json_mode=False,
         )
-        data = result["content"] if isinstance(result["content"], dict) else {}
-        return IntrospectionMemo(**{k: data.get(k, "") for k in [
-            "self_perception", "past_connection", "memory_reinterpretation", "full_memo"
-        ]})
+        raw_text = result["content"] if isinstance(result["content"], str) else str(result["content"])
+        sections = parse_markdown_sections(raw_text)
+        return IntrospectionMemo(
+            self_perception=sections.get("自己推測", ""),
+            past_connection=sections.get("過去記録との統合", ""),
+            memory_reinterpretation=sections.get("記憶の再解釈", ""),
+            full_memo=sections.get("内省メモ全文", raw_text),
+        )
     
     # ─── §4.8 日記生成 (Agentic Loop) ─────────────────────────
     async def _generate_diary(self, day: int, events: list[EventPackage], introspection: IntrospectionMemo) -> DiaryEntry:

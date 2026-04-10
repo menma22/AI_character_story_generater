@@ -74,6 +74,8 @@ PROFILES = {
         event_metadata_auditor_enabled=True,
         narrative_connection_auditor_enabled=True,
         worker_regeneration_max_iterations=3,
+        director_tier="sonnet",
+        worker_tier="sonnet",
     ),
     "fast": EvaluationProfile(
         name="fast",
@@ -85,6 +87,8 @@ PROFILES = {
         event_metadata_auditor_enabled=True,
         narrative_connection_auditor_enabled=False,
         worker_regeneration_max_iterations=2,
+        director_tier="sonnet",
+        worker_tier="gemini",
     ),
     "draft": EvaluationProfile(
         name="draft",
@@ -96,6 +100,8 @@ PROFILES = {
         event_metadata_auditor_enabled=False,
         narrative_connection_auditor_enabled=False,
         worker_regeneration_max_iterations=1,
+        director_tier="sonnet",
+        worker_tier="gemma",
     ),
 }
 

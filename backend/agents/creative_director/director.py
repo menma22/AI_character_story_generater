@@ -245,7 +245,43 @@ class CreativeDirector:
             await self._notify("最終concept_packageが提出されました。", "complete")
             return {"status": "SUCCESS", "message": "Task complete. Thank you."}
 
+        async def file_read(file_path: str = None) -> dict:
+            """backend/reference/ 以下の参考資料ファイルを読み込む"""
+            if not file_path:
+                return {"status": "FAILED", "message": "ERROR: file_path引数が欠落しています。"}
+            from backend.config import AppConfig
+            import pathlib
+            ref_dir = AppConfig.REFERENCE_DIR
+            target = ref_dir / file_path
+            # セキュリティ: reference ディレクトリ外へのアクセスを防止
+            try:
+                target.resolve().relative_to(ref_dir.resolve())
+            except ValueError:
+                return {"status": "FAILED", "message": "参照ディレクトリ外のファイルにはアクセスできません。"}
+            if not target.exists():
+                # ディレクトリ内のファイル一覧を返す
+                available = [f.name for f in ref_dir.glob("*") if f.is_file()] if ref_dir.exists() else []
+                return {"status": "FAILED", "message": f"ファイルが見つかりません: {file_path}", "available_files": available}
+            try:
+                content = target.read_text(encoding="utf-8")
+                await self._notify(f"参考資料読み込み: {file_path}")
+                return {"status": "SUCCESS", "content": content[:5000]}  # 長すぎる場合は先頭5000字
+            except Exception as e:
+                return {"status": "FAILED", "message": f"読み込みエラー: {e}"}
+
         tools = [
+            AgentTool(
+                name="file_read",
+                description="backend/reference/ ディレクトリ以下にある参考資料（心理学理論、脚本論のリファレンス等）を読み込みます。ファイル名を指定してください。ファイルが見つからない場合は利用可能なファイル一覧が返されます。",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "file_path": {"type": "string", "description": "参考資料のファイル名（例: 'cloninger_theory.md'）"}
+                    },
+                    "required": ["file_path"]
+                },
+                handler=file_read
+            ),
             AgentTool(
                 name="search_web",
                 description="指定したキーワードでWeb検索を行い、記事や情報を取得します。キャラクター設定や物語のネタ集め、面白い設定の調査など、執筆前のリサーチに必ず使用してください。複数回呼び出すことも可能です。",

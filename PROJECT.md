@@ -183,7 +183,7 @@ graph TB
 
 - `source: "protagonist_plan"` は Phase D では1件も生成禁止（日次ループの翌日予定追加が唯一の経路）
 - redemption bias対策: contamination/loss/ambivalent型が安易な救済で終わることを構造的に防止
-- 予想外度分布制約: `high` が半分以上、`low` は Day 5 以外で各日最大1件
+- 予想外度分布制約: `low`（予定通り・日常）が各日の半分以上、`high`（強い驚き）は Day 5 以外で各日最大1件
 
 ---
 

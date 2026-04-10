@@ -1,3 +1,4 @@
+import re
 import json
 import logging
 from typing import Type, Optional, Any
@@ -5,6 +6,36 @@ from pydantic import BaseModel, ValidationError
 from backend.tools.llm_api import call_llm
 
 logger = logging.getLogger(__name__)
+
+
+def parse_markdown_sections(text: str) -> dict[str, str]:
+    """
+    Markdownのセクションヘッダー（## セクション名）でテキストを分割し、
+    セクション名 → テキスト本体の辞書を返す。
+
+    エージェント出力のパースに使用。JSON形式を使わず、自然言語の構造化出力を
+    プログラム的に各フィールドに分配するためのユーティリティ。
+
+    例:
+        text = "## 現象的記述\n五感を使った描写...\n\n## 反射的感情反応\n胸がざわつく..."
+        → {"現象的記述": "五感を使った描写...", "反射的感情反応": "胸がざわつく..."}
+    """
+    sections: dict[str, str] = {}
+    # ## で始まるヘッダーで分割
+    pattern = r"^##\s+(.+?)$"
+    parts = re.split(pattern, text, flags=re.MULTILINE)
+
+    # parts[0] はヘッダー前のテキスト（通常空）
+    # parts[1], parts[2] = セクション名, セクション本体
+    # parts[3], parts[4] = 次のセクション名, 本体 ...
+    i = 1
+    while i < len(parts) - 1:
+        section_name = parts[i].strip()
+        section_body = parts[i + 1].strip()
+        sections[section_name] = section_body
+        i += 2
+
+    return sections
 
 async def run_worker_with_validation(
     worker_name: str,

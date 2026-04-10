@@ -128,15 +128,20 @@ async def save_character_profile(character_name: str, package: CharacterPackage)
     if package.autobiographical_episodes:
         md_content += "## 4. Autobiographical Episodes\n\n"
         for idx, ep in enumerate(package.autobiographical_episodes.episodes):
-            md_content += f"### Episode {idx+1}: {ep.title} ({ep.life_stage})\n"
-            md_content += f"- **Core Memory:** {ep.core_memory}\n"
-            md_content += f"- **Impact:** {ep.impact_on_personality}\n\n"
+            life_period = ep.metadata.life_period if ep.metadata else "unknown"
+            category = ep.metadata.category if ep.metadata else "unknown"
+            md_content += f"### Episode {idx+1}: {category} ({life_period})\n"
+            md_content += f"- **Narrative:** {ep.narrative}\n"
+            if ep.metadata and ep.metadata.connected_to:
+                md_content += f"- **Connected to:** {', '.join(str(v) for v in ep.metadata.connected_to.values())}\n"
+            md_content += "\n"
 
     # 5. Events Plan
     if package.weekly_events_store:
         md_content += "## 5. 7-Day Event Plan (Phase D)\n\n"
         for event in package.weekly_events_store.events:
-            md_content += f"- **Day {event.day}** [{event.type}] (Unexpectedness: {event.unexpectedness}): {event.content}\n"
+            conflict_str = f"[{event.conflict_type}]" if event.conflict_type else ""
+            md_content += f"- **Day {event.day}** {conflict_str} (Expectedness: {event.expectedness}): {event.content}\n"
         md_content += "\n"
         
     file_path = char_dir / "00_profile.md"
@@ -145,50 +150,125 @@ async def save_character_profile(character_name: str, package: CharacterPackage)
 
 async def save_daily_log(character_name: str, day: int, day_state):
     """
-    Saves a specific day's logs completely covering events, introspection, memory and diary to Markdown.
+    1日の処理状態を完全にカバーするMarkdownログを保存する。
+    イベント処理（Perceiver/Impulsive/Reflective/Integration/SceneNarration/ValuesViolation）、
+    内省、日記、記憶、ムード変遷を全て記録する。
     """
     if not character_name:
         character_name = "Unknown_Character"
-    
+
     char_dir = STORAGE_ROOT / safe_name(character_name)
     logs_dir = char_dir / "daily_logs"
     _ensure_dir(logs_dir)
-    
-    md_content = f"# Day {day} Log for {character_name}\n\n"
-    
-    # Event Packages (What happened today)
-    md_content += "## 1. Events & Agent Reactions\n\n"
-    for i, ep in enumerate(day_state.event_packages):
-        md_content += f"### Event {i+1}\n"
-        md_content += f"**Event Statement:** {ep.event.content}\n\n"
-        if getattr(ep, 'action_output', None):
-             action_str = ep.action_output if isinstance(ep.action_output, str) else json.dumps(ep.action_output, ensure_ascii=False)
-             md_content += f"**Action Output:**\n{action_str}\n\n"
+
+    md_content = f"# Day {day} ログ — {character_name}\n\n"
+    md_content += f"**日次集約ムード (Peak-End):** V={day_state.daily_mood.valence:.1f} / A={day_state.daily_mood.arousal:.1f} / D={day_state.daily_mood.dominance:.1f}\n\n"
+
+    # ── 1. イベント処理詳細 ──
+    md_content += "## 1. イベント処理\n\n"
+    for i, ep in enumerate(day_state.events_processed):
+        md_content += f"### イベント {i+1}: {ep.event_id}\n\n"
+        md_content += f"**出来事:** {ep.event_content}\n\n"
+
+        # メタデータ
+        meta = ep.event_metadata or {}
+        md_content += f"*既知/未知: {'既知' if meta.get('known_to_protagonist') else '未知'} | 予想外度: {meta.get('expectedness', '?')} | source: {meta.get('source', 'N/A')}*\n\n"
+
+        # ムード変遷
+        md_content += f"**ムード変遷:** V={ep.mood_before.valence:.1f}→{ep.mood_after.valence:.1f} / A={ep.mood_before.arousal:.1f}→{ep.mood_after.arousal:.1f} / D={ep.mood_before.dominance:.1f}→{ep.mood_after.dominance:.1f}\n\n"
+
+        # Perceiver
+        if ep.perceiver_output and ep.perceiver_output.phenomenal_description:
+            md_content += "#### 知覚（Perceiver）\n\n"
+            md_content += f"{ep.perceiver_output.phenomenal_description}\n\n"
+            if ep.perceiver_output.reflexive_emotion:
+                md_content += f"*反射的感情:* {ep.perceiver_output.reflexive_emotion}\n\n"
+
+        # Impulsive
+        if ep.impulsive_output and ep.impulsive_output.impulse_reaction:
+            md_content += "#### 衝動反応（Impulsive）\n\n"
+            md_content += f"{ep.impulsive_output.impulse_reaction}\n"
+            if ep.impulsive_output.bodily_sensation:
+                md_content += f"\n*身体感覚:* {ep.impulsive_output.bodily_sensation}\n"
+            if ep.impulsive_output.action_tendency:
+                md_content += f"\n*行動傾向:* {ep.impulsive_output.action_tendency}\n"
+            md_content += "\n"
+
+        # Reflective
+        if ep.reflective_output and ep.reflective_output.inner_analysis:
+            md_content += "#### 内面分析（Reflective）\n\n"
+            md_content += f"{ep.reflective_output.inner_analysis}\n\n"
+            if ep.reflective_output.value_connections:
+                md_content += f"*価値観接続:* {ep.reflective_output.value_connections}\n\n"
+
+        # Integration (行動決定)
+        if ep.integration_output and ep.integration_output.final_action:
+            md_content += "#### 行動決定（Integration）\n\n"
+            md_content += f"**最終行動:** {ep.integration_output.final_action}\n\n"
+            if ep.integration_output.higgins_ideal_gap:
+                md_content += f"*Ideal不一致:* {ep.integration_output.higgins_ideal_gap}\n\n"
+            if ep.integration_output.higgins_ought_gap:
+                md_content += f"*Ought不一致:* {ep.integration_output.higgins_ought_gap}\n\n"
+            if ep.integration_output.emotion_change:
+                md_content += f"*気持ちの変化:* {ep.integration_output.emotion_change}\n\n"
+
+        # 情景描写
+        if ep.scene_narration and ep.scene_narration.scene_description:
+            md_content += "#### 情景描写\n\n"
+            md_content += f"{ep.scene_narration.scene_description}\n\n"
+            if ep.scene_narration.aftermath:
+                md_content += f"*後日譚:* {ep.scene_narration.aftermath}\n\n"
+
+        # 価値観違反
+        if ep.values_violation and ep.values_violation.violation_detected:
+            md_content += "#### ⚠ 価値観違反検出\n\n"
+            md_content += f"- **違反内容:** {ep.values_violation.violation_content}\n"
+            md_content += f"- **種別:** {ep.values_violation.violation_type}\n"
+            md_content += f"- **罪悪感:** {ep.values_violation.guilt_emotion}\n\n"
+
         md_content += "---\n\n"
-        
-    # Introspection
-    md_content += "## 2. Introspection (Self-Perception & Cognitive Dissonance)\n\n"
+
+    # ── 2. 内省 ──
+    md_content += "## 2. 内省（Self-Perception & 記憶統合）\n\n"
     if day_state.introspection:
-        md_content += f"{day_state.introspection}\n\n"
+        intro = day_state.introspection
+        if intro.self_perception:
+            md_content += f"### 自己推測\n{intro.self_perception}\n\n"
+        if intro.past_connection:
+            md_content += f"### 過去記録との統合\n{intro.past_connection}\n\n"
+        if intro.memory_reinterpretation:
+            md_content += f"### 記憶の再解釈\n{intro.memory_reinterpretation}\n\n"
+        if intro.full_memo:
+            md_content += f"### 内省メモ全文\n{intro.full_memo}\n\n"
     else:
-        md_content += "*No introspection available.*\n\n"
-        
-    # Diary
-    md_content += "## 3. Written Diary\n\n"
+        md_content += "*内省なし*\n\n"
+
+    # ── 3. 日記 ──
+    md_content += "## 3. 日記\n\n"
     if day_state.diary:
         md_content += f"> {day_state.diary.content}\n\n"
+        md_content += f"*執筆時ムード: V={day_state.diary.mood_at_writing.valence:.1f} A={day_state.diary.mood_at_writing.arousal:.1f} D={day_state.diary.mood_at_writing.dominance:.1f}*\n\n"
     else:
-        md_content += "*No diary written.*\n\n"
-        
-    # Extracted Short-Term Memory
-    md_content += "## 4. Key Memories & Short Term DB\n\n"
-    if day_state.extracted_key_memories:
-        for mem in day_state.extracted_key_memories:
-            md_content += f"- {mem}\n"
+        md_content += "*日記なし*\n\n"
+
+    # ── 4. Key Memory ──
+    md_content += "## 4. Key Memory\n\n"
+    if day_state.key_memory:
+        md_content += f"**Day {day_state.key_memory.day}の最も重要な瞬間:**\n\n{day_state.key_memory.content}\n\n"
     else:
-        md_content += "*No key memories extracted.*\n"
-    md_content += "\n"
-        
+        md_content += "*Key Memory未抽出*\n\n"
+
+    # ── 5. 翌日予定 ──
+    if day_state.next_day_plans:
+        md_content += "## 5. 翌日予定（protagonist_plan）\n\n"
+        for plan in day_state.next_day_plans:
+            action = plan.get("action", "")
+            time = plan.get("preferred_time", "")
+            motivation = plan.get("motivation", "")
+            inserted = "✓挿入済" if plan.get("inserted") else "未挿入"
+            md_content += f"- [{inserted}] {action}（{time}）— {motivation}\n"
+        md_content += "\n"
+
     file_path = logs_dir / f"Day_{day}.md"
     file_path.write_text(md_content, encoding="utf-8")
     return file_path

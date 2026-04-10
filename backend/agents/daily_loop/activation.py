@@ -133,6 +133,7 @@ class DynamicActivationAgent:
         log = ActivationLog(
             activated_temperament_ids=temp_ids,
             activated_personality_ids=pers_ids,
+            activated_cognition_ids=cog_ids,
             activated_values=values if isinstance(values, list) else [],
             activation_reasoning=reasoning,
         )
@@ -159,7 +160,7 @@ class DynamicActivationAgent:
         
         # 対他者認知
         for p in self.micro.other_cognition:
-            if p.id in log.activated_personality_ids or p.id in log.activated_temperament_ids:
+            if p.id in (log.activated_cognition_ids or []):
                 lines.append(f"[対他者認知] #{p.id} {p.name} ({p.value:.1f}/5.0): {p.natural_language}")
         
         # 規範層

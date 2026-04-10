@@ -87,10 +87,12 @@ class BasicInfo(BaseModel):
         return v
 
 class SocialPosition(BaseModel):
-    """社会的位置"""
+    """社会的位置（v2 §6.3.4準拠）"""
     occupation_detail: str = ""
+    workplace_or_org: str = Field("", description="職場・所属組織（具体名+規模感）")
     economic_status: str = ""
     living_area: str = ""
+    social_class: str = Field("", description="社会階層・出自")
 
 class FamilyAndIntimacy(BaseModel):
     """家族・親密な関係"""
@@ -98,24 +100,38 @@ class FamilyAndIntimacy(BaseModel):
     key_relationships: list[dict] = Field(default_factory=list)
 
 class CurrentLifeOutline(BaseModel):
-    """現在の生活の輪郭"""
+    """現在の生活の輪郭（v2 §6.3.4準拠）"""
     daily_routine: str = ""
+    typical_weekday: str = Field("", description="典型的な平日の概形（1パラグラフ）")
+    typical_weekend: str = Field("", description="典型的な週末の概形（1パラグラフ）")
+    habits_routines: list[str] = Field(default_factory=list, description="習慣・ルーティン（3-5個）")
+    hobbies_leisure: list[str] = Field(default_factory=list, description="趣味・余暇の使い方（2-3個）")
     weekly_schedule: list[dict] = Field(default_factory=list)
     living_situation: str = ""
 
 class DreamTimeline(BaseModel):
-    """夢の時系列"""
+    """夢の時系列（v2 §6.3.4準拠）"""
     childhood_dream: str = ""
+    late_teens_dream: str = Field("", description="10代後半の夢")
+    setback_or_turning_point: str = Field("", description="挫折・転機（いつ、何が起きてどう変わったか）")
     current_dream: str = ""
-    dream_origin: str = Field("", description="夢の根にある何か（1文）")
+    long_term_dream: str = Field("", description="長期的な夢・目標")
+    mid_term_dream: str = Field("", description="中期的な目標")
+    short_term_dream: str = Field("", description="短期的な目標")
+    dream_origin: str = Field("", description="夢の根にある何か（1文、価値観との接続）")
     timeline: list[dict] = Field(default_factory=list)
 
 class VoiceFingerprint(BaseModel):
-    """言語的指紋"""
+    """言語的指紋（v2 §6.3.4準拠）"""
     first_person: str = Field("", description="一人称")
+    second_person_by_context: dict[str, str] = Field(default_factory=dict, description="状況別二人称（to_intimate/to_superior/to_stranger）")
     speech_patterns: list[str] = Field(default_factory=list, description="口癖")
+    catchphrases: list[str] = Field(default_factory=list, description="口癖（実際のフレーズ、3-5個）")
     sentence_endings: list[str] = Field(default_factory=list, description="文末表現")
     kanji_hiragana_tendency: str = ""
+    emoji_usage: str = Field("", description="絵文字・記号の使用傾向（使う/使わない/限定的）")
+    self_questioning_frequency: str = Field("", description="自問形式の頻度（よく自問する/しない）")
+    metaphor_irony_frequency: str = Field("", description="比喩・反語の頻度（よく使う/控えめ）")
     avoided_words: list[str] = Field(default_factory=list, description="避ける語彙")
 
 class ValuesCore(BaseModel):
