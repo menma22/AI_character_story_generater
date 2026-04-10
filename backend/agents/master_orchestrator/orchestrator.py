@@ -63,6 +63,7 @@ class MasterOrchestrator:
             CharacterPackage
         """
         await self._notify("Master Orchestratorを起動します。全Phaseを順次実行します。")
+        await self._checkpoint()  # セッション開始時にディレクトリと基本パッケージを保存
         
         from backend.agents.evaluators.pipeline import EvaluatorPipeline
         evaluator = EvaluatorPipeline(profile=self.profile, ws_manager=self.ws)
@@ -116,7 +117,10 @@ class MasterOrchestrator:
             all_eval_results.extend(best_evals)
             return best_result
         
+            return best_result
+        
         # ─── Tier -1: Creative Director ───────────────────────
+        await self._checkpoint() # 直前に保存
         if not self.package.concept_package:
             await self._progress("creative_director", 0.0, "Creative Director起動中...")
             director = CreativeDirector(profile=self.profile, ws_manager=self.ws)

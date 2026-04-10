@@ -545,6 +545,26 @@ async def call_llm_agentic_gemini(
             if manager:
                 await manager.send_error(error_msg)
             raise TimeoutError(error_msg)
+        except Exception as e:
+            # MALFORMED_FUNCTION_CALL などのSDKエラーが発生した場合のリトライ
+            if "MALFORMED_FUNCTION_CALL" in str(e) or "finish_reason" in str(e):
+                warn_msg = "[System] Gemini SDKのプロトコルエラーを検知しました。テキストフォールバックで自動復旧を試みます。"
+                logger.warning(f"[call_llm_agentic_gemini] {warn_msg}: {e}")
+                if manager:
+                    await manager.send_agent_thought("System", warn_msg, "warning")
+                
+                # 直前のツール実行結果がある場合は、それをテキストとして履歴に追加して再送
+                if isinstance(current_message, genai.protos.Part) and current_message.function_response:
+                    call_name = current_message.function_response.name
+                    resp_data = current_message.function_response.response
+                    fallback_text = f"【システム通知】前回のツール '{call_name}' の実行結果は以下の通りです。この情報を元に思考を継続してください:\n{json.dumps(resp_data, ensure_ascii=False)}"
+                    # 履歴を一度戻し、テキストとして追加
+                    chat.history.pop() # 失敗したメッセージ送信を履歴から消す（SDKが自動追加している場合がある）
+                    response = await asyncio.to_thread(chat.send_message, fallback_text)
+                else:
+                    raise e
+            else:
+                raise e
         
         # トークン記録
         usage = {
@@ -553,7 +573,21 @@ async def call_llm_agentic_gemini(
         }
         token_tracker.record(model_name, usage)
         
-        # モデルの回答確認
+        # モデルの回答確認 (安全性のチェックを追加)
+        if not response.candidates or not response.candidates[0].content.parts:
+            warn_msg = "[System] Geminiから有効な回答が得られませんでした（セーフティフィルター等の影響の可能性があります）。再試行します。"
+            logger.warning(f"[call_llm_agentic_gemini] {warn_msg}")
+            if manager:
+                await manager.send_agent_thought("System", warn_msg, "warning")
+            
+            # 履歴を戻して再試行
+            if len(chat.history) > 0:
+                chat.history.pop()
+            response = await asyncio.to_thread(chat.send_message, "前回の指示を、別の表現で再実行してください。")
+            
+            if not response.candidates or not response.candidates[0].content.parts:
+                raise ValueError("Geminiから有効な回答を得られませんでした。")
+
         part = response.candidates[0].content.parts[0]
         
         if part.function_call:
