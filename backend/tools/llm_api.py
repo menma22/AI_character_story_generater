@@ -4,6 +4,7 @@ Anthropic (Opus/Sonnet) と Google AI Studio (Gemma 4) を統一インターフ�
 Prompt Caching対応、トークン消費追跡付き。
 """
 
+import asyncio
 import json
 import logging
 from typing import Any, Optional
@@ -239,7 +240,7 @@ async def call_gemma(
     )
     
     try:
-        response = gmodel.generate_content(user_message)
+        response = await asyncio.to_thread(gmodel.generate_content, user_message)
         
         content = response.text if response.text else ""
         usage = {
@@ -527,7 +528,7 @@ async def call_llm_agentic_gemini(
     for i in range(max_iterations):
         logger.info(f"[call_llm_agentic_gemini] Iteration {i+1}/{max_iterations}")
         
-        response = chat.send_message(current_message)
+        response = await asyncio.to_thread(chat.send_message, current_message)
         
         # トークン記録
         usage = {
