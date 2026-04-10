@@ -185,12 +185,12 @@ class PhaseDOrchestrator:
         await self._notify("Step 1-2: 世界設定 + 周囲人物を並列生成")
         
         world_task = call_llm(
-            tier="gemma", system_prompt=WORLD_CONTEXT_PROMPT,
+            tier=self.profile.worker_tier, system_prompt=WORLD_CONTEXT_PROMPT,
             user_message=f"{context}\n\n世界設定を生成してください。",
             max_tokens=1000, json_mode=True,
         )
         chars_task = call_llm(
-            tier="gemma", system_prompt=SUPPORTING_CHARACTERS_PROMPT,
+            tier=self.profile.worker_tier, system_prompt=SUPPORTING_CHARACTERS_PROMPT,
             user_message=f"{context}\n\n周囲の人物を設計してください。",
             max_tokens=3000, json_mode=True,
         )
@@ -216,12 +216,12 @@ class PhaseDOrchestrator:
         chars_json = json.dumps([c.model_dump(mode="json") for c in supporting_chars], ensure_ascii=False)
         
         arc_task = call_llm(
-            tier="opus", system_prompt=NARRATIVE_ARC_PROMPT,
+            tier=self.profile.director_tier, system_prompt=NARRATIVE_ARC_PROMPT,
             user_message=f"{context}\n\n世界設定:\n{json.dumps(world_data, ensure_ascii=False)}\n\n周囲人物:\n{chars_json}\n\n物語アークを設計してください。",
             max_tokens=4000, json_mode=True, cache_system=True,
         )
         conflict_task = call_llm(
-            tier="gemma", system_prompt=CONFLICT_INTENSITY_PROMPT,
+            tier=self.profile.worker_tier, system_prompt=CONFLICT_INTENSITY_PROMPT,
             user_message=f"concept_package:\n{json.dumps(self.concept.model_dump(mode='json'), ensure_ascii=False)}\n\n葛藤強度アークを設定してください。",
             max_tokens=500, json_mode=True,
         )
@@ -248,7 +248,7 @@ class PhaseDOrchestrator:
         await self._notify("Step 5: 28-42件のイベントを一括生成中... (Opus)")
         
         event_result = await call_llm(
-            tier="opus",
+            tier=self.profile.director_tier,
             system_prompt=WEEKLY_EVENT_WRITER_PROMPT,
             user_message=(
                 f"{context}\n\n"

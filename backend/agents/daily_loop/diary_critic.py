@@ -30,9 +30,10 @@ AI_SMELL_WORDS = [
 class DiarySelfCritic:
     """日記出力チェック（Self-Critic）"""
     
-    def __init__(self, voice_fingerprint: VoiceFingerprint, ws_manager=None):
+    def __init__(self, voice_fingerprint: VoiceFingerprint, ws_manager=None, tier: str = "gemma"):
         self.voice = voice_fingerprint
         self.ws = ws_manager
+        self.tier = tier
     
     async def _notify(self, content: str, status: str = "thinking"):
         if self.ws:
@@ -99,7 +100,7 @@ class DiarySelfCritic:
         await self._notify(f"問題検出: {len(issues)}件 → 修正中...")
         
         result = await call_llm(
-            tier="gemma",
+            tier=self.tier,
             system_prompt=f"""あなたは日記修正エージェントです。
 以下の日記を修正してください。
 

@@ -146,7 +146,8 @@ async def handle_ws_message(data: dict, websocket: WebSocket):
         # 日記生成開始
         package_name = data.get("package_name", "")
         days = data.get("days", 7)
-        task = asyncio.create_task(run_diary_generation(package_name, days))
+        profile_name = data.get("profile", AppConfig.DEFAULT_PROFILE)
+        task = asyncio.create_task(run_diary_generation(package_name, days, profile_name))
         ws_active_tasks[id(websocket)] = task
         
         # 完了時に辞書から削除
@@ -254,7 +255,7 @@ async def _finalize_character_generation(package):
     })
 
 
-async def run_diary_generation(package_name: str, days: int = 7):
+async def run_diary_generation(package_name: str, days: int = 7, profile_name: str = None):
     """日記生成パイプライン全体を実行"""
     from backend.agents.daily_loop.orchestrator import DailyLoopOrchestrator
     
@@ -270,7 +271,8 @@ async def run_diary_generation(package_name: str, days: int = 7):
         
         await manager.send_progress("diary_init", 0.0, "日記生成を開始します...")
         
-        orchestrator = DailyLoopOrchestrator(package=package, ws_manager=manager)
+        target_profile = PROFILES.get(profile_name, PROFILES["draft"])
+        orchestrator = DailyLoopOrchestrator(package=package, profile=target_profile, ws_manager=manager)
         results = await orchestrator.run(days=days)
         
         # 日記を保存

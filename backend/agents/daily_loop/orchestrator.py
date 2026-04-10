@@ -53,8 +53,9 @@ logger = logging.getLogger(__name__)
 class DailyLoopOrchestrator:
     """Day 1-7 日次ループオーケストレータ（v10 §4 完全準拠）"""
     
-    def __init__(self, package: CharacterPackage, ws_manager=None):
+    def __init__(self, package: CharacterPackage, profile: EvaluationProfile, ws_manager=None):
         self.package = package
+        self.profile = profile
         self.ws = ws_manager
         
         # 状態
@@ -70,14 +71,14 @@ class DailyLoopOrchestrator:
                 self.package.micro_parameters, ws_manager
             )
         
-        self.verification_agent = OutputVerificationAgent(ws_manager)
-        self.next_day_agent = NextDayPlanningAgent(ws_manager)
+        self.verification_agent = OutputVerificationAgent(ws_manager, tier=self.profile.worker_tier)
+        self.next_day_agent = NextDayPlanningAgent(ws_manager, tier=self.profile.worker_tier)
         
         self.diary_critic = None
         if (self.package.macro_profile and 
             self.package.macro_profile.voice_fingerprint):
             self.diary_critic = DiarySelfCritic(
-                self.package.macro_profile.voice_fingerprint, ws_manager
+                self.package.macro_profile.voice_fingerprint, ws_manager, tier=self.profile.worker_tier
             )
     
     async def _notify(self, content: str, status: str = "thinking"):
@@ -666,13 +667,22 @@ class DailyLoopOrchestrator:
         
         await self._notify("日記生成エージェントを自律モードで起動...")
         
-        await call_llm_agentic(
-            tier="opus",
-            system_prompt=system_prompt,
-            user_message=user_message,
-            tools=tools,
-            max_iterations=6,
-        )
+        if self.profile.worker_tier in ("opus", "sonnet"):
+            await call_llm_agentic(
+                tier=self.profile.worker_tier,
+                system_prompt=system_prompt,
+                user_message=user_message,
+                tools=tools,
+                max_iterations=6,
+            )
+        elif self.profile.worker_tier == "gemini":
+            from backend.tools.llm_api import call_llm_agentic_gemini
+            await call_llm_agentic_gemini(
+                system_prompt=system_prompt,
+                user_message=user_message,
+                tools=tools,
+                max_iterations=6,
+            )
         
         if not final_diary_content:
             logger.warning("Agentic loop finished without submitting final diary.")
@@ -727,7 +737,7 @@ class DailyLoopOrchestrator:
                     # LLMで2/3に圧縮
                     if mem.char_count > 200:
                         compressed = await call_llm(
-                            tier="gemma",
+                            tier=self.profile.worker_tier,
                             system_prompt="以下のテキストを、重要な出来事を保持しつつ元の2/3程度に圧縮してください。JSON: {\"compressed\": \"...\"}",
                             user_message=mem.summary,
                             max_tokens=500,

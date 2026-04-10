@@ -221,6 +221,7 @@ class PhaseA1Orchestrator:
             f"concept_package:\n{concept_json}",
             BasicInfo,
             self.ws,
+            tier=self.profile.worker_tier,
         )
         
         basic_json = json.dumps(basic_info.model_dump(mode="json"), ensure_ascii=False)
@@ -230,15 +231,15 @@ class PhaseA1Orchestrator:
         
         results = await asyncio.gather(
             run_worker_with_validation("FamilyWorker", FAMILY_PROMPT,
-                       f"concept_package:\n{concept_json}\n\nbasic_info:\n{basic_json}", FamilyAndIntimacy, self.ws),
+                       f"concept_package:\n{concept_json}\n\nbasic_info:\n{basic_json}", FamilyAndIntimacy, self.ws, tier=self.profile.worker_tier),
             run_worker_with_validation("LifestyleWorker", LIFESTYLE_PROMPT,
-                       f"concept_package:\n{concept_json}\n\nbasic_info:\n{basic_json}", CurrentLifeOutline, self.ws),
+                       f"concept_package:\n{concept_json}\n\nbasic_info:\n{basic_json}", CurrentLifeOutline, self.ws, tier=self.profile.worker_tier),
             run_worker_with_validation("DreamWorker", DREAM_PROMPT,
-                       f"concept_package:\n{concept_json}\n\nbasic_info:\n{basic_json}", DreamTimeline, self.ws),
+                       f"concept_package:\n{concept_json}\n\nbasic_info:\n{basic_json}", DreamTimeline, self.ws, tier=self.profile.worker_tier),
             run_worker_with_validation("VoiceWorker", VOICE_PROMPT,
-                       f"concept_package:\n{concept_json}\n\nbasic_info:\n{basic_json}", VoiceFingerprint, self.ws),
+                       f"concept_package:\n{concept_json}\n\nbasic_info:\n{basic_json}", VoiceFingerprint, self.ws, tier=self.profile.worker_tier),
             run_worker_with_validation("ValuesCoreWorker", VALUES_CORE_PROMPT,
-                       f"concept_package:\n{concept_json}\n\nbasic_info:\n{basic_json}", ValuesCore, self.ws),
+                       f"concept_package:\n{concept_json}\n\nbasic_info:\n{basic_json}", ValuesCore, self.ws, tier=self.profile.worker_tier),
         )
         
         family_obj, lifestyle_obj, dream_obj, voice_obj, values_obj = results
@@ -250,6 +251,7 @@ class PhaseA1Orchestrator:
             f"concept_package:\n{concept_json}\n\nbasic_info:\n{basic_json}\n\nvalues_core:\n{json.dumps(values_obj.model_dump(mode='json'), ensure_ascii=False)}",
             Secret,
             self.ws,
+            tier=self.profile.worker_tier,
         )
         
         # Step 4: RelationshipNetwork（Family依存）
@@ -259,12 +261,13 @@ class PhaseA1Orchestrator:
             f"concept_package:\n{concept_json}\n\nbasic_info:\n{basic_json}\n\nfamily:\n{json.dumps(family_obj.model_dump(mode='json'), ensure_ascii=False)}",
             RelationshipNetwork,
             self.ws,
+            tier=self.profile.worker_tier,
         )
         
         # Step 5: 全情報を統合したMarkdownプロセの生成 (ハイブリッド化)
         await self._notify("Step 5: プロフィール統合Markdownを生成中...")
         summary_prose = await call_llm(
-            tier="gemma", # 記述力の高いモデルを推奨
+            tier=self.profile.worker_tier, # 修正: プロファイル設定に従う
             system_prompt=SUMMARY_PROMPT,
             user_message=f"これまでの生成結果:\n{json.dumps(basic_info.model_dump(), ensure_ascii=False)}\n{json.dumps(family_obj.model_dump(), ensure_ascii=False)}\n{json.dumps(lifestyle_obj.model_dump(), ensure_ascii=False)}\n{json.dumps(dream_obj.model_dump(), ensure_ascii=False)}\n{json.dumps(voice_obj.model_dump(), ensure_ascii=False)}\n{json.dumps(values_obj.model_dump(), ensure_ascii=False)}\n{json.dumps(secret_obj.model_dump(), ensure_ascii=False)}",
             max_tokens=2000,

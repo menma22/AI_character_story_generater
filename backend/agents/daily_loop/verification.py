@@ -37,8 +37,9 @@ LEAK_KEYWORDS = [
 class OutputVerificationAgent:
     """裏方出力検証エージェント"""
     
-    def __init__(self, ws_manager=None):
+    def __init__(self, ws_manager=None, tier: str = "gemma"):
         self.ws = ws_manager
+        self.tier = tier
     
     async def _notify(self, content: str, status: str = "thinking"):
         if self.ws:
@@ -83,7 +84,7 @@ class OutputVerificationAgent:
         await self._notify(f"漏洩検出: {', '.join(keyword_hits[:5])} → 修正中...")
         
         result = await call_llm(
-            tier="gemma",
+            tier=self.tier,
             system_prompt="""あなたは出力修正エージェントです。
 以下のPerceiverとImpulsive Agentの出力から、気質・性格パラメータの名前、ID番号、
 学術用語が含まれている場合、それらを自然言語の体験記述に置き換えてください。

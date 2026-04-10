@@ -48,6 +48,8 @@ class EvaluationProfile:
     distribution_validator_enabled: bool = True     # ルールベース、常にTrue推奨
     narrative_connection_auditor_enabled: bool = False
     worker_regeneration_max_iterations: int = 1
+    director_tier: str = "opus"                    # "opus" | "sonnet" | "gemini"
+    worker_tier: str = "sonnet"                    # "opus" | "sonnet" | "gemini" | "gemma"
 
 
 PROFILES = {

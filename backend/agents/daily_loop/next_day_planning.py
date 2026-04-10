@@ -32,8 +32,9 @@ logger = logging.getLogger(__name__)
 class NextDayPlanningAgent:
     """翌日予定追加エージェント（Stage 1 + Stage 2）"""
     
-    def __init__(self, ws_manager=None):
+    def __init__(self, ws_manager=None, tier: str = "gemma"):
         self.ws = ws_manager
+        self.tier = tier
     
     async def _notify(self, content: str, status: str = "thinking"):
         if self.ws:
@@ -57,7 +58,7 @@ class NextDayPlanningAgent:
         await self._notify(f"Stage 1: Day {day}の主人公が明日の計画を考えています...")
         
         result = await call_llm(
-            tier="gemma",
+            tier=self.tier,
             system_prompt=f"""あなたはキャラクター本人として、今日の日記を書いた後に
 「明日やりたいこと」を考えるエージェントです。
 
@@ -137,8 +138,9 @@ class NextDayPlanningAgent:
         ])
         
         result = await call_llm(
-            tier="gemma",
-            system_prompt="""あなたは翌日予定の整合性調整AIです（裏方、主人公からは見えない）。
+            tier=self.tier,
+            system_prompt="""あなたは翌日予定の整合性調整AIです
+（裏方、主人公からは見えない）。
 
 【タスク】
 主人公が「明日やりたい」と言った3つの計画のうち、

@@ -111,7 +111,7 @@ class PhaseA3Orchestrator:
         # Step 1: EpisodePlanner
         await self._notify("Step 1: エピソード計画")
         plan_result = await call_llm(
-            tier="opus",
+            tier=self.profile.director_tier,
             system_prompt=EPISODE_PLANNER_PROMPT,
             user_message=context,
             max_tokens=3000,
@@ -133,7 +133,7 @@ class PhaseA3Orchestrator:
                 await self.ws.send_agent_thought(f"[A-3] Writer ({ep_id})", "執筆中...", "thinking")
             
             result = await call_llm(
-                tier="gemma",
+                tier=self.profile.worker_tier,
                 system_prompt=EPISODE_WRITER_PROMPT,
                 user_message=(
                     f"{context}\n\n"

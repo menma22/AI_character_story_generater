@@ -287,13 +287,25 @@ class CreativeDirector:
         
         agentic_sys_prompt = SYSTEM_PROMPT + "\n\n【エージェンティック行動指針】\n1. まずドラフトを作成する\n2. 必ず `request_critique` ツールを用いて自身のドラフトを自身で客観的に評価する\n3. 評価が 'refine'（不合格）だったら、指摘事項に沿って自身の構成案を修正し、再度 `request_critique` を呼び出す\n4. 評価が 'pass'（合格）になったら、絶対に妥協せず、`submit_final_concept` ツールを呼び出して最終データを提出する"
         
-        await call_llm_agentic(
-            tier="opus",
-            system_prompt=agentic_sys_prompt,
-            user_message=user_msg,
-            tools=tools,
-            max_iterations=self.max_iterations * 3,
-        )
+        # 指定されたTierに応じて独立したAgentic Loopを呼び出す
+        if self.profile.director_tier in ("opus", "sonnet"):
+            await call_llm_agentic(
+                tier=self.profile.director_tier,
+                system_prompt=agentic_sys_prompt,
+                user_message=user_msg,
+                tools=tools,
+                max_iterations=self.max_iterations * 3,
+            )
+        elif self.profile.director_tier == "gemini":
+            from backend.tools.llm_api import call_llm_agentic_gemini
+            await call_llm_agentic_gemini(
+                system_prompt=agentic_sys_prompt,
+                user_message=user_msg,
+                tools=tools,
+                max_iterations=self.max_iterations * 3,
+            )
+        else:
+            raise ValueError(f"Unsupported director tier: {self.profile.director_tier}")
         
         if not final_concept_data:
             raise RuntimeError("Creative Directorがコンセプトの提出（submit_final_concept）を行わずに終了しました。リサーチ不足またはAIの判断エラーの可能性があります。")

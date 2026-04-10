@@ -113,7 +113,8 @@ class PhaseA2Orchestrator:
                 f"出力形式: {{'parameters': [{{'id': 番号, 'name': '英語名', 'value': 1.0-5.0, 'natural_language': '詳細'}}]}}"
             ),
             ParameterList,
-            self.ws
+            self.ws,
+            tier=self.profile.worker_tier,
         )
         
         return result.parameters
@@ -134,7 +135,8 @@ Schwartz 19価値それぞれにstrong/medium/weakを付与し、
                 f"規範層を生成してください。"
             ),
             NormativeLayer,
-            self.ws
+            self.ws,
+            tier=self.profile.worker_tier,
         )
         
         return result

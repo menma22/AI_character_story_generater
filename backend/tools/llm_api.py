@@ -293,21 +293,16 @@ async def call_llm(
     """
     if tier in ("opus", "sonnet"):
         model_name = LLMModels.OPUS if tier == "opus" else LLMModels.SONNET
-        try:
-            return await call_anthropic(
-                model=model_name,
-                system_prompt=system_prompt,
-                user_message=user_message,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                cache_system=cache_system,
-                cache_context=cache_context,
-                json_mode=json_mode,
-            )
-        except Exception as e:
-            logger.warning(f"[llm_api] Anthropic fallback triggered due to: {e}. Falling back to Gemini 2.5 Pro.")
-            # エラー時はGemini 2.5 Proへフォールバック
-            tier = "gemini"
+        return await call_anthropic(
+            model=model_name,
+            system_prompt=system_prompt,
+            user_message=user_message,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            cache_system=cache_system,
+            cache_context=cache_context,
+            json_mode=json_mode,
+        )
             
     if tier == "gemini":
         return await call_gemma(
@@ -476,3 +471,102 @@ async def call_llm_agentic(
     
     logger.warning("[call_llm_agentic] Hit max iterations without final resolution.")
     return next((getattr(block, "text", "") for block in messages[-1]["content"] if getattr(block, "type", "") == "text"), "")
+
+
+async def call_llm_agentic_gemini(
+    system_prompt: str,
+    user_message: str,
+    tools: list[AgentTool],
+    max_iterations: int = 10,
+    max_tokens: int = 4096,
+    temperature: float = 0.7,
+) -> Any:
+    """
+    Google Geminiを用いた自立ループの実装 (Claude版とは完全にロジックを分離)
+    """
+    configure_gemma()
+    model_name = LLMModels.GEMINI_2_5_PRO
+    
+    # Tool定義の変換
+    gemini_tools = [
+        genai.types.FunctionDeclaration(
+            name=t.name,
+            description=t.description,
+            parameters=t.input_schema,
+        )
+        for t in tools
+    ]
+    tool_map = {t.name: t.handler for t in tools}
+    
+    gmodel = genai.GenerativeModel(
+        model_name=model_name,
+        system_instruction=system_prompt,
+        tools=gemini_tools,
+        generation_config=genai.types.GenerationConfig(
+            max_output_tokens=max_tokens,
+            temperature=temperature,
+        )
+    )
+    
+    chat = gmodel.start_chat(history=[])
+    current_message = user_message
+    
+    for i in range(max_iterations):
+        logger.info(f"[call_llm_agentic_gemini] Iteration {i+1}/{max_iterations}")
+        
+        response = chat.send_message(current_message)
+        
+        # トークン記録
+        usage = {
+            "input_tokens": getattr(response.usage_metadata, "prompt_token_count", 0),
+            "output_tokens": getattr(response.usage_metadata, "candidates_token_count", 0),
+        }
+        token_tracker.record(model_name, usage)
+        
+        # モデルの回答確認
+        part = response.candidates[0].content.parts[0]
+        
+        if part.function_call:
+            call = part.function_call
+            logger.info(f"[call_llm_agentic_gemini] Tool called: {call.name}")
+            
+            if call.name in tool_map:
+                try:
+                    handler = tool_map[call.name]
+                    import inspect
+                    # 引数のマッピング (GenerativeModelの引数は辞書形式)
+                    args = {k: v for k, v in call.args.items()}
+                    
+                    if inspect.iscoroutinefunction(handler):
+                        result_data = await handler(**args)
+                    else:
+                        result_data = handler(**args)
+                        
+                    is_error = False
+                except Exception as e:
+                    logger.error(f"[call_llm_agentic_gemini] Tool '{call.name}' failed: {e}")
+                    result_data = {"error": str(e)}
+                    is_error = True
+            else:
+                result_data = {"error": f"Tool '{call.name}' not found."}
+                is_error = True
+            
+            # ツール結果を返信してループ継続
+            current_message = genai.types.Part.from_function_response(
+                name=call.name,
+                response=result_data
+            )
+            
+            # submit_ツールが成功したなら終了
+            if call.name.startswith("submit_") and not is_error:
+                logger.info("[call_llm_agentic_gemini] Final submit tool called successfully.")
+                return "Success"
+        else:
+            # ツールを使用しなかった場合
+            final_text = part.text
+            logger.warning("[call_llm_agentic_gemini] Returned without tool_use.")
+            # ツール使用を強制するためのメッセージを追加
+            current_message = "指示: 用意されたツールのいずれかを呼び出してください。プロファイルを提出する場合は submit_concept を使用してください。"
+
+    logger.warning("[call_llm_agentic_gemini] Hit max iterations.")
+    return chat.history[-1].parts[0].text
