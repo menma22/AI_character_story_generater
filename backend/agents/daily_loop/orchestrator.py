@@ -333,7 +333,7 @@ class DailyLoopOrchestrator:
             await self._notify(f"行動案のシミュレーション中: {action_idea[:30]}...")
             
             res = await call_llm(
-                tier="sonnet",
+                tier=self.profile.worker_tier,
                 system_prompt="あなたは主人公の行動シミュレーターです。この行動をとった場合の良い点・悪い点、および自身の持つ価値観への違反度（罪悪感を生むか）をフィードバックしてください。JSON形式: {\"pros\": \"...\", \"cons\": \"...\", \"values_violation_risk\": \"high/medium/low\", \"feedback\": \"...\"}",
                 user_message=f"【自己の価値観】\n{values_context}\n\n【検討中の行動案】\n{action_idea}",
                 json_mode=True
@@ -423,14 +423,33 @@ class DailyLoopOrchestrator:
         )
         
         await self._notify("統合エージェント（行動決定）をエージェンティックモードで起動...")
-        
-        await call_llm_agentic(
-            tier="opus",
-            system_prompt=system_prompt,
-            user_message=user_message,
-            tools=tools,
-            max_iterations=6,  # 決定プロセスなら6回程度で十分
-        )
+
+        if self.profile.worker_tier in ("opus", "sonnet"):
+            try:
+                await call_llm_agentic(
+                    tier=self.profile.worker_tier,
+                    system_prompt=system_prompt,
+                    user_message=user_message,
+                    tools=tools,
+                    max_iterations=6,
+                )
+            except Exception as e:
+                logger.warning(f"[DailyLoop] Integration: Claude ({self.profile.worker_tier}) agentic failed: {e}. Falling back to Gemini.")
+                from backend.tools.llm_api import call_llm_agentic_gemini
+                await call_llm_agentic_gemini(
+                    system_prompt=system_prompt,
+                    user_message=user_message,
+                    tools=tools,
+                    max_iterations=6,
+                )
+        elif self.profile.worker_tier in ("gemini", "gemma"):
+            from backend.tools.llm_api import call_llm_agentic_gemini
+            await call_llm_agentic_gemini(
+                system_prompt=system_prompt,
+                user_message=user_message,
+                tools=tools,
+                max_iterations=6,
+            )
         
         if not final_decision_data:
             # Fallback
@@ -753,7 +772,7 @@ class DailyLoopOrchestrator:
                     tools=tools,
                     max_iterations=6,
                 )
-        elif self.profile.worker_tier == "gemini":
+        elif self.profile.worker_tier in ("gemini", "gemma"):
             from backend.tools.llm_api import call_llm_agentic_gemini
             await call_llm_agentic_gemini(
                 system_prompt=system_prompt,
@@ -761,7 +780,7 @@ class DailyLoopOrchestrator:
                 tools=tools,
                 max_iterations=6,
             )
-        
+
         if not final_diary_content:
             logger.warning("Agentic loop finished without submitting final diary.")
             final_diary_content = "(本日は何も書く気になれなかった)"
