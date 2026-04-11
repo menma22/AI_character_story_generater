@@ -553,25 +553,25 @@ async def call_llm_agentic_gemini(
                 if manager:
                     await manager.send_agent_thought("System", warn_msg, "warning")
                 
-                # 直前のツール実行結果がある場合は、それをテキストとして履歴に追加して再送
+                # フォールバックテキストの組み立て
                 if isinstance(current_message, genai.protos.Part) and current_message.function_response:
                     call_name = current_message.function_response.name
                     resp_data = current_message.function_response.response
                     fallback_text = f"【システム通知】前回のツール '{call_name}' の実行結果は以下の通りです。この情報を元に思考を継続してください:\n{json.dumps(resp_data, ensure_ascii=False, default=str)}"
-                    # 履歴を一度戻し、テキストとして追加
-                    try:
-                        chat.history.pop()
-                    except (IndexError, Exception):
-                        pass
-                    response = await asyncio.to_thread(chat.send_message, fallback_text)
                 else:
-                    # 初回メッセージやテキストメッセージの場合もリトライ
-                    fallback_text = "前回の指示でエラーが発生しました。ツールを正しく呼び出してください。JSONの引数に問題がないか確認し、再度実行してください。"
-                    try:
-                        chat.history.pop()
-                    except (IndexError, Exception):
-                        pass
+                    fallback_text = "前回の指示でツール呼び出し形式エラーが発生しました。ツールを正しいJSON引数で呼び出してください。"
+
+                # 履歴を戻してフォールバック送信（フォールバック自体が失敗してもcontinueで回復）
+                try:
+                    chat.history.pop()
+                except (IndexError, Exception):
+                    pass
+                try:
                     response = await asyncio.to_thread(chat.send_message, fallback_text)
+                except Exception as fallback_err:
+                    logger.warning(f"[call_llm_agentic_gemini] Fallback also failed: {fallback_err}. Retrying next iteration.")
+                    current_message = "ツール呼び出しで問題が発生しています。引数を単純化して再度お試しください。"
+                    continue
             else:
                 raise e
         
