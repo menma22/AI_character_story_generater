@@ -551,9 +551,9 @@ async def call_llm_agentic_gemini(
             max_output_tokens=max_tokens,
             temperature=temperature,
         ),
-        tool_config=genai.types.content_types.ToolConfig(
-            function_calling_config=genai.types.content_types.FunctionCallingConfig(
-                mode="ANY"
+        tool_config=genai.protos.ToolConfig(
+            function_calling_config=genai.protos.FunctionCallingConfig(
+                mode=genai.protos.FunctionCallingConfig.Mode.ANY
             )
         ),
     )
