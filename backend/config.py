@@ -47,6 +47,7 @@ class EvaluationProfile:
     distribution_validator_enabled: bool = True     # ルールベース、常にTrue推奨
     narrative_connection_auditor_enabled: bool = False
     worker_regeneration_max_iterations: int = 1
+    min_research_searches: int = 3                 # Creative Directorが批評前に必須の検索回数
     director_tier: str = "opus"                    # "opus" | "sonnet" | "gemini"
     worker_tier: str = "sonnet"                    # "opus" | "sonnet" | "gemini"
 
@@ -62,6 +63,7 @@ PROFILES = {
         event_metadata_auditor_enabled=True,
         narrative_connection_auditor_enabled=True,
         worker_regeneration_max_iterations=4,
+        min_research_searches=5,
     ),
     "standard": EvaluationProfile(
         name="standard",
@@ -86,6 +88,7 @@ PROFILES = {
         event_metadata_auditor_enabled=True,
         narrative_connection_auditor_enabled=False,
         worker_regeneration_max_iterations=2,
+        min_research_searches=2,
         director_tier="sonnet",
         worker_tier="gemini",
     ),
@@ -99,6 +102,7 @@ PROFILES = {
         event_metadata_auditor_enabled=False,
         narrative_connection_auditor_enabled=False,
         worker_regeneration_max_iterations=2,
+        min_research_searches=1,
         director_tier="sonnet",
         worker_tier="gemini",
     ),
