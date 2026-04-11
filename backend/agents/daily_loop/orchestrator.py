@@ -215,26 +215,30 @@ class DailyLoopOrchestrator:
         
         result = await call_llm(
             tier="gemma",
-            system_prompt="""あなたはこのキャラクターの「裏方の知覚エージェント（Perceiver）」です。
-キャラ本人には見えない気質・性格パラメータを読み取り、
-それに基づいて「今このキャラが知覚した内容」を生成してください。
+            system_prompt="""あなたはこのキャラクターの「衝動的感覚を司るエージェント（Perceiver）」です。
+キャラ本人にとっては無意識下にある気質・性格パラメータを読み取り、
+それに基づいて「今このキャラがイベントを受け取り、衝動的、感情的に生まれた内面的な心の動きを詳細に分析したレポート」を生成してください。
+あなたの出力は、理性側の分析レポートと共に、キャラクター本人の意識下に渡されます。
 
-【出力する3要素のみ】
-以下の3セクションを、Markdownのセクションヘッダー（##）で区切って出力してください。
+
+必ず、以下のセクションを、Markdownのセクションヘッダー（##）で区切って出力してください。
 
 ## 現象的記述
 （五感を使った描写、4-6文。視覚・聴覚・触覚・嗅覚を含む具体的な知覚描写）
 
 ## 反射的感情反応
-（身体感覚レベルの情動、2-3文。「胸がざわつく」「手のひらに汗がにじむ」等）
+（身体感覚レベルの情動、2-3文。「胸がざわつく」「手のひらに汗がにじむ」「怒りがこみ上げる」等）
 
 ## 自動的注意配分
 （何に目が行き何が視界から消えたか、2-3文）
 
+## 生じた衝動
+ (直面した出来事を受けて、キャラクターが反射的に起こした内面的反応。)
+ (例：「怒りがこみ上げ、殴りたくなった。」など、をより詳細に描き出す。)
+
 【出してはいけないもの】
 - 価値判断（「自分が悪い」「上司はひどい」）
 - 原因帰属（「なぜそうなったか」の分析）
-- 行動意思決定（「どうすべきか」）
 - 自己特性の言語化（「自分は怒りっぽい」）
 - パラメータへの直接言及（「HA高」「感情パラメータ#5が発火」等）""",
             user_message=(
@@ -450,11 +454,14 @@ class DailyLoopOrchestrator:
         )
     
     # ─── §4.6 Step 3+4: 出来事周辺情報統合エージェント (Agentic Loop) ────────
-    async def _integration(self, event: Event, impulsive: ImpulsiveOutput, reflective: ReflectiveOutput) -> IntegrationOutput:
+    async def _integration(self, event: Event, impulsive: ImpulsiveOutput, reflective: ReflectiveOutput, checker_feedback: str = "") -> IntegrationOutput:
         """出来事周辺情報統合エージェント: 行動決定 + 周辺情報 + 情景描写 + ストーリー統合（Tool-calling 自律ループ）
 
         行動決定エージェントを拡張し、出来事の周辺情報や行動後の結果、
         主人公の動きと感情をストーリーとしてまとめる役割を統合。
+
+        Args:
+            checker_feedback: 前回のチェッカー不合格時のフィードバック（再生成時のみ）
         """
         from backend.tools.llm_api import AgentTool, call_llm_agentic
 
@@ -603,15 +610,26 @@ class DailyLoopOrchestrator:
                 f"## 予測\n{reflective.prediction}"
             )
 
+        # チェッカーフィードバックがある場合（再生成時）、user_messageに追加
+        feedback_section = ""
+        if checker_feedback:
+            feedback_section = (
+                f"\n\n【重要: 前回の出力に対するチェッカーフィードバック（必ず修正してください）】\n"
+                f"{checker_feedback}\n"
+                f"上記の不整合を解消した出力を生成してください。\n"
+            )
+
         user_message = (
             f"{normative_context}{protagonist_plan_note}\n\n"
             f"【衝動ブランチの報告】\n{impulsive_text}\n\n"
             f"【理性ブランチの報告】\n{reflective_text}\n\n"
             f"【現在発生しているイベント】\n{event.content}\n"
             f"（時間帯: {event.time_slot} | {known_str} | 予想外度: {event.expectedness}）"
+            f"{feedback_section}"
         )
 
-        await self._notify("出来事周辺情報統合エージェントをエージェンティックモードで起動...")
+        retry_label = "（再生成）" if checker_feedback else ""
+        await self._notify(f"出来事周辺情報統合エージェントをエージェンティックモードで起動{retry_label}...")
 
         from backend.tools.llm_api import call_llm_agentic_gemini
 
@@ -833,7 +851,7 @@ class DailyLoopOrchestrator:
         )
     
     # ─── §4.8 日記生成 (Agentic Loop) ─────────────────────────
-    async def _generate_diary(self, day: int, events: list[EventPackage], introspection: IntrospectionMemo) -> DiaryEntry:
+    async def _generate_diary(self, day: int, events: list[EventPackage], introspection: IntrospectionMemo, checker_feedback: str = "") -> DiaryEntry:
         """日記生成（Tool-calling 自律ループ、v10 §4.8）"""
         from backend.tools.llm_api import AgentTool, call_llm_agentic
         
@@ -915,14 +933,25 @@ class DailyLoopOrchestrator:
 2. もし不合格（FAILED）が返ってきたら、指摘された点に基づいて自ら文章を書き直し、再度ツールでチェックしてください。
 3. 合格（SUCCESS）が返ってきたら、そのテキストを `submit_final_diary` ツールで提出して任務を完了してください。"""
 
+        # チェッカーフィードバック（再生成時のみ）
+        diary_feedback_section = ""
+        if checker_feedback:
+            diary_feedback_section = (
+                f"\n\n【重要: 前回の日記に対するチェッカーフィードバック（必ず修正してください）】\n"
+                f"{checker_feedback}\n"
+                f"上記の不整合を解消した日記を書いてください。\n"
+            )
+
         user_message = (
             f"Day {day}の出来事:\n{event_summaries}\n\n"
             f"内省メモ:\n{introspection.full_memo}\n\n"
             f"現在のムード: V={self.current_mood.valence:.1f} A={self.current_mood.arousal:.1f} D={self.current_mood.dominance:.1f}\n\n"
             f"記憶コンテキスト:\n{self._build_memory_context()}"
+            f"{diary_feedback_section}"
         )
-        
-        await self._notify("日記生成エージェントを自律モードで起動...")
+
+        retry_label = "（再生成）" if checker_feedback else ""
+        await self._notify(f"日記生成エージェントを自律モードで起動{retry_label}...")
         
         from backend.tools.llm_api import call_llm_agentic_gemini as _diary_gemini_fallback
 
@@ -1073,22 +1102,50 @@ class DailyLoopOrchestrator:
                         impulsive = verification["corrected_impulsive"]
                 
                 # §4.6 Step 3+4: 出来事周辺情報統合（行動決定 + 情景描写 統合）
-                integration = await self._integration(event, impulsive, reflective)
+                # チェッカーフィードバック付き再生成ループ（最大2回再試行）
+                max_integration_retries = 2
+                checker_feedback_for_integration = ""
+                for _retry_i in range(1 + max_integration_retries):
+                    integration = await self._integration(
+                        event, impulsive, reflective,
+                        checker_feedback=checker_feedback_for_integration,
+                    )
 
-                # 4つの個別チェックAI: 統合エージェント出力を検証
-                integration_check_text = (
-                    f"行動決定: {integration.final_action}\n"
-                    f"情景描写: {integration.scene_description}\n"
-                    f"後日譚: {integration.aftermath}\n"
-                    f"主人公の動き: {integration.protagonist_movement}\n"
-                    f"ストーリー: {integration.story_segment}"
-                )
-                check_results = await self._run_consistency_checks(
-                    integration_check_text, activation, "統合エージェント出力"
-                )
-                for cr in check_results:
-                    if not cr.passed:
-                        logger.warning(f"[チェッカー] {cr.checker_type} 不整合 ({cr.severity}): {'; '.join(cr.issues[:2])}")
+                    # 4つの個別チェックAI: 統合エージェント出力を検証
+                    integration_check_text = (
+                        f"行動決定: {integration.final_action}\n"
+                        f"情景描写: {integration.scene_description}\n"
+                        f"後日譚: {integration.aftermath}\n"
+                        f"主人公の動き: {integration.protagonist_movement}\n"
+                        f"ストーリー: {integration.story_segment}"
+                    )
+                    check_results = await self._run_consistency_checks(
+                        integration_check_text, activation, "統合エージェント出力"
+                    )
+
+                    # major不整合があるか判定
+                    major_issues = [cr for cr in check_results if not cr.passed and cr.severity == "major"]
+                    if not major_issues:
+                        # minor以下はログのみで通過
+                        for cr in check_results:
+                            if not cr.passed:
+                                logger.info(f"[チェッカー] {cr.checker_type} minor不整合（許容）: {'; '.join(cr.issues[:2])}")
+                        break
+
+                    # major不整合: フィードバックを構築して再生成
+                    feedback_parts = []
+                    for cr in major_issues:
+                        feedback_parts.append(
+                            f"【{cr.checker_type}チェッカー不合格】問題: {'; '.join(cr.issues)}。修正案: {cr.suggestion}"
+                        )
+                    checker_feedback_for_integration = "\n".join(feedback_parts)
+                    logger.warning(
+                        f"[チェッカー] 統合出力にmajor不整合 ({len(major_issues)}件) → 再生成 (試行{_retry_i+2}/{1+max_integration_retries})"
+                    )
+                    await self._notify(f"  チェッカー不合格({len(major_issues)}件major) → フィードバック付き再生成...")
+                else:
+                    # 最大再試行でも通過しなかった場合はそのまま使用
+                    logger.warning("[チェッカー] 統合出力: 最大再試行回数超過。現在の出力をそのまま使用。")
 
                 # §4.6c: 価値観違反チェック
                 violation = await self._values_violation(integration)
@@ -1135,24 +1192,53 @@ class DailyLoopOrchestrator:
             day_state.introspection = introspection
 
             # §4.8 日記生成 & §4.9.1 Self-Critic (Agentic統合済)
+            # チェッカーフィードバック付き再生成ループ（最大2回再試行）
             await self._notify(f"Day {day}: 日記生成（自律チェック込み）")
-            try:
-                diary = await self._generate_diary(day, day_state.events_processed, introspection)
-            except Exception as e:
-                logger.error(f"[DailyLoop] Day {day} 日記生成エラー: {e}")
-                diary = DiaryEntry(day=day, content="（日記生成に失敗しました）", mood_at_writing=self.current_mood.model_copy())
+            max_diary_retries = 2
+            checker_feedback_for_diary = ""
+            last_activation = day_state.events_processed[-1].activation_log if day_state.events_processed else ActivationLog()
+
+            for _diary_retry in range(1 + max_diary_retries):
+                try:
+                    diary = await self._generate_diary(
+                        day, day_state.events_processed, introspection,
+                        checker_feedback=checker_feedback_for_diary,
+                    )
+                except Exception as e:
+                    logger.error(f"[DailyLoop] Day {day} 日記生成エラー: {e}")
+                    diary = DiaryEntry(day=day, content="（日記生成に失敗しました）", mood_at_writing=self.current_mood.model_copy())
+                    break
+
+                # 4つの個別チェックAI: 日記出力を検証
+                if diary.content and diary.content != "（日記生成に失敗しました）":
+                    diary_check_results = await self._run_consistency_checks(
+                        diary.content, last_activation, "日記出力"
+                    )
+
+                    major_diary_issues = [cr for cr in diary_check_results if not cr.passed and cr.severity == "major"]
+                    if not major_diary_issues:
+                        for cr in diary_check_results:
+                            if not cr.passed:
+                                logger.info(f"[日記チェッカー] {cr.checker_type} minor不整合（許容）: {'; '.join(cr.issues[:2])}")
+                        break
+
+                    # major不整合: フィードバックを構築して再生成
+                    feedback_parts = []
+                    for cr in major_diary_issues:
+                        feedback_parts.append(
+                            f"【{cr.checker_type}チェッカー不合格】問題: {'; '.join(cr.issues)}。修正案: {cr.suggestion}"
+                        )
+                    checker_feedback_for_diary = "\n".join(feedback_parts)
+                    logger.warning(
+                        f"[日記チェッカー] Day {day} 日記にmajor不整合 ({len(major_diary_issues)}件) → 再生成 (試行{_diary_retry+2}/{1+max_diary_retries})"
+                    )
+                    await self._notify(f"  日記チェッカー不合格({len(major_diary_issues)}件major) → フィードバック付き再生成...")
+                else:
+                    break
+            else:
+                logger.warning(f"[日記チェッカー] Day {day}: 最大再試行回数超過。現在の日記をそのまま使用。")
 
             day_state.diary = diary
-
-            # 4つの個別チェックAI: 日記出力を検証
-            if diary.content and diary.content != "（日記生成に失敗しました）":
-                last_activation = day_state.events_processed[-1].activation_log if day_state.events_processed else ActivationLog()
-                diary_check_results = await self._run_consistency_checks(
-                    diary.content, last_activation, "日記出力"
-                )
-                for cr in diary_check_results:
-                    if not cr.passed:
-                        logger.warning(f"[日記チェッカー] {cr.checker_type} 不整合 ({cr.severity}): {'; '.join(cr.issues[:2])}")
 
             # 日記をストリーミング
             if self.ws:
