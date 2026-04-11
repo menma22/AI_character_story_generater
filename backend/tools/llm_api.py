@@ -501,21 +501,52 @@ async def call_llm_agentic_gemini(
     configure_gemma()
     model_name = LLMModels.GEMINI_2_5_PRO
     
-    # Tool定義の変換
-    gemini_tools = [
-        genai.types.FunctionDeclaration(
-            name=t.name,
-            description=t.description,
-            parameters=t.input_schema,
+    # Tool定義の変換: JSONSchema → Gemini SDK の protos.Schema 形式
+    def _jsonschema_to_gemini_schema(schema: dict) -> dict:
+        """JSONSchemaをGemini SDKが受け付ける形式に変換する。
+        Gemini SDKは 'type' を大文字の列挙型、未定義propertiesのobjectを嫌うため正規化する。
+        """
+        TYPE_MAP = {
+            "string": "STRING", "integer": "INTEGER", "number": "NUMBER",
+            "boolean": "BOOLEAN", "array": "ARRAY", "object": "OBJECT",
+        }
+        result = {}
+        if "type" in schema:
+            result["type_"] = TYPE_MAP.get(schema["type"], schema["type"])
+        if "description" in schema:
+            result["description"] = schema["description"]
+        if "properties" in schema:
+            result["properties"] = {
+                k: _jsonschema_to_gemini_schema(v)
+                for k, v in schema["properties"].items()
+            }
+        if "required" in schema:
+            result["required"] = schema["required"]
+        if "items" in schema:
+            result["items"] = _jsonschema_to_gemini_schema(schema["items"])
+        # Geminiは properties なしの "object" を嫌う → string にフォールバック
+        if result.get("type_") == "OBJECT" and "properties" not in result:
+            result["type_"] = "STRING"
+            result["description"] = result.get("description", "") + " (JSON文字列として渡してください)"
+        return result
+
+    gemini_func_decls = []
+    for t in tools:
+        params_schema = _jsonschema_to_gemini_schema(t.input_schema)
+        gemini_func_decls.append(
+            genai.protos.FunctionDeclaration(
+                name=t.name,
+                description=t.description,
+                parameters=genai.protos.Schema(**params_schema) if params_schema else None,
+            )
         )
-        for t in tools
-    ]
+    gemini_tool = genai.protos.Tool(function_declarations=gemini_func_decls)
     tool_map = {t.name: t.handler for t in tools}
-    
+
     gmodel = genai.GenerativeModel(
         model_name=model_name,
         system_instruction=system_prompt,
-        tools=gemini_tools,
+        tools=[gemini_tool],
         generation_config=genai.types.GenerationConfig(
             max_output_tokens=max_tokens,
             temperature=temperature,

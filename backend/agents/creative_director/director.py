@@ -269,6 +269,25 @@ class CreativeDirector:
             except Exception as e:
                 return {"status": "FAILED", "message": f"読み込みエラー: {e}"}
 
+        # JSON文字列パラメータ → dict 変換ラッパー（Gemini互換のため type: string で受け取る）
+        async def _request_critique_wrapper(concept_package_json: str = None, **kw) -> dict:
+            if not concept_package_json:
+                return {"status": "FAILED", "message": "ERROR: concept_package_json引数が欠落しています。"}
+            try:
+                data = json.loads(concept_package_json) if isinstance(concept_package_json, str) else concept_package_json
+            except json.JSONDecodeError:
+                return {"status": "FAILED", "message": "JSONパースエラー。正しいJSON文字列を渡してください。"}
+            return await request_critique(data)
+
+        async def _submit_final_concept_wrapper(concept_package_json: str = None, **kw) -> dict:
+            if not concept_package_json:
+                return {"status": "FAILED", "message": "ERROR: concept_package_json引数が欠落しています。"}
+            try:
+                data = json.loads(concept_package_json) if isinstance(concept_package_json, str) else concept_package_json
+            except json.JSONDecodeError:
+                return {"status": "FAILED", "message": "JSONパースエラー。正しいJSON文字列を渡してください。"}
+            return await submit_final_concept(data)
+
         tools = [
             AgentTool(
                 name="file_read",
@@ -297,27 +316,27 @@ class CreativeDirector:
             ),
             AgentTool(
                 name="request_critique",
-                description="現在のconcept_packageドラフトを厳しく評価し、面白さや心理学的深さ、Redemption Biasの有無を判定してもらいます。結果が 'pass' になるまで必ず繰り返してください。",
+                description="現在のconcept_packageドラフトを厳しく評価し、面白さや心理学的深さ、Redemption Biasの有無を判定してもらいます。結果が 'pass' になるまで必ず繰り返してください。concept_packageはJSON文字列として渡してください。",
                 input_schema={
                     "type": "object",
                     "properties": {
-                        "concept_package": {"type": "object", "description": "現在のドラフトデータ全体"}
+                        "concept_package_json": {"type": "string", "description": "現在のドラフトデータ全体のJSON文字列"}
                     },
-                    "required": ["concept_package"]
+                    "required": ["concept_package_json"]
                 },
-                handler=request_critique
+                handler=_request_critique_wrapper
             ),
             AgentTool(
                 name="submit_final_concept",
-                description="request_critiqueでの評価が 'pass' になった後、十分な品質を満たした最終的なconcept_packageをシステムに提出し、タスクを終了します。",
+                description="request_critiqueでの評価が 'pass' になった後、十分な品質を満たした最終的なconcept_packageをシステムに提出し、タスクを終了します。concept_packageはJSON文字列として渡してください。",
                 input_schema={
                     "type": "object",
                     "properties": {
-                        "concept_package": {"type": "object", "description": "完成したデータ全体"}
+                        "concept_package_json": {"type": "string", "description": "完成したデータ全体のJSON文字列"}
                     },
-                    "required": ["concept_package"]
+                    "required": ["concept_package_json"]
                 },
-                handler=submit_final_concept
+                handler=_submit_final_concept_wrapper
             )
         ]
         
@@ -359,7 +378,23 @@ class CreativeDirector:
             raise ValueError(f"Unsupported director tier: {self.profile.director_tier}")
         
         if not final_concept_data:
-            raise RuntimeError("Creative Directorがコンセプトの提出（submit_final_concept）を行わずに終了しました。リサーチ不足またはAIの判断エラーの可能性があります。")
+            # Agentic Loop が失敗した場合の非agenticフォールバック（プロンプトチェイン方式）
+            logger.warning("[CreativeDirector] Agentic loop failed to submit. Falling back to non-agentic prompt chain.")
+            await self._notify("エージェンティックループが不完全終了しました。プロンプトチェイン方式にフォールバックします...", "warning")
+
+            fallback_result = await call_llm(
+                tier="gemini",
+                system_prompt=SYSTEM_PROMPT,
+                user_message=user_msg + "\n\n上記のJSON形式で出力してください。search_webやrequest_critiqueは使えません。あなたの知識だけで最高のconcept_packageを生成してください。",
+                max_tokens=4000,
+                json_mode=True,
+            )
+
+            if isinstance(fallback_result["content"], dict):
+                final_concept_data = fallback_result["content"]
+                await self._notify("非agenticフォールバックでconcept_packageを生成しました。", "complete")
+            else:
+                raise RuntimeError("Creative Directorがconcept_packageの生成に失敗しました。APIクレジットまたはモデル応答の問題です。")
             
         final_concept_data["iteration_count"] = critique_iteration
         final_concept_data["self_critique_history"] = self_critique_history
