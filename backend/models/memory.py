@@ -39,26 +39,14 @@ class MoodState(BaseModel):
     dominance: float = Field(0.0, ge=-5.0, le=5.0, description="支配感（支配-服従）")
 
 
-class PerceiverOutput(BaseModel):
-    """Perceiverの出力（v10 §4.3準拠）"""
-    phenomenal_description: str = Field("", description="現象的記述")
-    reflexive_emotion: str = Field("", description="反射感情")
-    automatic_attention: str = Field("", description="自動注意")
-
-
 class ImpulsiveOutput(BaseModel):
-    """Impulsive Agentの出力（v10 §4.6 Step 1準拠）"""
-    impulse_reaction: str = Field("", description="衝動的反応")
-    bodily_sensation: str = Field("", description="身体感覚")
-    action_tendency: str = Field("", description="行動傾向")
+    """衝動系エージェントの出力（Perceiver + Impulsive 統合、raw text pass-through）"""
+    raw_text: str = Field("", description="衝動系エージェントの全文出力")
 
 
 class ReflectiveOutput(BaseModel):
-    """理性ブランチの出力（v10 §4.6 Step 2準拠）"""
-    inner_analysis: str = Field("", description="濃密な内面分析レポート")
-    value_connections: str = Field("", description="価値観・知識・過去経験との接続")
-    suggestion: str = Field("", description="示唆")
-    prediction: str = Field("", description="理性側ルートの予測")
+    """理性ブランチの出力（raw text pass-through）"""
+    raw_text: str = Field("", description="理性ブランチの全文出力")
 
 
 class IntegrationOutput(BaseModel):
@@ -138,7 +126,6 @@ class EventPackage(BaseModel):
     event_content: str = ""
     event_metadata: dict = Field(default_factory=dict, description="known/source/expectedness")
     activation_log: ActivationLog = Field(default_factory=ActivationLog)
-    perceiver_output: PerceiverOutput = Field(default_factory=PerceiverOutput)
     impulsive_output: ImpulsiveOutput = Field(default_factory=ImpulsiveOutput)
     reflective_output: ReflectiveOutput = Field(default_factory=ReflectiveOutput)
     integration_output: IntegrationOutput = Field(default_factory=IntegrationOutput)
@@ -149,11 +136,8 @@ class EventPackage(BaseModel):
 
 
 class IntrospectionMemo(BaseModel):
-    """内省メモ（v10 §4.7準拠）"""
-    self_perception: str = Field("", description="自己推測（Bem Self-Perception）")
-    past_connection: str = Field("", description="過去記録との統合")
-    memory_reinterpretation: str = Field("", description="薄れた記憶の再解釈")
-    full_memo: str = Field("", description="内省メモ全文（200-400字）")
+    """内省メモ（raw text pass-through）"""
+    raw_text: str = Field("", description="内省メモ全文")
 
 
 class DiaryEntry(BaseModel):

@@ -177,29 +177,15 @@ async def save_daily_log(character_name: str, day: int, day_state):
         # ムード変遷
         md_content += f"**ムード変遷:** V={ep.mood_before.valence:.1f}→{ep.mood_after.valence:.1f} / A={ep.mood_before.arousal:.1f}→{ep.mood_after.arousal:.1f} / D={ep.mood_before.dominance:.1f}→{ep.mood_after.dominance:.1f}\n\n"
 
-        # Perceiver
-        if ep.perceiver_output and ep.perceiver_output.phenomenal_description:
-            md_content += "#### 知覚（Perceiver）\n\n"
-            md_content += f"{ep.perceiver_output.phenomenal_description}\n\n"
-            if ep.perceiver_output.reflexive_emotion:
-                md_content += f"*反射的感情:* {ep.perceiver_output.reflexive_emotion}\n\n"
-
-        # Impulsive
-        if ep.impulsive_output and ep.impulsive_output.impulse_reaction:
+        # 衝動系エージェント出力
+        if ep.impulsive_output and ep.impulsive_output.raw_text:
             md_content += "#### 衝動反応（Impulsive）\n\n"
-            md_content += f"{ep.impulsive_output.impulse_reaction}\n"
-            if ep.impulsive_output.bodily_sensation:
-                md_content += f"\n*身体感覚:* {ep.impulsive_output.bodily_sensation}\n"
-            if ep.impulsive_output.action_tendency:
-                md_content += f"\n*行動傾向:* {ep.impulsive_output.action_tendency}\n"
-            md_content += "\n"
+            md_content += f"{ep.impulsive_output.raw_text}\n\n"
 
-        # Reflective
-        if ep.reflective_output and ep.reflective_output.inner_analysis:
+        # 理性ブランチ出力
+        if ep.reflective_output and ep.reflective_output.raw_text:
             md_content += "#### 内面分析（Reflective）\n\n"
-            md_content += f"{ep.reflective_output.inner_analysis}\n\n"
-            if ep.reflective_output.value_connections:
-                md_content += f"*価値観接続:* {ep.reflective_output.value_connections}\n\n"
+            md_content += f"{ep.reflective_output.raw_text}\n\n"
 
         # Integration (行動決定)
         if ep.integration_output and ep.integration_output.final_action:
@@ -232,14 +218,8 @@ async def save_daily_log(character_name: str, day: int, day_state):
     md_content += "## 2. 内省（Self-Perception & 記憶統合）\n\n"
     if day_state.introspection:
         intro = day_state.introspection
-        if intro.self_perception:
-            md_content += f"### 自己推測\n{intro.self_perception}\n\n"
-        if intro.past_connection:
-            md_content += f"### 過去記録との統合\n{intro.past_connection}\n\n"
-        if intro.memory_reinterpretation:
-            md_content += f"### 記憶の再解釈\n{intro.memory_reinterpretation}\n\n"
-        if intro.full_memo:
-            md_content += f"### 内省メモ全文\n{intro.full_memo}\n\n"
+        if intro.raw_text:
+            md_content += f"{intro.raw_text}\n\n"
     else:
         md_content += "*内省なし*\n\n"
 

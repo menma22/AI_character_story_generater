@@ -82,7 +82,7 @@ class NextDayPlanningAgent:
             user_message=(
                 f"【マクロプロフィール】\n{macro_context[:500]}\n\n"
                 f"【Day {day}の日記】\n{diary.content}\n\n"
-                f"【Day {day}の内省】\n{introspection.full_memo}\n\n"
+                f"【Day {day}の内省】\n{introspection.raw_text}\n\n"
                 f"【現在のムード】V={current_mood.valence:.1f} A={current_mood.arousal:.1f} D={current_mood.dominance:.1f}\n\n"
                 f"明日やりたいことを3つ考えてください。"
             ),
