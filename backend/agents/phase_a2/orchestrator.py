@@ -16,6 +16,7 @@ from backend.models.character import (
     ParameterList, NormativeLayer,
 )
 from backend.tools.agent_utils import run_worker_with_validation
+from backend.agents.context_descriptions import wrap_context
 
 logger = logging.getLogger(__name__)
 
@@ -365,12 +366,9 @@ class PhaseA2Orchestrator:
     def _build_context_json(self) -> str:
         """concept_package + macro_profile の共通コンテキストを生成"""
         ctx = (
-            f"concept_package:\n"
-            f"{json.dumps(self.concept.model_dump(mode='json'), ensure_ascii=False, indent=2)}\n\n"
-            f"macro_profile (basic_info):\n"
-            f"{json.dumps(self.macro.basic_info.model_dump(mode='json'), ensure_ascii=False)}\n\n"
-            f"values_core:\n"
-            f"{json.dumps(self.macro.values_core.model_dump(mode='json'), ensure_ascii=False)}"
+            f"{wrap_context('concept_package', json.dumps(self.concept.model_dump(mode='json'), ensure_ascii=False, indent=2))}\n\n"
+            f"{wrap_context('macro_profile', json.dumps(self.macro.basic_info.model_dump(mode='json'), ensure_ascii=False))}\n\n"
+            f"{wrap_context('values_core', json.dumps(self.macro.values_core.model_dump(mode='json'), ensure_ascii=False))}"
         )
         if self.regeneration_context:
             ctx += f"\n\n{self.regeneration_context}"
@@ -465,8 +463,7 @@ class PhaseA2Orchestrator:
             IDEAL_OUGHT_SYSTEM_PROMPT,
             (
                 f"{self._build_context_json()}\n\n"
-                f"dream_timeline:\n"
-                f"{json.dumps(self.macro.dream_timeline.model_dump(mode='json'), ensure_ascii=False)}\n\n"
+                f"{wrap_context('dream_timeline', json.dumps(self.macro.dream_timeline.model_dump(mode='json'), ensure_ascii=False))}\n\n"
                 f"理想自己と義務自己を生成してください。"
             ),
             IdealOughtSelfOutput,
@@ -486,8 +483,7 @@ class PhaseA2Orchestrator:
             GOALS_SYSTEM_PROMPT,
             (
                 f"{self._build_context_json()}\n\n"
-                f"dream_timeline:\n"
-                f"{json.dumps(self.macro.dream_timeline.model_dump(mode='json'), ensure_ascii=False)}\n\n"
+                f"{wrap_context('dream_timeline', json.dumps(self.macro.dream_timeline.model_dump(mode='json'), ensure_ascii=False))}\n\n"
                 f"長期・中期目標を生成してください。"
             ),
             GoalsDreamsOutput,

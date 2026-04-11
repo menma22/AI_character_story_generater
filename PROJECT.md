@@ -33,7 +33,9 @@ AI_character_story_generater/
 │   │   │   ├── verification.py                # 裏方出力検証 (#1-#52漏洩チェック, v10 §4.6b)
 │   │   │   ├── checkers.py                    # 4つの個別チェックAI (Profile/Temperament/Personality/Values)
 │   │   │   ├── diary_critic.py                # 日記Self-Critic (LLMベースのシンプルな品質チェック)
+│   │   │   ├── third_party_reviewer.py        # 第三者視点の日記検証AI (読者体験品質チェック)
 │   │   │   └── next_day_planning.py           # 翌日予定追加 (Stage1+2, protagonist_plan)
+│   │   ├── context_descriptions.py            # コンテキスト説明付与ヘルパー (wrap_context, 全エージェント共通)
 │   │   └── evaluators/
 │   │       └── pipeline.py                    # Evaluator群7種 (SchemaValidator常時ON, LLM5種)
 │   ├── models/
@@ -510,6 +512,29 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
   - `_build_check_context()`で言語的指紋+キャラクター情報を構造化テキストに変換しシステムプロンプトに注入
   - **設計原則**: 検証AIは「入力を受け取って判定を出すだけ」のシンプルな構造。ルールベースの複雑化やcritic自身による修正は行わない
 
+### Stage 18: 第三者検証AI + コンテキスト説明付与
+
+- **対象/機能**: 日記品質の多段チェック体制構築 + 全エージェントへのコンテキスト意図明示
+
+- **(a) 元の設計**:
+  - 日記チェックは `check_diary_rules`（言語的指紋）のみで、読者体験の品質は検証していなかった
+  - 後段の4チェックAI（Profile/Temperament/Personality/Values）はパラメータ整合性チェックであり「読んで面白いか」は評価対象外
+  - 各エージェントへのコンテキストは `【マクロプロフィール】\n{data}` のようにラベルだけで渡しており、何のためのデータか・どう使うべきかの説明がなかった
+  - エージェントがコンテキストの意図を誤解し、不適切な使い方をするリスクがあった
+
+- **(b) 変更と理由**:
+  - `ThirdPartyReviewer`を新設: 「初見の読者」として日記を5観点（理解可能性・面白さ・内部整合性・自然さ・イベント整合）で評価
+  - 日記agenticループを3段階ゲート化: `check_diary_rules` → `third_party_review` → `submit_final_diary`
+  - `third_party_review`失敗時は`check_passed`もリセットし、修正後に両方やり直しを強制（修正で言語ルール違反が生じる可能性に対応）
+  - `max_iterations`を6→10に拡張（新ツール追加による反復増に対応）
+  - `context_descriptions.py`を新設: `wrap_context(section_name, data, agent_role)` でセクション × ロール別に (what/why/how) の3点説明を付与
+  - 全6ファイル（daily_loop, phase_a1, a2, a3, d）のuser_messageを更新
+
+- **(c) 採用したベストプラクティス**:
+  - **多層チェック**: 「言語ルール遵守」「読者体験品質」「パラメータ整合」の3層で品質を担保。それぞれ異なる観点を持つ検証AIが独立してチェック
+  - **コンテキスト意図明示**: エージェントに渡す全てのコンテキストに「何のデータか」「なぜ渡すか」「どう使うか」を明記する。これによりエージェントの判断精度が向上し、コンテキストの誤用を防ぐ
+  - **ロール別説明**: 同じデータ（例: マクロプロフィール）でも、衝動系・理性系・日記生成系で使い方が異なるため、ロール別に説明を分岐
+
 ---
 
 ## パート3: プロジェクト管理
@@ -535,12 +560,12 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 | Stage 15: アーティファクト個別再生成・編集 | ✅ 実装完了 | regeneration.py新設、全5オーケストレータにregeneration_context注入、WS 2アクション追加、再生成/編集モーダルUI |
 | Stage 16: 日記エージェント提出ガード強化 | ✅ 実装完了 | submit_final_diary に check_diary_rules 必須ゲート追加、critic不在時も最低限ルールベースチェック実施 |
 | Stage 17: diary_critic LLMベース簡素化 | ✅ 実装完了 | ルールベースチェック全廃止→LLM一括検証、corrected_diary廃止→issues指摘のみ、MacroProfile注入 |
+| Stage 18: 第三者検証AI + コンテキスト説明付与 | ✅ 実装完了 | ThirdPartyReviewer新設（読者視点5観点チェック）、日記agenticループにthird_party_reviewツール追加（3段階ゲート化）、全エージェントにwrap_contextによるコンテキスト説明付与（what/why/how 3点説明） |
 
 ### 次のアクション
 
 1. **E2Eテスト実行（Day0→日記シミュレーション通し）** → draftプロファイルでキャラクター生成→日記生成までを連続実行し、全フローの動作を確認する
-2. **4チェックAIのseverity=major時の自動再生成** → 現状はログ警告のみ。majorの場合にチェッカーフィードバックを添えて再生成するループ実装
-3. **提出用キャラクター生成** → High Qualityプロファイルで全EvaluatorをONにし、MDデータベース出力まで通して実行する
+2. **提出用キャラクター生成** → High Qualityプロファイルで全EvaluatorをONにし、MDデータベース出力まで通して実行する
 
 ### ブロッカー
 

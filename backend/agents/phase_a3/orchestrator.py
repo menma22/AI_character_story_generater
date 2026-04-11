@@ -19,6 +19,7 @@ from backend.models.character import (
     AutobiographicalEpisodes, AutobiographicalEpisode, EpisodeMetadata,
 )
 from backend.tools.llm_api import call_llm
+from backend.agents.context_descriptions import wrap_context
 
 logger = logging.getLogger(__name__)
 
@@ -221,10 +222,10 @@ class PhaseA3Orchestrator:
     def _full_context(self) -> str:
         """全コンテキストを文字列化"""
         ctx = (
-            f"concept_package:\n{json.dumps(self.concept.model_dump(mode='json'), ensure_ascii=False, indent=2)}\n\n"
-            f"macro_profile:\n{json.dumps(self.macro.model_dump(mode='json'), ensure_ascii=False, indent=2)}\n\n"
-            f"主要気質パラメータ:\n{json.dumps([p.model_dump(mode='json') for p in self.micro.temperament[:9]], ensure_ascii=False, indent=2)}\n\n"
-            f"価値観:\n{json.dumps(self.micro.schwartz_values, ensure_ascii=False, indent=2)}\n\n"
+            f"{wrap_context('concept_package', json.dumps(self.concept.model_dump(mode='json'), ensure_ascii=False, indent=2))}\n\n"
+            f"{wrap_context('macro_profile', json.dumps(self.macro.model_dump(mode='json'), ensure_ascii=False, indent=2), 'episode')}\n\n"
+            f"{wrap_context('micro_parameters', json.dumps([p.model_dump(mode='json') for p in self.micro.temperament[:9]], ensure_ascii=False, indent=2))}\n\n"
+            f"{wrap_context('values_core', json.dumps(self.micro.schwartz_values, ensure_ascii=False, indent=2))}\n\n"
             f"理想自己: {self.micro.ideal_self}\n"
             f"義務自己: {self.micro.ought_self}"
         )

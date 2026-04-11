@@ -29,6 +29,7 @@ from backend.models.character import (
     ConflictIntensityArc, Event,
 )
 from backend.tools.llm_api import call_llm
+from backend.agents.context_descriptions import wrap_context
 
 logger = logging.getLogger(__name__)
 
@@ -239,15 +240,17 @@ class PhaseDOrchestrator:
 
     def _full_context(self) -> str:
         """上流の全成果物を文字列化"""
-        ctx = (
-            f"concept_package:\n{json.dumps(self.concept.model_dump(mode='json'), ensure_ascii=False, indent=2)}\n\n"
-            f"macro_profile:\n{json.dumps(self.macro.model_dump(mode='json'), ensure_ascii=False, indent=2)}\n\n"
-            f"micro_parameters (主要):\n"
+        micro_summary = (
             f"  気質: {json.dumps([p.model_dump(mode='json') for p in self.micro.temperament[:4]], ensure_ascii=False)}\n"
             f"  価値観: {json.dumps(self.micro.schwartz_values, ensure_ascii=False)}\n"
             f"  理想自己: {self.micro.ideal_self}\n"
-            f"  義務自己: {self.micro.ought_self}\n\n"
-            f"autobiographical_episodes:\n{json.dumps([e.model_dump(mode='json') for e in self.episodes.episodes], ensure_ascii=False, indent=2)}"
+            f"  義務自己: {self.micro.ought_self}"
+        )
+        ctx = (
+            f"{wrap_context('concept_package', json.dumps(self.concept.model_dump(mode='json'), ensure_ascii=False, indent=2))}\n\n"
+            f"{wrap_context('macro_profile', json.dumps(self.macro.model_dump(mode='json'), ensure_ascii=False, indent=2), 'event')}\n\n"
+            f"{wrap_context('micro_parameters', micro_summary)}\n\n"
+            f"{wrap_context('autobiographical_episodes', json.dumps([e.model_dump(mode='json') for e in self.episodes.episodes], ensure_ascii=False, indent=2))}"
         )
         if self.regeneration_context:
             ctx += f"\n\n{self.regeneration_context}"
@@ -294,12 +297,12 @@ class PhaseDOrchestrator:
 
         arc_task = call_llm(
             tier=self.profile.director_tier, system_prompt=NARRATIVE_ARC_PROMPT,
-            user_message=f"{context}\n\n世界設定:\n{world_text}\n\n周囲人物:\n{chars_text}\n\n物語アークを設計してください。",
+            user_message=f"{context}\n\n{wrap_context('世界設定', world_text)}\n\n{wrap_context('周囲の人物', chars_text)}\n\n物語アークを設計してください。",
             cache_system=True,
         )
         conflict_task = call_llm(
             tier=self.profile.worker_tier, system_prompt=CONFLICT_INTENSITY_PROMPT,
-            user_message=f"concept_package:\n{json.dumps(self.concept.model_dump(mode='json'), ensure_ascii=False)}\n\n葛藤強度アークを設定してください。",
+            user_message=f"{wrap_context('concept_package', json.dumps(self.concept.model_dump(mode='json'), ensure_ascii=False))}\n\n葛藤強度アークを設定してください。",
         )
 
         arc_result, conflict_result = await asyncio.gather(arc_task, conflict_task)
@@ -331,10 +334,10 @@ class PhaseDOrchestrator:
         # Step 1-4の全コンテキスト
         upstream_context = (
             f"{context}\n\n"
-            f"--- 世界設定 ---\n{world_text}\n\n"
-            f"--- 周囲人物 ---\n{chars_text}\n\n"
-            f"--- 物語アーク ---\n{arc_text}\n\n"
-            f"--- 葛藤強度 ---\n{conflict_text}"
+            f"{wrap_context('世界設定', world_text)}\n\n"
+            f"{wrap_context('周囲の人物', chars_text)}\n\n"
+            f"{wrap_context('narrative_arc', arc_text)}\n\n"
+            f"{wrap_context('conflict_intensity', conflict_text)}"
         )
 
         # ── ツールハンドラ ──

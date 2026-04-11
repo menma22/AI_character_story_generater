@@ -47,6 +47,8 @@ from backend.agents.daily_loop.activation import DynamicActivationAgent
 from backend.agents.daily_loop.verification import OutputVerificationAgent
 from backend.agents.daily_loop.next_day_planning import NextDayPlanningAgent
 from backend.agents.daily_loop.diary_critic import DiarySelfCritic
+from backend.agents.daily_loop.third_party_reviewer import ThirdPartyReviewer
+from backend.agents.context_descriptions import wrap_context
 from backend.agents.daily_loop.checkers import (
     ProfileChecker, TemperamentChecker, PersonalityChecker, ValuesChecker,
 )
@@ -277,6 +279,13 @@ class DailyLoopOrchestrator:
                 ws_manager=ws_manager,
                 tier=self.profile.worker_tier,
             )
+
+        # 第三者視点の検証AI
+        self.third_party_reviewer = ThirdPartyReviewer(
+            macro_profile=self.package.macro_profile,
+            ws_manager=ws_manager,
+            tier=self.profile.worker_tier,
+        )
 
         # 4つの個別チェックAI
         self.profile_checker = ProfileChecker(ws_manager, tier="gemini")
@@ -541,16 +550,15 @@ class DailyLoopOrchestrator:
 - パラメータへの直接言及（「HA高」「感情パラメータ#5が発火」等）
 - パラメータ名・ID・学術用語の直接言及""",
             user_message=(
-                f"【マクロプロフィール】\n{self._build_macro_context()}\n\n"
-                f"【世界設定】\n{self._build_world_context()}\n\n"
-                f"【周囲の人物】\n{self._build_supporting_characters_context()}\n\n"
-                f"【活性化された気質・性格パラメータ】\n{activated_context}\n\n"
-                f"【現在ムード】V={self.current_mood.valence:.1f} A={self.current_mood.arousal:.1f} D={self.current_mood.dominance:.1f}\n\n"
-                f"【今日の行動履歴】\n{self._build_action_buffer()}\n\n"
-                f"【過去の記憶】\n{self._build_memory_context()}\n\n"
-                f"【自伝的エピソード】\n{self._build_episodes_context()[:600]}\n\n"
-                f"【イベント】\n{event.content}\n"
-                f"（時間帯: {event.time_slot} | {known_str} {source_str} | 予想外度: {event.expectedness}）"
+                f"{wrap_context('マクロプロフィール', self._build_macro_context(), 'impulsive')}\n\n"
+                f"{wrap_context('世界設定', self._build_world_context())}\n\n"
+                f"{wrap_context('周囲の人物', self._build_supporting_characters_context())}\n\n"
+                f"{wrap_context('活性化された気質・性格パラメータ', activated_context)}\n\n"
+                f"{wrap_context('現在ムード', f'V={self.current_mood.valence:.1f} A={self.current_mood.arousal:.1f} D={self.current_mood.dominance:.1f}')}\n\n"
+                f"{wrap_context('今日の行動履歴', self._build_action_buffer())}\n\n"
+                f"{wrap_context('過去の記憶', self._build_memory_context())}\n\n"
+                f"{wrap_context('自伝的エピソード', self._build_episodes_context()[:600])}\n\n"
+                f"{wrap_context('イベント', f'{event.content}\n（時間帯: {event.time_slot} | {known_str} {source_str} | 予想外度: {event.expectedness}）')}"
             ),
             json_mode=False,
         )
@@ -591,15 +599,14 @@ class DailyLoopOrchestrator:
 ## 予測
 （1-2文。理性ルートで行動した場合の予測）""",
             user_message=(
-                f"【マクロプロフィール】\n{self._build_macro_context()}\n\n"
-                f"【世界設定】\n{self._build_world_context()}\n\n"
-                f"【周囲の人物】\n{self._build_supporting_characters_context()}\n\n"
-                f"【規範層（活性化済み）】\n{normative_context}\n\n"
-                f"【過去の記憶】\n{self._build_memory_context()}\n\n"
-                f"【自伝的エピソード】\n{self._build_episodes_context()[:600]}\n\n"
-                f"【衝動系エージェントの出力】\n{impulsive.raw_text}\n\n"
-                f"【イベント】{event.content}\n"
-                f"（{known_str} | source: {event.source}）"
+                f"{wrap_context('マクロプロフィール', self._build_macro_context(), 'reflective')}\n\n"
+                f"{wrap_context('世界設定', self._build_world_context())}\n\n"
+                f"{wrap_context('周囲の人物', self._build_supporting_characters_context())}\n\n"
+                f"{wrap_context('規範層', normative_context, 'reflective')}\n\n"
+                f"{wrap_context('過去の記憶', self._build_memory_context())}\n\n"
+                f"{wrap_context('自伝的エピソード', self._build_episodes_context()[:600])}\n\n"
+                f"{wrap_context('衝動ブランチの報告', impulsive.raw_text)}\n\n"
+                f"{wrap_context('イベント', f'{event.content}\n（{known_str} | source: {event.source}）')}"
             ),
             json_mode=False,
         )
@@ -763,16 +770,15 @@ class DailyLoopOrchestrator:
             )
 
         user_message = (
-            f"【マクロプロフィール】\n{self._build_macro_context()}\n\n"
-            f"【世界設定】\n{self._build_world_context()}\n\n"
-            f"【周囲の人物】\n{self._build_supporting_characters_context()}\n\n"
-            f"【規範層】\n{normative_context}{protagonist_plan_note}\n\n"
-            f"【過去の記憶】\n{self._build_memory_context()}\n\n"
-            f"【自伝的エピソード】\n{self._build_episodes_context()[:600]}\n\n"
-            f"【衝動ブランチの報告】\n{impulsive_text}\n\n"
-            f"【理性ブランチの報告】\n{reflective_text}\n\n"
-            f"【現在発生しているイベント】\n{event.content}\n"
-            f"（時間帯: {event.time_slot} | {known_str} | 予想外度: {event.expectedness}）"
+            f"{wrap_context('マクロプロフィール', self._build_macro_context(), 'integration')}\n\n"
+            f"{wrap_context('世界設定', self._build_world_context())}\n\n"
+            f"{wrap_context('周囲の人物', self._build_supporting_characters_context())}\n\n"
+            f"{wrap_context('規範層', f'{normative_context}{protagonist_plan_note}')}\n\n"
+            f"{wrap_context('過去の記憶', self._build_memory_context())}\n\n"
+            f"{wrap_context('自伝的エピソード', self._build_episodes_context()[:600])}\n\n"
+            f"{wrap_context('衝動ブランチの報告', impulsive_text)}\n\n"
+            f"{wrap_context('理性ブランチの報告', reflective_text)}\n\n"
+            f"{wrap_context('イベント', f'{event.content}\n（時間帯: {event.time_slot} | {known_str} | 予想外度: {event.expectedness}）')}"
             f"{feedback_section}"
         )
 
@@ -981,13 +987,13 @@ class DailyLoopOrchestrator:
 ## 内省メモ全文
 （200-400字。日記の素材となる統合的な内省。上記3工程を自然に統合した文章）""",
             user_message=(
-                f"【マクロプロフィール】\n{self._build_macro_context()}\n\n"
-                f"【世界設定】\n{self._build_world_context()}\n\n"
-                f"Day {day}の行動まとめ:\n{action_summary}\n\n"
-                f"活性化されたパラメータの傾向:\n{activation_summary}\n\n"
-                f"現在のムード: V={self.current_mood.valence:.1f} A={self.current_mood.arousal:.1f} D={self.current_mood.dominance:.1f}\n\n"
-                f"記憶:\n{self._build_memory_context()}\n\n"
-                f"自伝的エピソード:\n{self._build_episodes_context()[:600]}"
+                f"{wrap_context('マクロプロフィール', self._build_macro_context(), 'introspection')}\n\n"
+                f"{wrap_context('世界設定', self._build_world_context())}\n\n"
+                f"{wrap_context('今日の行動履歴', f'Day {day}の行動まとめ:\n{action_summary}')}\n\n"
+                f"{wrap_context('活性化された気質・性格パラメータ', f'活性化されたパラメータの傾向:\n{activation_summary}')}\n\n"
+                f"{wrap_context('現在ムード', f'V={self.current_mood.valence:.1f} A={self.current_mood.arousal:.1f} D={self.current_mood.dominance:.1f}')}\n\n"
+                f"{wrap_context('過去の記憶', self._build_memory_context())}\n\n"
+                f"{wrap_context('自伝的エピソード', self._build_episodes_context()[:600])}"
             ),
             json_mode=False,
         )
@@ -1008,6 +1014,8 @@ class DailyLoopOrchestrator:
         final_diary_content = ""
         check_passed = False  # check_diary_rules がSUCCESSを返したかのフラグ
         last_checked_draft = ""  # チェック済みドラフトの内容
+        third_party_passed = False  # third_party_review がSUCCESSを返したかのフラグ
+        last_third_party_draft = ""  # 第三者レビュー済みドラフトの内容
 
         async def check_diary_rules(draft_diary_text: str = None) -> dict:
             """現在書き上げたドラフトが言語的指紋（口癖や避ける語彙）に違反していないかチェックする"""
@@ -1047,17 +1055,57 @@ class DailyLoopOrchestrator:
                 issues = "\n- ".join(result["issues"])
                 return {"status": "FAILED", "issues_found": result["issues"], "advice": f"以下の問題を修正して再度ドラフトを作成してください:\n- {issues}"}
 
+        async def third_party_review(draft_diary_text: str = None) -> dict:
+            """第三者（読者）の視点で日記の品質をチェックする"""
+            nonlocal third_party_passed, last_third_party_draft, check_passed
+            if not draft_diary_text:
+                return {"status": "FAILED", "message": "ERROR: draft_diary_text引数が欠落しています。"}
+            if not check_passed or last_checked_draft != draft_diary_text:
+                return {"status": "BLOCKED", "message": "先にcheck_diary_rulesでSUCCESSを得てください。言語チェック通過後のドラフトをそのまま渡してください。"}
+
+            await self._notify("第三者視点での日記レビュー中...")
+
+            event_summaries_for_review = "\n".join([
+                f"- [{ep.event_id}] {ep.integration_output.final_action[:100]}"
+                for ep in events
+            ])
+
+            temp_diary = DiaryEntry(day=day, content=draft_diary_text, mood_at_writing=self.current_mood)
+            result = await self.third_party_reviewer.review(
+                temp_diary, self.current_mood, event_summaries_for_review
+            )
+
+            if result["passed"]:
+                third_party_passed = True
+                last_third_party_draft = draft_diary_text
+                return {"status": "SUCCESS", "message": "第三者視点チェックOK。submit_final_diary で提出してください。"}
+            else:
+                # 第三者レビュー不合格: テキスト修正が必要なので言語チェックもリセット
+                third_party_passed = False
+                check_passed = False
+                issues = "\n- ".join(result["issues"])
+                return {
+                    "status": "FAILED",
+                    "issues_found": result["issues"],
+                    "advice": f"第三者（読者）視点での問題:\n- {issues}\n修正後、再度 check_diary_rules → third_party_review の順で通してください。",
+                }
+
         async def submit_final_diary(final_diary_text: str = None) -> dict:
             """全てのチェックを通過した最終的な日記テキストを提出する"""
-            nonlocal check_passed, last_checked_draft, final_diary_content
+            nonlocal check_passed, last_checked_draft, final_diary_content, third_party_passed, last_third_party_draft
             if not final_diary_text:
                 return {"status": "FAILED", "message": "ERROR: final_diary_text引数が欠落しています。"}
-            # check_diary_rules を経由していない場合は強制チェック
+            # check_diary_rules と third_party_review の両方を経由していない場合は強制チェック
             if not check_passed or last_checked_draft != final_diary_text:
-                await self._notify("提出前の強制チェックを実行中...")
+                await self._notify("提出前の強制チェック（言語ルール）を実行中...")
                 check_result = await check_diary_rules(final_diary_text)
                 if check_result["status"] != "SUCCESS":
                     return {"status": "FAILED", "message": f"提出拒否: check_diary_rules を先に通過させてください。{check_result.get('advice', '')}"}
+            if not third_party_passed or last_third_party_draft != final_diary_text:
+                await self._notify("提出前の強制チェック（第三者レビュー）を実行中...")
+                review_result = await third_party_review(final_diary_text)
+                if review_result["status"] != "SUCCESS":
+                    return {"status": "FAILED", "message": f"提出拒否: third_party_review を先に通過させてください。{review_result.get('advice', '')}"}
             final_diary_content = final_diary_text
             await self._notify("最終日記が完成・提出されました。", "complete")
             return {"status": "SUCCESS", "message": "Diary submitted successfully."}
@@ -1076,8 +1124,20 @@ class DailyLoopOrchestrator:
                 handler=check_diary_rules
             ),
             AgentTool(
+                name="third_party_review",
+                description="check_diary_rulesでSUCCESS後に呼び出してください。第三者（読者）の視点で日記を評価します。理解しやすいか、面白いか、矛盾がないか、自然な日記として成立しているかを検証します。SUCCESSが返るまで修正・再チェックを繰り返してください。",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "draft_diary_text": {"type": "string", "description": "check_diary_rulesでSUCCESS済みの日記ドラフト全文"}
+                    },
+                    "required": ["draft_diary_text"]
+                },
+                handler=third_party_review
+            ),
+            AgentTool(
                 name="submit_final_diary",
-                description="言語ルールのチェックを通過した、最終的な完成版の日記を提出して完了します。",
+                description="check_diary_rules と third_party_review の両方でSUCCESSを得た最終的な完成版の日記を提出して完了します。",
                 input_schema={
                     "type": "object",
                     "properties": {
@@ -1109,7 +1169,9 @@ class DailyLoopOrchestrator:
 【エージェンティック行動指針】
 1. まず日記のドラフトを頭の中で執筆し、`check_diary_rules` ツールを使って自身の口癖や禁止語彙に反していないか自発的にテストしてください。
 2. もし不合格（FAILED）が返ってきたら、指摘された点に基づいて自ら文章を書き直し、再度ツールでチェックしてください。
-3. 合格（SUCCESS）が返ってきたら、そのテキストを `submit_final_diary` ツールで提出して任務を完了してください。"""
+3. `check_diary_rules` で合格（SUCCESS）が返ってきたら、同じドラフトを `third_party_review` ツールに渡して第三者視点のチェックを受けてください。
+4. `third_party_review` で問題が指摘されたら、修正して再度 `check_diary_rules` → `third_party_review` の順で通してください。
+5. 両方のチェックで合格（SUCCESS）が返ってきたら、`submit_final_diary` ツールで提出して任務を完了してください。"""
 
         # Day1特別処理: 世界観・設定紹介セクション
         if day == 1:
@@ -1138,12 +1200,12 @@ class DailyLoopOrchestrator:
             )
 
         user_message = (
-            f"【マクロプロフィール】\n{self._build_macro_context()}\n\n"
-            f"【世界設定】\n{self._build_world_context()}\n\n"
-            f"Day {day}の出来事:\n{event_summaries}\n\n"
-            f"内省メモ:\n{introspection.raw_text}\n\n"
-            f"現在のムード: V={self.current_mood.valence:.1f} A={self.current_mood.arousal:.1f} D={self.current_mood.dominance:.1f}\n\n"
-            f"記憶コンテキスト:\n{self._build_memory_context()}"
+            f"{wrap_context('マクロプロフィール', self._build_macro_context(), 'diary')}\n\n"
+            f"{wrap_context('世界設定', self._build_world_context())}\n\n"
+            f"{wrap_context('今日の出来事', f'Day {day}の出来事:\n{event_summaries}', 'diary')}\n\n"
+            f"{wrap_context('内省メモ', introspection.raw_text, 'diary')}\n\n"
+            f"{wrap_context('現在ムード', f'V={self.current_mood.valence:.1f} A={self.current_mood.arousal:.1f} D={self.current_mood.dominance:.1f}')}\n\n"
+            f"{wrap_context('記憶コンテキスト', self._build_memory_context(), 'diary')}"
             f"{diary_feedback_section}"
         )
 
@@ -1159,7 +1221,7 @@ class DailyLoopOrchestrator:
                     system_prompt=system_prompt,
                     user_message=user_message,
                     tools=tools,
-                    max_iterations=6,
+                    max_iterations=10,
                 )
             except Exception as e:
                 logger.warning(f"[DailyLoop] Diary: Claude ({self.profile.worker_tier}) agentic failed: {e}. Falling back to Gemini.")
@@ -1168,7 +1230,7 @@ class DailyLoopOrchestrator:
                         system_prompt=system_prompt,
                         user_message=user_message,
                         tools=tools,
-                        max_iterations=6,
+                        max_iterations=10,
                     )
                 except Exception as e2:
                     logger.error(f"[DailyLoop] Diary: Gemini fallback also failed: {e2}.")
@@ -1178,7 +1240,7 @@ class DailyLoopOrchestrator:
                     system_prompt=system_prompt,
                     user_message=user_message,
                     tools=tools,
-                    max_iterations=6,
+                    max_iterations=10,
                 )
             except Exception as e:
                 logger.error(f"[DailyLoop] Diary: Gemini agentic failed: {e}.")
