@@ -145,6 +145,7 @@ function onGenerationComplete(result) {
             .then(r => r.json())
             .then(data => {
                 currentPackage = data;
+                currentPackage._package_name = result.package_name;
                 renderResults(data);
                 setTimeout(() => showScreen('result-screen'), 1500);
             })
