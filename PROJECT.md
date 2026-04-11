@@ -44,7 +44,17 @@ AI_character_story_generater/
 │   ├── websocket/
 │   │   └── handler.py                         # WebSocket接続管理 + 思考ストリーミング
 │   ├── reference/                             # 心理学理論参考資料 (Creative Directorのfile_readツール対象)
-│   └── storage/character_packages/            # 生成済みパッケージ保存先
+│   └── storage/character_packages/            # 生成済みパッケージ保存先（1キャラ=1ディレクトリ）
+│       └── {キャラ名}/
+│           ├── package.json                   # 最終キャラクターパッケージ
+│           ├── checkpoint.json                # 中断再開用チェックポイント
+│           ├── 00_profile.md                  # 人間可読プロファイル
+│           ├── agent_logs.json/.md            # エージェント思考ログ
+│           ├── key_memories/day_NN.json       # key memory（7日間フル保持）
+│           ├── short_term_memory/day_NN.json  # 短期記憶DB日単位スナップショット
+│           ├── mood_states/day_NN.json        # ムード状態日単位スナップショット
+│           ├── daily_logs/Day_N.md            # 日次ログ
+│           └── diaries/day_NN.md              # 日記本文
 ├── frontend/
 │   ├── index.html                             # メインUI (4画面構成)
 │   ├── css/style.css                          # プレミアムダークテーマ
@@ -213,6 +223,8 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 | `MoodState` | PAD 3次元ムード | 日次ループ | Peak-End Rule + carry-over |
 | `ShortTermMemoryDB` | 記憶（通常領域のみ、段階圧縮） | 日次ループ | LLM段階圧縮(400→200→80→20字) |
 | `KeyMemoryStore` | key memory（個別ファイル管理、7日間フル保持） | 日次ループ | `key_memories/day_01.json`形式で保存 |
+| `ShortTermMemoryStore` | 短期記憶DB日単位スナップショット永続化 | 日次ループ | `short_term_memory/day_01.json`形式、圧縮後の全状態を保持 |
+| `MoodStateStore` | ムード状態日単位スナップショット永続化 | 日次ループ | `mood_states/day_01.json`形式、daily_mood+carry_over_moodを保持 |
 | `EmotionIntensityResult` | 感情強度判定（low/medium/high） | 日次ループ | Impulsive後にJSON判定 |
 | `CheckResult` | 4個別チェックAIの結果 | 日次ループ | passed/issues/severity |
 | `EventPackage` | 1イベント処理結果 | 日次ループ | 全エージェント出力を包含 |
@@ -230,12 +242,19 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 
 #### データフロー・永続化仕様
 
+- **1キャラ=1ディレクトリ原則**: 生成中・完了後を問わず、全データは `character_packages/{safe_name(キャラ名)}/` 配下に統一保存
 - **インメモリ共有**: 処理途中の全オブジェクト構成はPydanticスキーマによってメモリ上に保たれる
-- **MDファイル永続化DB**: キャラクター作成と日次ループ終了後、以下の構造でディスクへ自律保存:
-  - `00_profile.md` — キャラクタープロファイル一式
+- **ファイル永続化（日単位バージョン管理）**: 日次ループの各日終了時に以下を自動保存:
+  - `short_term_memory/day_NN.json` — ShortTermMemoryDBスナップショット（normal_area + diary_store）
+  - `mood_states/day_NN.json` — MoodState（daily_mood + carry_over_mood）
+  - `key_memories/day_NN.json` — key memory（300字以内、圧縮対象外）
+  - `daily_logs/Day_{N}.md` — 日次ログ（全エージェント出力・ムード変遷・内省・日記・翌日予定）
+- **復元・再開**: DailyLoopOrchestrator初期化時に最新スナップショットを自動ロードし、保存済み日の翌日から再開
+- **その他永続化ファイル**:
+  - `package.json` — 最終キャラクターパッケージ（生成完了時）
+  - `checkpoint.json` — Phase A-C中断再開用
+  - `00_profile.md` — 人間可読プロファイル
   - `agent_logs.json/.md` — エージェント思考ログ
-  - `daily_logs/Day_{N}.md` — 日次ログ（全エージェント出力・ムード変遷・内省・日記・key memory・翌日予定）
-  - `checkpoint.json` — 中断再開用チェックポイント
 
 #### エッジケース・制約
 
@@ -377,6 +396,17 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
     - key memory + 通常記憶
   - 検証エージェントもPerceiver不要のraw textベースに刷新
 
+### 16. ストレージ統一と状態永続化（ShortTermMemoryDB・MoodState）
+
+**(a) 当初設計**: `_finalize_character_generation()`は`{キャラ名}_{timestamp}`形式で新しいディレクトリを作成してpackage.jsonのみを保存。生成中のデータ（checkpoint, profile, logs）は`{キャラ名}/`に保存。結果として1キャラクターのデータが2ディレクトリに分裂。`ShortTermMemoryDB`（段階圧縮記憶）と`MoodState`（PAD 3次元ムード）はメモリ上のみで、プロセス終了時に消失していた。
+**(b) 変更・根拠**: 1キャラ=1ディレクトリの原則が破れていた。また、日次ループが途中で失敗した場合、記憶とムードの進行状態が復元不可能で、Day 1からの全再実行が必要だった。KeyMemoryStoreは既に個別ファイル永続化されていたが、ShortTermMemoryDBとMoodStateは永続化層が欠落していた。
+**(c) 採用プラクティス**:
+  - `_finalize_character_generation()`を`safe_name(char_name)`ベースの統一パスに変更（タイムスタンプ付きディレクトリ廃止）
+  - `ShortTermMemoryStore`: `short_term_memory/day_NN.json`形式で記憶圧縮完了後にスナップショット保存
+  - `MoodStateStore`: `mood_states/day_NN.json`形式でcarry-over完了後にdaily_mood + carry_over_moodを保存
+  - DailyLoopOrchestrator初期化時に最新スナップショットを自動ロードし、保存済み日の翌日から再開
+  - KeyMemoryStoreと同一のファイル管理パターン（日単位バージョン管理、最新ファイル=現在状態）
+
 ---
 
 ## パート3: プロジェクト管理
@@ -394,6 +424,7 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 | Stage 7: 監査・運用保守 | ✅ 実装完了 | 全エージェントプロンプトの抽出・構造化レポート作成 |
 | Stage 8: 日次ループ高度化 | ✅ 実装完了 | 感情強度判定・4チェックAI・統合エージェント拡張・key memory分離・フォールバック多層化 |
 | Stage 9: エージェント統合・コンテキスト拡充 | ✅ 実装完了 | Perceiver+Impulsive統合・raw text pass-through・全エージェントへのマクロ/世界設定/経験DB同梱 |
+| Stage 10: ストレージ統一・状態永続化 | ✅ 実装完了 | 1キャラ=1ディレクトリ統一・ShortTermMemoryDB/MoodState日単位永続化・日次ループ再開対応 |
 
 ### 次のアクション
 
