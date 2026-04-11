@@ -32,7 +32,7 @@ AI_character_story_generater/
 │   │   │   ├── activation.py                  # パラメータ動的活性化 (5-10個選択, v10 §3.5)
 │   │   │   ├── verification.py                # 裏方出力検証 (#1-#52漏洩チェック, v10 §4.6b)
 │   │   │   ├── checkers.py                    # 4つの個別チェックAI (Profile/Temperament/Personality/Values)
-│   │   │   ├── diary_critic.py                # 日記Self-Critic (言語的指紋+AI臭さ検証)
+│   │   │   ├── diary_critic.py                # 日記Self-Critic (LLMベースのシンプルな品質チェック)
 │   │   │   └── next_day_planning.py           # 翌日予定追加 (Stage1+2, protagonist_plan)
 │   │   └── evaluators/
 │   │       └── pipeline.py                    # Evaluator群7種 (SchemaValidator常時ON, LLM5種)
@@ -495,8 +495,20 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 **(c) 採用プラクティス**:
   - `check_passed` / `last_checked_draft` フラグによる状態管理を追加
   - `submit_final_diary` 内で `check_passed == False` または `last_checked_draft != final_diary_text` の場合、自動で `check_diary_rules` を強制実行。不合格なら提出拒否
-  - `diary_critic` 不在時も AI臭い語彙ブラックリスト（14語）＋ 文字数（200-500字）の最低限ルールベースチェックを実施
+  - `diary_critic` 不在時もオーケストレーター側で AI臭い語彙ブラックリスト（14語）＋ 文字数（200-500字）の最低限ルールベースチェックを実施
   - **設計原則**: エージェントの自律的な品質チェックはプロンプト指示 + プログラム的ガードの二重保証
+
+### 24. diary_critic（日記Self-Critic）のLLMベース簡素化
+
+**(a) 当初設計**: `DiarySelfCritic`はルールベースチェック群（`AI_SMELL_WORDS`ハードコードリスト14語、`_check_avoided_words`、`_check_ai_smell`、`_check_first_person`、文字数チェック200-500字）を先に実行し、違反があればLLMに修正済み日記（`corrected_diary`）を生成させる2段構成。コンストラクタには`VoiceFingerprint`のみ渡され、`MacroProfile`は参照不可。
+**(b) 変更・根拠**: 検証AIが行うべきは「入力→照合→判定→フィードバック」のシンプルな構造であり、ルールベースの複雑化は不要。また、critic自身が日記を修正（`corrected_diary`生成）するのは責務の越境であり、修正は主エージェントが行うべき。ハードコードされたAI臭語彙リストはメンテナンスコストが高く、LLMに判断を委ねる方が柔軟。
+**(c) 採用プラクティス**:
+  - ルールベースチェック（`AI_SMELL_WORDS`定数、`_check_avoided_words`、`_check_ai_smell`、`_check_first_person`、文字数チェック）を全て削除
+  - 1回のLLM呼び出しで全チェック（言語的指紋遵守、避ける語彙、AI臭さ、文量、ムードPAD整合性、キャラクター整合性）を実行
+  - `corrected_diary`を廃止し、`{"passed": bool, "issues": list[str]}`のみ返却。修正は主エージェントに委譲
+  - コンストラクタに`MacroProfile`を追加し、キャラクター基本情報（名前・年齢・職業・趣味・日常）を整合性チェック用にLLMへ渡す
+  - `_build_check_context()`で言語的指紋+キャラクター情報を構造化テキストに変換しシステムプロンプトに注入
+  - **設計原則**: 検証AIは「入力を受け取って判定を出すだけ」のシンプルな構造。ルールベースの複雑化やcritic自身による修正は行わない
 
 ---
 
@@ -522,6 +534,7 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 | Stage 14: エージェンティック生成化 | ✅ 実装完了 | Phase A-3/D Step5のエージェンティック化、Creative Director自己批判強化、2層自己批判(外部批評+内省)導入 |
 | Stage 15: アーティファクト個別再生成・編集 | ✅ 実装完了 | regeneration.py新設、全5オーケストレータにregeneration_context注入、WS 2アクション追加、再生成/編集モーダルUI |
 | Stage 16: 日記エージェント提出ガード強化 | ✅ 実装完了 | submit_final_diary に check_diary_rules 必須ゲート追加、critic不在時も最低限ルールベースチェック実施 |
+| Stage 17: diary_critic LLMベース簡素化 | ✅ 実装完了 | ルールベースチェック全廃止→LLM一括検証、corrected_diary廃止→issues指摘のみ、MacroProfile注入 |
 
 ### 次のアクション
 
