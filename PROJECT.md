@@ -12,6 +12,7 @@
 AI_character_story_generater/
 ├── backend/
 │   ├── main.py                                # FastAPI エントリポイント (WebSocket + REST API)
+│   ├── regeneration.py                        # アーティファクト個別再生成モジュール (依存マップ + 再生成コア)
 │   ├── config.py                              # 設定管理 (APIキー, 4段階プロファイル, モデル定義)
 │   ├── agents/
 │   │   ├── creative_director/
@@ -85,7 +86,14 @@ graph TB
         Main["main.py<br>(FastAPI)"] --> Config["config.py"]
         Main --> WSHandler["websocket/handler.py"]
         Main --> MO["master_orchestrator.py"]
+        Main --> REGEN["regeneration.py"]
         Main --> DLO["daily_loop/orchestrator.py"]
+        
+        REGEN --> CD
+        REGEN --> PA1
+        REGEN --> PA2
+        REGEN --> PA3
+        REGEN --> PD
         
         MO --> CD["creative_director.py"]
         MO --> PA1["phase_a1/orchestrator.py"]
@@ -237,6 +245,7 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 - **生成進行UI（Phase Tracker）**: 生成中画面にて、現在のパイプライン実行状態（Creative Director → A-1 → A-2 → A-3 → D）をステップ形式で可視化。
 - **インライン日記生成とキャンセル機能**: 「日記」ダッシュボード内で、他画面に遷移せずインラインで思考ログと生成中の日記をリアルタイム表示。
 - **エラー耐性と生成再開（Resume）**: Pydantic v2 の `field_validator` による自己修復 + 各Phase完了ごとのチェックポイント保存。
+- **アーティファクト個別再生成・編集**: 各タブ（コンセプト/プロフィール/パラメータ/エピソード/イベント）に「再生成」「編集」ボタンを配置。再生成モーダルで自然言語指示を入力可能。編集モーダルでJSON直接編集・保存。下流カスケード再生成はオプトイン。
 - **構成設定UI**: 7種のEvaluatorのON/OFFを独立切り替え可能。
 - **WebSocket**: エージェント思考のリアルタイム表示。詳細進捗ハートビート。
 - **コスト表示**: リアルタイムトークン消費・推定コスト表示。
@@ -467,6 +476,18 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
   - **Creative Director強化**: `search_count`カウンターで検索回数追跡。`min_research_searches`（config.pyで設定: high_quality=5, standard=3, fast=2, draft=1）回未満では`request_critique`がBLOCKED。5フェーズ構造化（計画→リサーチ→ドラフト→外部批評→自己内省→提出）。`self_reflect`ツール追加（convincedでなければcritique_passedもリセット→再ドラフト）
   - **self_reflect失敗時のリセット**: convinced=falseが返ると`critique_passed`もFalseにリセットされ、再度ドラフト→critique→self_reflectのフルループが必要。中途半端な妥協を構造的に防止
 
+### 22. アーティファクト個別再生成・編集機能
+
+**(a) 当初設計**: 生成完了後のキャラクターパッケージは読み取り専用。変更したい場合は「破棄して再生成」で全フェーズ（Creative Director→A-1→A-2→A-3→D）を最初からやり直す以外に方法がなかった。
+**(b) 変更・根拠**: ユーザーが1つのアーティファクト（例: エピソードだけ暗めにしたい）を修正するためだけに全体を再生成するのはコスト的にも時間的にも非効率。また、AI再生成時にユーザーの具体的な指示と元のアーティファクトをLLMに参照させることで、「改善」型の再生成が可能になる。
+**(c) 採用プラクティス**:
+  - `backend/regeneration.py`を新規作成: アーティファクト→フェーズマッピング(`ARTIFACT_TO_PHASE`)、依存関係マップ(`ARTIFACT_DEPENDENTS`)、再生成コア関数(`regenerate_artifact()`)を集約
+  - **MasterOrchestratorバイパス**: 再生成は各フェーズオーケストレータを直接呼び出し、既存パイプラインに影響を与えない
+  - **regeneration_context注入**: 全5オーケストレータ(CreativeDirector, PhaseA1-A3, PhaseD)に`regeneration_context: str | None`パラメータを追加。再生成時に元のアーティファクトJSON + ユーザー指示を含むコンテキスト文字列がLLMプロンプトに付加される
+  - **Phase A-1の共同再生成**: macro_profileとlinguistic_expressionは同フェーズで生成されるため、どちらか一方の再生成で両方が更新される（UIで明示）
+  - **WebSocket新アクション**: `regenerate_artifact`（AI再生成、カスケードオプション付き）、`save_artifact_edit`（手動JSON編集の保存、Pydanticバリデーション付き）
+  - **フロントエンド**: 各タブにアクションバー（再生成/編集ボタン）、再生成モーダル（自然言語指示入力+下流カスケード警告+プログレス表示）、編集モーダル（JSONテキストエリア+バリデーションエラー表示）
+
 ---
 
 ## パート3: プロジェクト管理
@@ -489,6 +510,7 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 | Stage 12: Day1世界観導入・イベント数調整・翌日予定必須化 | ✅ 実装完了 | Day1日記に世界観セクション追加、日記文字数約400字統一、イベント数2-4件/日、翌日予定フォールバック |
 | Stage 13: 言語的表現方法の独立化 | ✅ 実装完了 | VoiceFingerprint→LinguisticExpression独立化、抽象的喋り方雰囲気+日記書き方の空気感追加、日記生成プロンプトにのみ注入 |
 | Stage 14: エージェンティック生成化 | ✅ 実装完了 | Phase A-3/D Step5のエージェンティック化、Creative Director自己批判強化、2層自己批判(外部批評+内省)導入 |
+| Stage 15: アーティファクト個別再生成・編集 | ✅ 実装完了 | regeneration.py新設、全5オーケストレータにregeneration_context注入、WS 2アクション追加、再生成/編集モーダルUI |
 
 ### 次のアクション
 
