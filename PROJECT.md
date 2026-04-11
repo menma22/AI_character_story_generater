@@ -103,7 +103,7 @@ graph TB
         PD --> Models
         DLO --> Memory["models/memory.py"]
         
-        DLO --> Utils["tools/agent_utils.py<br>(parse_markdown_sections)"]
+        DLO --> Utils["tools/agent_utils.py"]
     end
 
     WSClient <-.->|"WebSocket"| WSHandler
@@ -165,29 +165,32 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 **日次ループ（Day 1-7）:**
 ```
 各日のイベント(4-6個) → 動的活性化(5-10パラメータ選択)
-→ Perceiver(自然言語出力) → Impulsive Agent(自然言語出力)
-→ 【感情強度判定】intensity=high → Reflectiveバイパス / それ以外 → Reflective実行
-→ 出力検証(#1-#52漏洩チェック)
+→ 衝動系エージェント(Perceiver+Impulsive統合, raw text出力)
+→ 【感情強度判定】intensity=high → Reflectiveバイパス / それ以外 → Reflective実行(raw text出力)
+→ 出力検証(#1-#52漏洩チェック, raw textベース)
 → 出来事周辺情報統合エージェント(Agentic: 行動決定+情景描写+ストーリー統合)
 → 【4つの個別チェックAI】Profile/Temperament/Personality/Values並列チェック
 → 価値観違反チェック
-→ 内省(Self-Perception + 過去統合 + 再解釈, 自然言語出力)
+→ 内省(Self-Perception + 過去統合 + 再解釈, raw text出力)
 → 日記生成: Agentic日記執筆(言語的指紋・AI臭さツール検証込み)
 → 【4つの個別チェックAI】日記出力チェック
 → ムード更新(Peak-End Rule) → key memory抽出(個別ファイル保存) + 記憶圧縮 + 翌日予定追加
 → ムードcarry-over(減衰+閾値リセット)
+
+※ 全エージェントにマクロプロフィール・世界設定・周囲人物・経験DB・key memoryを同梱
+※ エージェント出力はmarkdownパースせずraw textで次のエージェントへそのまま渡す
 ```
 
 **出力形式の設計原則:**
 | 出力の用途 | 形式 | 例 |
 |-----------|------|-----|
 | コードが機械的にパースしてPydanticモデルに格納する値 | JSON (`json_mode=True`) | パラメータID、Episode Writer全出力、WeeklyEventWriter全出力、Tool Calling |
-| エージェント間でプロンプトコンテキストとして渡すもの | 自然言語テキスト | Phase D Step1-4（世界設定・人物・物語アーク・葛藤強度）、Phase A-3 Planner出力、Perceiver/Impulsive/Reflective出力 |
+| エージェント間でプロンプトコンテキストとして渡すもの | raw text（全文pass-through） | 衝動系エージェント出力、Reflective出力、内省メモ |
 | 最終出力 | 自然な文章 | 日記、ナラティブ |
 
 **隠蔽原則（implicit/explicit非対称）:**
-- Impulsive Agent: 気質・性格層にアクセス可 / 規範層にアクセス不可
-- Reflective Agent: 気質・性格層に隠蔽 / 規範層にアクセス可
+- 衝動系エージェント（Perceiver+Impulsive統合）: 気質・性格層にアクセス可 / 規範層にアクセス不可
+- Reflective Agent: 気質・性格層に隠蔽 / 規範層にアクセス可 / 衝動系出力をraw textで受け取る
 - 日記生成AI: 気質・性格パラメータを知らない（行動からの推測のみ）
 
 **品質プロファイル別モデル設定:**
@@ -277,15 +280,16 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 **(b) 変更・根拠**: V10仕様書に基づく「真のエージェンティックな振る舞い」を実現するため。
 **(c) 採用プラクティス**: Anthropic Tool Calling機能を統合した `call_llm_agentic` インフラを構築し、CreativeDirector、Integration Agent(行動決定)、DiaryGenerationAgentの3コアを Tool-using Autonomous Agent へ置換。全Agenticエージェントは `self.profile.worker_tier` に基づき Claude→Gemini自動フォールバック（try/except + `call_llm_agentic_gemini`）を実装。内部ツール（`simulate_action_consequences`等）のtierもプロファイル連動。
 
-### 5. エージェント出力形式: JSON → 自然言語（構造化Markdown）
+### 5. エージェント出力形式: JSON → 自然言語 → raw text pass-through
 
 **(a) 当初設計**: 全エージェント出力を `json_mode=True` で JSON 形式に統一し、Pydantic モデルで直接パースしていた。
-**(b) 変更・根拠**: JSON形式はシステムが値をプログラム的に処理する場面でのみ有効。エージェントがプロンプトとして受け取る記憶・ナラティブ・内省・情景描写等は、自然言語のほうがLLMの処理品質が高い。日記や情景描写にJSON制約を課すと文学的品質が大幅に低下する。
-**(c) 採用プラクティス**: 
-- **JSON維持**: DynamicActivation(パラメータID)、ValuesViolation(bool判定)、Tool Calling(decision_package)
-- **自然言語化**: Perceiver、Impulsive、Reflective、SceneNarration、Introspectionの5エージェント出力を `## セクション名` 形式のMarkdownに変更
-- `parse_markdown_sections()` ユーティリティで各セクションをPydanticモデルのフィールドに分配
-- 統合エージェントへの入力も `json.dumps(model.model_dump())` から自然言語テキストに変更
+**(b) 第1次変更**: JSON→Markdown構造化。`parse_markdown_sections()`で`## セクション名`単位にパースし、Pydanticモデルのフィールドに分配。
+**(c) 第2次変更・根拠**: Markdownパース方式では、LLMが生成したセクション（例:「生じた衝動」）がPydanticモデルに対応フィールドがない場合に捨てられていた。また、パース→再構成の往復が冗長であり、次のエージェントに渡す際にわざわざ分解して再結合する意味がなかった。
+**(d) 採用プラクティス**: 
+- **JSON維持**: DynamicActivation(パラメータID)、ValuesViolation(bool判定)、EmotionIntensity(判定)、Tool Calling(decision_package)
+- **raw text pass-through**: 衝動系エージェント・Reflective・内省の出力はLLM出力の全文を`raw_text`フィールドに格納し、次のエージェントにそのまま渡す
+- `ImpulsiveOutput`, `ReflectiveOutput`, `IntrospectionMemo`は全て`raw_text: str`の単一フィールドに簡素化
+- `parse_markdown_sections()`はorchestrator.pyからは不要となり、import削除済み
 
 ### 6. Phase A-3/D: 不要なJSON依存の排除
 
@@ -358,6 +362,21 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 - Creative Directorに `search_web` + `file_read`（backend/reference/参照）の2ツールを付与。
 - `md_storage.py` で全エージェント出力・ムード変遷・内省・日記・key memoryを含む完全なDay_N.mdを自動生成。
 
+### 15. Perceiver + Impulsive Agent統合 + 全エージェントへのコンテキスト拡充
+
+**(a) 当初設計**: Perceiver(§4.3, 知覚フィルター)とImpulsive Agent(§4.6 Step 1, 衝動的反応)を独立した2つのエージェントとして順次実行。Perceiverは3フィールド出力（現象的記述・反射感情・自動注意）、Impulsiveは3フィールド出力（衝動的反応・身体感覚・行動傾向）。Perceiverにはマクロプロフィール(400文字制限)のみ渡し、経験DB・key memory・世界設定・周囲人物は未同梱。
+**(b) 変更・根拠**: Perceiverのプロンプトを衝動系寄りに改変した結果、Impulsive Agentと役割が完全に重複。また、Perceiver出力に「生じた衝動」セクションを追加したがPydanticモデルに対応フィールドがなく出力が捨てられていた。エージェントへのコンテキストが不足しており、世界設定・周囲人物・経験DB・key memoryなしでは文脈に乏しい出力になっていた。
+**(c) 採用プラクティス**:
+  - `_perceiver()`を完全削除し`_impulsive()`に統合。処理フロー: `動的活性化 → 衝動系エージェント → 感情強度判定 → Reflective → 検証 → 統合`
+  - `PerceiverOutput`を削除。`EventPackage`から`perceiver_output`フィールドも削除
+  - 全エージェント（衝動系・Reflective・統合・内省・日記）に以下を同梱:
+    - マクロプロフィール（全文、400文字制限撤廃）
+    - 世界設定（`_build_world_context()` 新設）
+    - 周囲人物（`_build_supporting_characters_context()` 新設）
+    - 経験DB（自伝的エピソード）
+    - key memory + 通常記憶
+  - 検証エージェントもPerceiver不要のraw textベースに刷新
+
 ---
 
 ## パート3: プロジェクト管理
@@ -374,6 +393,7 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 | Stage 6: 仕様書完全準拠 | ✅ 実装完了 | バグ修正、A-2 15Worker化完了 |
 | Stage 7: 監査・運用保守 | ✅ 実装完了 | 全エージェントプロンプトの抽出・構造化レポート作成 |
 | Stage 8: 日次ループ高度化 | ✅ 実装完了 | 感情強度判定・4チェックAI・統合エージェント拡張・key memory分離・フォールバック多層化 |
+| Stage 9: エージェント統合・コンテキスト拡充 | ✅ 実装完了 | Perceiver+Impulsive統合・raw text pass-through・全エージェントへのマクロ/世界設定/経験DB同梱 |
 
 ### 次のアクション
 
