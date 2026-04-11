@@ -99,9 +99,9 @@ PROFILES = {
         interestingness_evaluator_enabled=False,
         event_metadata_auditor_enabled=False,
         narrative_connection_auditor_enabled=False,
-        worker_regeneration_max_iterations=1,
+        worker_regeneration_max_iterations=2,
         director_tier="sonnet",
-        worker_tier="gemma",
+        worker_tier="gemini",
     ),
 }
 

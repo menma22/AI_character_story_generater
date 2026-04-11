@@ -7,6 +7,7 @@ Prompt Caching対応、トークン消費追跡付き。
 import asyncio
 import json
 import logging
+import re
 from typing import Any, Optional
 
 import anthropic
@@ -90,6 +91,92 @@ class TokenTracker:
 token_tracker = TokenTracker()
 
 
+def _extract_json(text: str) -> Optional[Any]:
+    """
+    堅牢なJSON抽出（4段階フォールバック）
+    1. 直接パース
+    2. Markdownコードフェンス除去
+    3. 正規表現で{...}/[...]ブロック検出
+    4. 切り詰めJSON修復（未閉じ括弧を閉じる）
+    """
+    if not text or not text.strip():
+        return None
+
+    text = text.strip()
+
+    # Strategy 1: 直接パース
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    # Strategy 2: Markdownコードフェンス除去
+    if text.startswith("```"):
+        lines = text.split("\n")
+        end = -1 if lines[-1].strip().startswith("```") else len(lines)
+        stripped = "\n".join(lines[1:end])
+        try:
+            return json.loads(stripped)
+        except json.JSONDecodeError:
+            pass
+
+    # Strategy 3: 正規表現で最外殻の{...}または[...]を検出
+    for pattern in [r'\{[\s\S]*\}', r'\[[\s\S]*\]']:
+        match = re.search(pattern, text)
+        if match:
+            try:
+                return json.loads(match.group())
+            except json.JSONDecodeError:
+                pass
+
+    # Strategy 4: MAX_TOKENSによる切り詰めJSON修復
+    json_start = None
+    for i, ch in enumerate(text):
+        if ch in ('{', '['):
+            json_start = i
+            break
+
+    if json_start is not None:
+        fragment = text[json_start:]
+        opens_brace = 0
+        opens_bracket = 0
+        in_string = False
+        escape_next = False
+        for ch in fragment:
+            if escape_next:
+                escape_next = False
+                continue
+            if ch == '\\':
+                escape_next = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if ch == '{':
+                opens_brace += 1
+            elif ch == '}':
+                opens_brace -= 1
+            elif ch == '[':
+                opens_bracket += 1
+            elif ch == ']':
+                opens_bracket -= 1
+
+        suffix = '"]' * 0  # 文字列中断の場合は閉じない（複雑すぎる）
+        suffix = ']' * max(0, opens_bracket) + '}' * max(0, opens_brace)
+        if suffix:
+            try:
+                repaired = fragment + suffix
+                result = json.loads(repaired)
+                logger.info(f"JSON truncation repair succeeded (appended {repr(suffix)})")
+                return result
+            except json.JSONDecodeError:
+                pass
+
+    return None
+
+
 # ─── Anthropic API ────────────────────────────────────────────
 
 _anthropic_client: Optional[anthropic.Anthropic] = None
@@ -169,20 +256,15 @@ async def call_anthropic(
         token_tracker.record(model, usage)
         logger.info(f"[Anthropic] {model} | in={usage['input_tokens']} out={usage['output_tokens']} cache_r={usage.get('cache_read_input_tokens',0)}")
         
-        # JSONモードの場合、パースを試みる
+        # JSONモードの場合、堅牢な抽出を試みる
         if json_mode:
-            try:
-                # ```json ... ``` ブロックの除去
-                text = content.strip()
-                if text.startswith("```"):
-                    lines = text.split("\n")
-                    text = "\n".join(lines[1:-1]) if lines[-1].strip() == "```" else "\n".join(lines[1:])
-                parsed = json.loads(text)
+            parsed = _extract_json(content)
+            if parsed is not None:
                 return {"content": parsed, "raw": content, "usage": usage, "model": model}
-            except json.JSONDecodeError:
-                logger.warning(f"JSON parse failed, returning raw text")
-                return {"content": content, "raw": content, "usage": usage, "model": model}
-        
+            else:
+                logger.warning(f"[Anthropic] JSON extraction failed (len={len(content)}). Preview: {content[:200]}")
+                return {"content": content, "raw": content, "usage": usage, "model": model, "_json_failed": True}
+
         return {"content": content, "usage": usage, "model": model}
         
     except Exception as e:
@@ -266,16 +348,12 @@ async def call_gemma(
         logger.info(f"[Gemma] {model} | in={usage['input_tokens']} out={usage['output_tokens']}")
         
         if json_mode:
-            try:
-                text = content.strip()
-                if text.startswith("```"):
-                    lines = text.split("\n")
-                    text = "\n".join(lines[1:-1]) if lines[-1].strip() == "```" else "\n".join(lines[1:])
-                parsed = json.loads(text)
+            parsed = _extract_json(content)
+            if parsed is not None:
                 return {"content": parsed, "raw": content, "usage": usage, "model": model}
-            except json.JSONDecodeError:
-                logger.warning(f"JSON parse failed from Gemma, returning raw text")
-                return {"content": content, "raw": content, "usage": usage, "model": model}
+            else:
+                logger.warning(f"[Gemini/Gemma] JSON extraction failed (model={model}, len={len(content)}). Preview: {content[:200]}")
+                return {"content": content, "raw": content, "usage": usage, "model": model, "_json_failed": True}
         
         return {"content": content, "usage": usage, "model": model}
         
@@ -286,27 +364,17 @@ async def call_gemma(
 
 # ─── ユーティリティ ────────────────────────────────────────────
 
-async def call_llm(
+async def _call_llm_once(
     tier: str,
     system_prompt: str,
     user_message: str,
-    max_tokens: int = 16384,
-    temperature: float = 1.0,
-    json_mode: bool = False,
-    cache_system: bool = True,
-    cache_context: Optional[str] = None,
+    max_tokens: int,
+    temperature: float,
+    json_mode: bool,
+    cache_system: bool,
+    cache_context: Optional[str],
 ) -> dict:
-    """
-    統一LLM呼び出しインターフェース
-    
-    Claude優先フォールバック方式:
-    - tier="opus"/"sonnet" → まずClaudeを試行。失敗時にGemini 2.5 Proへ自動フォールバック。
-    - tier="gemini" → Gemini 2.5 Pro直接指定。
-    - tier="gemma" → Gemma 4直接指定。
-    
-    Returns:
-        {"content": str or dict, "usage": dict}
-    """
+    """単一LLM呼び出し（フォールバック付き）"""
     if tier in ("opus", "sonnet"):
         model_name = LLMModels.OPUS if tier == "opus" else LLMModels.SONNET
         try:
@@ -322,8 +390,6 @@ async def call_llm(
             )
         except Exception as e:
             logger.warning(f"[call_llm] Claude ({tier}) failed: {e}. Falling back to Gemini 2.5 Pro.")
-            # フォールバック: Gemini 2.5 Pro を使用
-            # system_prompt を system_instruction として正しく渡す（user_messageに結合しない）
             return await call_gemma(
                 system_prompt=system_prompt,
                 user_message=user_message,
@@ -332,7 +398,7 @@ async def call_llm(
                 temperature=temperature,
                 json_mode=json_mode,
             )
-            
+
     if tier == "gemini":
         return await call_gemma(
             system_prompt=system_prompt,
@@ -342,7 +408,7 @@ async def call_llm(
             temperature=temperature,
             json_mode=json_mode,
         )
-            
+
     if tier == "gemma":
         return await call_gemma(
             system_prompt=system_prompt,
@@ -352,8 +418,52 @@ async def call_llm(
             temperature=temperature,
             json_mode=json_mode,
         )
-    else:
-        raise ValueError(f"Unknown tier: {tier}")
+
+    raise ValueError(f"Unknown tier: {tier}")
+
+
+async def call_llm(
+    tier: str,
+    system_prompt: str,
+    user_message: str,
+    max_tokens: int = 16384,
+    temperature: float = 1.0,
+    json_mode: bool = False,
+    cache_system: bool = True,
+    cache_context: Optional[str] = None,
+) -> dict:
+    """
+    統一LLM呼び出しインターフェース（json_mode時は自動リトライ付き）
+
+    Claude優先フォールバック方式:
+    - tier="opus"/"sonnet" → まずClaudeを試行。失敗時にGemini 2.5 Proへ自動フォールバック。
+    - tier="gemini" → Gemini 2.5 Pro直接指定。
+    - tier="gemma" → Gemma 4直接指定。
+
+    Returns:
+        {"content": str or dict, "usage": dict}
+    """
+    max_attempts = 3 if json_mode else 1
+    result = None
+    temp = temperature
+
+    for attempt in range(1, max_attempts + 1):
+        result = await _call_llm_once(
+            tier=tier, system_prompt=system_prompt, user_message=user_message,
+            max_tokens=max_tokens, temperature=temp,
+            json_mode=json_mode, cache_system=cache_system, cache_context=cache_context,
+        )
+
+        if not json_mode or not result.get("_json_failed"):
+            return result
+
+        if attempt < max_attempts:
+            logger.warning(f"[call_llm] JSON parse failed (attempt {attempt}/{max_attempts}), tier={tier}. Retrying with temp={temp + 0.1:.1f}...")
+            temp = min(temp + 0.1, 1.5)
+        else:
+            logger.error(f"[call_llm] JSON parse failed after {max_attempts} attempts. tier={tier}, raw_len={len(str(result.get('raw', '')))}")
+
+    return result
 
 
 
