@@ -1,132 +1,132 @@
 """
 日記出力チェック（Self-Critic）エージェント（v10 §4.9.1 準拠）
 
-日記生成後に品質チェックを実施:
-- 言語的指紋（一人称、口癖、文末表現、漢字/ひらがな傾向）の整合性
-- 避ける語彙の使用チェック
-- AI臭い語彙（「成長」「気づき」「学び」等）の排除
-- 日記の長さ・省略の自然さ
-- mood PADとの整合性
+シンプルな構造:
+  1. 主エージェントが書いた日記ドラフトを受け取る
+  2. チェック項目 + マクロプロフィール等の情報と照合（LLMに任せる）
+  3. JSON形式で「OK」か「やり直し」を判定
+  4. やり直しの場合、修正すべき箇所を明確に指摘して返す
 """
 
 import json
 import logging
 from typing import Optional
 
-from backend.models.character import VoiceFingerprint
+from backend.models.character import MacroProfile, VoiceFingerprint
 from backend.models.memory import DiaryEntry, MoodState
 from backend.tools.llm_api import call_llm
 
 logger = logging.getLogger(__name__)
 
-# AI臭い語彙のブラックリスト
-AI_SMELL_WORDS = [
-    "成長", "気づき", "学び", "視野が広がっ", "新たな発見",
-    "自己成長", "大切なこと", "心の成長", "前向き", "ポジティブ",
-    "チャレンジ", "ステップアップ", "自分を見つめ直", "大事にしたい",
-]
-
 
 class DiarySelfCritic:
-    """日記出力チェック（Self-Critic）"""
-    
-    def __init__(self, voice_fingerprint: VoiceFingerprint, ws_manager=None, tier: str = "gemini"):
+    """日記出力チェック（Self-Critic）— LLMベースのシンプルな検証"""
+
+    def __init__(
+        self,
+        voice_fingerprint: VoiceFingerprint,
+        macro_profile: Optional[MacroProfile] = None,
+        ws_manager=None,
+        tier: str = "gemini",
+    ):
         self.voice = voice_fingerprint
+        self.macro_profile = macro_profile
         self.ws = ws_manager
         self.tier = tier
-    
+
     async def _notify(self, content: str, status: str = "thinking"):
         if self.ws:
             await self.ws.send_agent_thought("[日記Self-Critic]", content, status)
-    
-    def _check_avoided_words(self, text: str) -> list[str]:
-        """避ける語彙のチェック"""
-        found = []
-        for word in self.voice.avoided_words:
-            if word in text:
-                found.append(word)
-        return found
-    
-    def _check_ai_smell(self, text: str) -> list[str]:
-        """AI臭い語彙のチェック"""
-        found = []
-        for word in AI_SMELL_WORDS:
-            if word in text:
-                found.append(word)
-        return found
-    
-    def _check_first_person(self, text: str) -> bool:
-        """一人称の整合性チェック"""
-        if not self.voice.first_person:
-            return True
-        
-        # 指定された一人称が使われているか
-        return self.voice.first_person in text
-    
+
+    def _build_check_context(self) -> str:
+        """チェックに必要な情報をまとめたコンテキストを構築する"""
+        sections = []
+
+        # 言語的指紋（必須チェック項目）
+        sections.append("## 言語的指紋（厳守ルール）")
+        sections.append(f"- 一人称: {self.voice.first_person or '未指定'}")
+        if self.voice.speech_patterns:
+            sections.append(f"- 口癖: {', '.join(self.voice.speech_patterns)}")
+        if self.voice.catchphrases:
+            sections.append(f"- 口癖フレーズ: {', '.join(self.voice.catchphrases)}")
+        if self.voice.sentence_endings:
+            sections.append(f"- 文末表現: {', '.join(self.voice.sentence_endings)}")
+        if self.voice.kanji_hiragana_tendency:
+            sections.append(f"- 漢字/ひらがな傾向: {self.voice.kanji_hiragana_tendency}")
+        if self.voice.emoji_usage:
+            sections.append(f"- 絵文字・記号: {self.voice.emoji_usage}")
+        if self.voice.avoided_words:
+            sections.append(f"- 避ける語彙: {', '.join(self.voice.avoided_words)}")
+        if self.voice.metaphor_irony_frequency:
+            sections.append(f"- 比喩・反語: {self.voice.metaphor_irony_frequency}")
+
+        # マクロプロフィール（キャラクター整合性の参照情報）
+        if self.macro_profile:
+            sections.append("\n## キャラクター情報（整合性チェック用）")
+            bi = self.macro_profile.basic_info
+            if bi.name:
+                sections.append(f"- 名前: {bi.name}")
+            if bi.age:
+                sections.append(f"- 年齢: {bi.age}")
+            if bi.occupation:
+                sections.append(f"- 職業: {bi.occupation}")
+            cl = self.macro_profile.current_life_outline
+            if cl.hobbies_leisure:
+                sections.append(f"- 趣味: {', '.join(cl.hobbies_leisure)}")
+            if cl.daily_routine:
+                sections.append(f"- 日常: {cl.daily_routine}")
+
+        return "\n".join(sections)
+
     async def critique(self, diary: DiaryEntry, mood: MoodState) -> dict:
         """
-        日記の品質チェック
-        
+        日記の品質チェック — LLMに全て任せるシンプルな検証
+
         Returns:
-            {"passed": bool, "issues": list[str], "corrected_diary": str|None}
+            {"passed": bool, "issues": list[str]}
         """
         await self._notify(f"Day {diary.day}の日記をチェック中...")
-        
-        issues = []
-        
-        # Rule-based checks
-        avoided = self._check_avoided_words(diary.content)
-        if avoided:
-            issues.append(f"避ける語彙の使用: {', '.join(avoided)}")
-        
-        ai_smell = self._check_ai_smell(diary.content)
-        if ai_smell:
-            issues.append(f"AI臭い語彙: {', '.join(ai_smell)}")
-        
-        if not self._check_first_person(diary.content):
-            issues.append(f"一人称「{self.voice.first_person}」が使われていない")
-        
-        if len(diary.content) < 200:
-            issues.append(f"日記が短すぎる ({len(diary.content)}字、最低200字推奨)")
 
-        if len(diary.content) > 500:
-            issues.append(f"日記が長すぎる ({len(diary.content)}字、500字以下にしてください)")
-        
-        if not issues:
-            await self._notify("日記チェックOK ✓", "complete")
-            return {"passed": True, "issues": [], "corrected_diary": None}
-        
-        # Issues found → LLMで修正
-        await self._notify(f"問題検出: {len(issues)}件 → 修正中...")
-        
+        check_context = self._build_check_context()
+
         result = await call_llm(
             tier=self.tier,
-            system_prompt=f"""あなたは日記修正エージェントです。
-以下の日記を修正してください。
+            system_prompt=f"""あなたは日記の品質チェッカーです。
+以下のチェック項目とキャラクター情報に基づいて、日記ドラフトがルールを守れているか検証してください。
 
-【言語的指紋（厳守）】
-一人称: {self.voice.first_person}
-口癖: {', '.join(self.voice.speech_patterns)}
-文末表現: {', '.join(self.voice.sentence_endings)}
-漢字/ひらがな: {self.voice.kanji_hiragana_tendency}
-避ける語彙: {', '.join(self.voice.avoided_words)}
+{check_context}
 
-【修正指示】
-{chr(10).join(f'- {issue}' for issue in issues)}
+## 現在のムード（PAD値）
+- 感情価(V): {mood.valence}, 覚醒度(A): {mood.arousal}, 支配感(D): {mood.dominance}
 
-修正後の日記のみを出力してください。JSON形式:
-{{"corrected_diary": "修正後の日記本文"}}""",
-            user_message=f"【元の日記】\n{diary.content}",
+## チェック観点
+1. 言語的指紋の遵守: 一人称、口癖、文末表現、漢字/ひらがな傾向が指定通りか
+2. 避ける語彙の不使用: 避ける語彙リストに該当する語が含まれていないか
+3. AI臭さの排除: 「成長」「気づき」「学び」「前向き」など、AIが書いた感じのする安直で綺麗事な語彙が使われていないか
+4. 文量の適切さ: 200〜500字程度が目安（厳密でなくてよい）
+5. ムードとの整合性: PAD値が示す感情状態と日記のトーンが矛盾していないか
+6. キャラクター整合性: 年齢・職業・日常と矛盾する内容がないか
+
+## 出力形式（JSON）
+問題がなければ:
+{{"passed": true, "issues": []}}
+
+問題があれば:
+{{"passed": false, "issues": ["具体的な問題点と修正指示1", "具体的な問題点と修正指示2"]}}
+
+issuesには「何が問題で、どう直すべきか」を主エージェントが即座に修正できるよう明確に書いてください。""",
+            user_message=f"【日記ドラフト（Day {diary.day}）】\n{diary.content}",
             json_mode=True,
         )
-        
+
+        # レスポンスのパース
         data = result["content"] if isinstance(result["content"], dict) else {}
-        corrected = data.get("corrected_diary", diary.content)
-        
-        await self._notify(f"日記修正完了: {len(issues)}件の問題を修正", "complete")
-        
-        return {
-            "passed": False,
-            "issues": issues,
-            "corrected_diary": corrected,
-        }
+        passed = data.get("passed", False)
+        issues = data.get("issues", [])
+
+        if passed:
+            await self._notify("日記チェックOK", "complete")
+        else:
+            await self._notify(f"問題検出: {len(issues)}件", "complete")
+
+        return {"passed": passed, "issues": issues}

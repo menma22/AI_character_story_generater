@@ -272,7 +272,10 @@ class DailyLoopOrchestrator:
             voice_fp = self.package.macro_profile.voice_fingerprint
         if voice_fp:
             self.diary_critic = DiarySelfCritic(
-                voice_fp, ws_manager, tier=self.profile.worker_tier
+                voice_fp,
+                macro_profile=self.package.macro_profile,
+                ws_manager=ws_manager,
+                tier=self.profile.worker_tier,
             )
 
         # 4つの個別チェックAI
@@ -1096,9 +1099,11 @@ class DailyLoopOrchestrator:
 - 避ける語彙は絶対に使わないこと（「成長」「気づき」「学び」等のAI臭い語彙）
 - 全ての出来事を書く必要はない。主観的に重要だと感じたことだけを書く。しかし、1日全体を見渡しての所感を書くのは推奨
 - 日々の経験や記憶、感情、認識の変化が反映されているとよい。
+- ただの、出来事の羅列ではなく、キャラクタ独自の経験や感性、記憶、キャラクター設定に基づき、深くキャラクターの内面を反映した文章にする必要がある。
 - 第3者が日記だけを見て、理解でき、納得でき、面白い日記である必要がある。
 - 与えられた、マクロプロフィール、世界設定、今日の出来事、内省メモ、現在のムード、記憶コンテキストを全て加味して、日記を作成してください。
-- 約400字（500字以下）
+- 記憶コンテキスト内にあることはもっとも重要な要素です。
+- 日記は必ず、400字以上500字以下で書くこと
 
 
 【エージェンティック行動指針】
