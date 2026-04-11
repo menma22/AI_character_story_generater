@@ -114,7 +114,6 @@ class PhaseA3Orchestrator:
             tier=self.profile.director_tier,
             system_prompt=EPISODE_PLANNER_PROMPT,
             user_message=context,
-            max_tokens=3000,
             json_mode=True,
             cache_system=True,
         )
@@ -140,7 +139,6 @@ class PhaseA3Orchestrator:
                     f"【このエピソードの計画】\n{json.dumps(plan_entry, ensure_ascii=False, indent=2)}\n\n"
                     f"上記計画に基づいて、200-400字のnarrativeを書いてください。"
                 ),
-                max_tokens=2000,
                 json_mode=True,
             )
             

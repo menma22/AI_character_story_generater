@@ -191,7 +191,6 @@ class DailyLoopOrchestrator:
                 f"【イベント】\n{event.content}\n"
                 f"（時間帯: {event.time_slot} | {known_str} {source_str} | 予想外度: {event.expectedness}）"
             ),
-            max_tokens=1200,
             json_mode=False,
         )
         raw_text = result["content"] if isinstance(result["content"], str) else str(result["content"])
@@ -239,7 +238,6 @@ class DailyLoopOrchestrator:
                 f"【知覚の記述】\n{perceiver_text}\n\n"
                 f"【イベント】{event.content}"
             ),
-            max_tokens=800,
             json_mode=False,
         )
         raw_text = result["content"] if isinstance(result["content"], str) else str(result["content"])
@@ -296,7 +294,6 @@ class DailyLoopOrchestrator:
                 f"【イベント】{event.content}\n"
                 f"（known: {event.known_to_protagonist} | source: {event.source}）"
             ),
-            max_tokens=1500,
             json_mode=False,
         )
         raw_text = result["content"] if isinstance(result["content"], str) else str(result["content"])
@@ -339,7 +336,6 @@ class DailyLoopOrchestrator:
                 tier="sonnet",
                 system_prompt="あなたは主人公の行動シミュレーターです。この行動をとった場合の良い点・悪い点、および自身の持つ価値観への違反度（罪悪感を生むか）をフィードバックしてください。JSON形式: {\"pros\": \"...\", \"cons\": \"...\", \"values_violation_risk\": \"high/medium/low\", \"feedback\": \"...\"}",
                 user_message=f"【自己の価値観】\n{values_context}\n\n【検討中の行動案】\n{action_idea}",
-                max_tokens=500,
                 json_mode=True
             )
             data = res["content"] if isinstance(res["content"], dict) else {"feedback": str(res["content"])}
@@ -478,7 +474,6 @@ class DailyLoopOrchestrator:
                 f"【行動決定】{integration.final_action}\n\n"
                 f"【気持ち変化】{integration.emotion_change}"
             ),
-            max_tokens=1000,
             json_mode=False,
         )
         raw_text = result["content"] if isinstance(result["content"], str) else str(result["content"])
@@ -514,7 +509,6 @@ class DailyLoopOrchestrator:
                 f"【Higgins Ideal gap】{integration.higgins_ideal_gap}\n"
                 f"【Higgins Ought gap】{integration.higgins_ought_gap}"
             ),
-            max_tokens=500,
             json_mode=True,
         )
         data = result["content"] if isinstance(result["content"], dict) else {}
@@ -638,7 +632,6 @@ class DailyLoopOrchestrator:
                 f"記憶:\n{self._build_memory_context()}\n\n"
                 f"自伝的エピソード:\n{self._build_episodes_context()[:600]}"
             ),
-            max_tokens=1500,
             json_mode=False,
         )
         raw_text = result["content"] if isinstance(result["content"], str) else str(result["content"])
@@ -790,7 +783,6 @@ class DailyLoopOrchestrator:
 出力形式: JSON
 {"key_memory": "300字以内の要約"}""",
             user_message=f"Day {day}の日記:\n{diary.content}",
-            max_tokens=500,
             json_mode=True,
         )
         data = result["content"] if isinstance(result["content"], dict) else {}
@@ -825,7 +817,6 @@ class DailyLoopOrchestrator:
                             tier=self.profile.worker_tier,
                             system_prompt="以下のテキストを、重要な出来事を保持しつつ元の2/3程度に圧縮してください。JSON: {\"compressed\": \"...\"}",
                             user_message=mem.summary,
-                            max_tokens=500,
                             json_mode=True,
                         )
                         d = compressed["content"] if isinstance(compressed["content"], dict) else {}

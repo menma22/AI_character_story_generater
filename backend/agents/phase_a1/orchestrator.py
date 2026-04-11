@@ -37,7 +37,6 @@ async def run_worker(
         tier=tier,
         system_prompt=system_prompt,
         user_message=user_message,
-        max_tokens=3000,
         json_mode=True,
     )
     
@@ -313,7 +312,6 @@ class PhaseA1Orchestrator:
             tier=self.profile.worker_tier,
             system_prompt=SUMMARY_PROMPT,
             user_message=f"これまでの生成結果:\n{json.dumps(basic_info.model_dump(), ensure_ascii=False)}\n{json.dumps(family_obj.model_dump(), ensure_ascii=False)}\n{json.dumps(lifestyle_obj.model_dump(), ensure_ascii=False)}\n{json.dumps(dream_obj.model_dump(), ensure_ascii=False)}\n{json.dumps(voice_obj.model_dump(), ensure_ascii=False)}\n{json.dumps(values_obj.model_dump(), ensure_ascii=False)}\n{json.dumps(secret_obj.model_dump(), ensure_ascii=False)}",
-            max_tokens=8000,
             json_mode=False
         )
 

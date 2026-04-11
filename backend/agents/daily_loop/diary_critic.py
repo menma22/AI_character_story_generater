@@ -117,7 +117,6 @@ class DiarySelfCritic:
 修正後の日記のみを出力してください。JSON形式:
 {{"corrected_diary": "修正後の日記本文"}}""",
             user_message=f"【元の日記】\n{diary.content}",
-            max_tokens=2000,
             json_mode=True,
         )
         

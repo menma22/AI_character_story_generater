@@ -220,7 +220,6 @@ concept_package、macro_profile、micro_parametersの間に矛盾がないかチ
                 f"schwartz_values:\n{json.dumps(micro.schwartz_values, ensure_ascii=False)}\n\n"
                 f"ideal_self: {micro.ideal_self}\nought_self: {micro.ought_self}"
             ),
-            max_tokens=800,
             json_mode=True,
         )
         
@@ -276,7 +275,6 @@ class BiasAuditor:
 出力: JSON
 {"passed": true/false, "bias_issues": ["問題点1"], "category_distribution": {"redemption": 0, "contamination": 0, "ambivalent": 0, "other": 0}}""",
             user_message=f"エピソード群:\n{ep_summary}",
-            max_tokens=600,
             json_mode=True,
         )
         
@@ -371,7 +369,6 @@ class InterestingnessEvaluator:
                 f"name: {macro.basic_info.name}, age: {macro.basic_info.age}\n"
                 f"occupation: {macro.basic_info.occupation}"
             ),
-            max_tokens=500,
             json_mode=True,
         )
         

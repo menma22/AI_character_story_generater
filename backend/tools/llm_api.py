@@ -225,16 +225,8 @@ async def call_gemma(
     """
     configure_gemma()
 
-    # Gemini 2.5 Pro は内部で「思考トークン」を使用し、max_output_tokens の予算を消費する。
-    # 要求されたトークン数だけでは思考で予算が尽き、実出力が空になる問題を回避するため、
-    # Gemini 2.5 Pro 使用時は max_output_tokens を大幅に引き上げる。
-    effective_max_tokens = max_tokens
-    if "gemini" in model.lower() and "2.5" in model:
-        effective_max_tokens = max(max_tokens * 4, 16384)
-        logger.info(f"[Gemma] Gemini 2.5 Pro detected: max_tokens {max_tokens} → {effective_max_tokens} (thinking token対策)")
-
     generation_config = genai.types.GenerationConfig(
-        max_output_tokens=effective_max_tokens,
+        max_output_tokens=max_tokens,
         temperature=temperature,
     )
     
@@ -298,7 +290,7 @@ async def call_llm(
     tier: str,
     system_prompt: str,
     user_message: str,
-    max_tokens: int = 4096,
+    max_tokens: int = 16384,
     temperature: float = 1.0,
     json_mode: bool = False,
     cache_system: bool = True,

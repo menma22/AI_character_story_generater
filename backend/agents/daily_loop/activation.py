@@ -114,7 +114,6 @@ class DynamicActivationAgent:
                 f"【シーン】\n{scene_description}\n\n"
                 f"このシーンに関連する5-10個のパラメータ・価値観を抽出してください。"
             ),
-            max_tokens=800,
             json_mode=True,
         )
         

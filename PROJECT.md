@@ -249,6 +249,12 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 **(b) 変更・根拠**: SDK未確認のため、直接Anthropic APIおよびGoogle Generative AIに切替。
 **(c) 採用プラクティス**: `call_llm()` 統一インターフェースで、実在する最新モデルID（`claude-opus-4-6`等）を直接指定。エラー時にはフォールバックルーティング（Anthropic → Gemini 2.5 Pro）が作動。
 
+### 2b. Gemini 2.5 Proフォールバックの思考トークン対策
+
+**(a) 当初設計**: Claudeと同じ`max_tokens`値をそのままGeminiへ渡していた。`system_prompt`はフォールバック時に`user_message`に文字列結合して渡していた。
+**(b) 変更・根拠**: Gemini 2.5 Proは内部で「思考トークン」を使用し、`max_output_tokens`の予算を消費する。例えば`max_tokens=3000`の場合、思考だけで3000トークン全てを使い切り、実際の出力が0トークン（`finish_reason=MAX_TOKENS`）になる問題が発覚。また`system_prompt`を`user_message`に結合する方式ではGeminiの`system_instruction`機能が使われず、指示の分離が機能しなかった。
+**(c) 採用プラクティス**: `call_gemma()`でGemini 2.5 Pro検出時に`max_output_tokens`を自動的に4倍（最低16384）に拡張。全tier(opus/sonnet/gemini/gemma)のフォールバックで`system_prompt`を`call_gemma`の`system_prompt`引数として正しく渡すよう修正。
+
 ### 3. 隠蔽原則の実装
 
 **(a) 当初設計**: 各エージェントに渡すコンテキストを関数引数レベルで制御
@@ -313,4 +319,5 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 ### ブロッカー
 
 > [!WARNING]
-> 一部のLLM API（特にAnthropic無料枠の残高不足エラーや、Gemini APIのクォータ制限）による生成中断ログが確認されています。本システムは現在、Claudeが利用不可の場合に自動でGemini 2.5 Proへフォールバックする機能が安定稼働しています。本稼働させる場合は有償Tierキーへ切り替えるか、リセット枠の回復をお待ちください。
+> - Anthropic APIのクレジット残高不足により全Claude呼び出しがGemini 2.5 Proへフォールバック中。本稼働時は有償Tierキーが必要。
+> - Gemini 2.5 Proの思考トークン問題（`max_output_tokens`枯渇による空レスポンス）は修正済み（`max_output_tokens`自動4倍拡張 + `system_prompt`の正しいパススルー）。

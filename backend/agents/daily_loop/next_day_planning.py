@@ -86,7 +86,6 @@ class NextDayPlanningAgent:
                 f"【現在のムード】V={current_mood.valence:.1f} A={current_mood.arousal:.1f} D={current_mood.dominance:.1f}\n\n"
                 f"明日やりたいことを3つ考えてください。"
             ),
-            max_tokens=800,
             json_mode=True,
         )
         
@@ -178,7 +177,6 @@ class NextDayPlanningAgent:
                 f"【主人公の計画（3つ）】\n{plans_summary}\n\n"
                 f"1つを選んでイベントとして挿入してください。"
             ),
-            max_tokens=1000,
             json_mode=True,
         )
         

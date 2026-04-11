@@ -214,7 +214,6 @@ class CreativeDirector:
                 tier="opus",
                 system_prompt=SELF_CRITIQUE_PROMPT,
                 user_message=f"以下のconcept_packageを評価してください:\n\n{json.dumps(concept_package, ensure_ascii=False, indent=2)}",
-                max_tokens=2048,
                 json_mode=True,
                 cache_system=True,
             )
@@ -386,7 +385,6 @@ class CreativeDirector:
                 tier="gemini",
                 system_prompt=SYSTEM_PROMPT,
                 user_message=user_msg + "\n\n上記のJSON形式で出力してください。search_webやrequest_critiqueは使えません。あなたの知識だけで最高のconcept_packageを生成してください。",
-                max_tokens=4000,
                 json_mode=True,
             )
 

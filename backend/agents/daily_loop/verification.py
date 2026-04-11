@@ -126,7 +126,6 @@ class OutputVerificationAgent:
                 f"【検出された漏洩キーワード】{', '.join(keyword_hits)}\n\n"
                 f"上記の出力を修正してください。"
             ),
-            max_tokens=800,
             json_mode=True,
         )
         
