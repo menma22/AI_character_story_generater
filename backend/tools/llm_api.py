@@ -550,7 +550,12 @@ async def call_llm_agentic_gemini(
         generation_config=genai.types.GenerationConfig(
             max_output_tokens=max_tokens,
             temperature=temperature,
-        )
+        ),
+        tool_config=genai.types.content_types.ToolConfig(
+            function_calling_config=genai.types.content_types.FunctionCallingConfig(
+                mode="ANY"
+            )
+        ),
     )
     
     from backend.websocket.handler import manager
