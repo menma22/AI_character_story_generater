@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 class NextDayPlanningAgent:
     """翌日予定追加エージェント（Stage 1 + Stage 2）"""
     
-    def __init__(self, ws_manager=None, tier: str = "gemma"):
+    def __init__(self, ws_manager=None, tier: str = "gemini"):
         self.ws = ws_manager
         self.tier = tier
     

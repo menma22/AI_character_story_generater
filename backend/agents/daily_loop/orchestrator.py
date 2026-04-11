@@ -251,7 +251,11 @@ class DailyLoopOrchestrator:
         self.activation_agent = None
         if self.package.micro_parameters:
             self.activation_agent = DynamicActivationAgent(
-                self.package.micro_parameters, ws_manager
+                self.package.micro_parameters,
+                ws_manager,
+                tier=self.profile.worker_tier,
+                macro_profile=self.package.macro_profile,
+                episodes=self.package.autobiographical_episodes,
             )
         
         self.verification_agent = OutputVerificationAgent(ws_manager, tier=self.profile.worker_tier)
@@ -265,10 +269,10 @@ class DailyLoopOrchestrator:
             )
 
         # 4つの個別チェックAI
-        self.profile_checker = ProfileChecker(ws_manager, tier="gemma")
-        self.temperament_checker = TemperamentChecker(ws_manager, tier="gemma")
-        self.personality_checker = PersonalityChecker(ws_manager, tier="gemma")
-        self.values_checker = ValuesChecker(ws_manager, tier="gemma")
+        self.profile_checker = ProfileChecker(ws_manager, tier="gemini")
+        self.temperament_checker = TemperamentChecker(ws_manager, tier="gemini")
+        self.personality_checker = PersonalityChecker(ws_manager, tier="gemini")
+        self.values_checker = ValuesChecker(ws_manager, tier="gemini")
     
     async def _notify(self, content: str, status: str = "thinking"):
         if self.ws:
@@ -426,7 +430,7 @@ class DailyLoopOrchestrator:
         highの場合、理性ブランチ（Reflective Agent）をバイパスする。
         """
         result = await call_llm(
-            tier="gemma",
+            tier="gemini",
             system_prompt="""あなたは感情強度の判定エージェントです。
 衝動系エージェント（Impulsive Agent）の出力を見て、感情の強度を判定してください。
 
@@ -462,7 +466,7 @@ class DailyLoopOrchestrator:
         source_str = f"source: {event.source}" if event.source else ""
 
         result = await call_llm(
-            tier="gemma",
+            tier="gemini",
             system_prompt="""あなたはこのキャラクターの「衝動的感覚を司るエージェント」です。
 キャラ本人にとっては無意識下にある気質・性格パラメータを読み取り、
 それに基づいて「今このキャラがイベントを受け取り、衝動的、感情的に生まれた内面的な心の動きを詳細に分析したレポート」を生成してください。
@@ -521,7 +525,7 @@ class DailyLoopOrchestrator:
         known_str = "既知（事前に知っている予定）" if event.known_to_protagonist else "未知（予想外の出来事）"
 
         result = await call_llm(
-            tier="gemma",
+            tier="gemini",
             system_prompt="""あなたは主人公AIの理性ブランチ（Reflective Agent）です。
 規範層（価値観、理想自己、義務自己）を参照し、このイベントに対する濃密な内面分析レポートを作成してください。
 
@@ -797,7 +801,7 @@ class DailyLoopOrchestrator:
             values_context = json.dumps(self.package.micro_parameters.schwartz_values, ensure_ascii=False)
         
         result = await call_llm(
-            tier="gemma",
+            tier="gemini",
             system_prompt="""あなたは価値観違反チェッカーです。
 行動決定が主人公の価値観に違反していないかチェックしてください。
 
@@ -1097,7 +1101,7 @@ class DailyLoopOrchestrator:
     async def _extract_key_memory(self, day: int, diary: DiaryEntry) -> KeyMemory:
         """key memory抽出（v10 §4.9.3.1）"""
         result = await call_llm(
-            tier="gemma",
+            tier="gemini",
             system_prompt="""あなたはkey memory抽出エージェントです。
 日記から「本当に重要だった瞬間」を1つだけ抽出し、300字以内で要約してください。
 

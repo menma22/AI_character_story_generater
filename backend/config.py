@@ -22,7 +22,6 @@ class LLMModels:
     
     # Google AI Studio
     GEMINI_2_5_PRO = "models/gemini-2.5-pro"
-    GEMMA_4_MOE = "models/gemma-4-31b-it"
 
 
 # ─── API キー ────────────────────────────────────────────────
@@ -49,7 +48,7 @@ class EvaluationProfile:
     narrative_connection_auditor_enabled: bool = False
     worker_regeneration_max_iterations: int = 1
     director_tier: str = "opus"                    # "opus" | "sonnet" | "gemini"
-    worker_tier: str = "sonnet"                    # "opus" | "sonnet" | "gemini" | "gemma"
+    worker_tier: str = "sonnet"                    # "opus" | "sonnet" | "gemini"
 
 
 PROFILES = {

@@ -43,7 +43,7 @@ async def run_worker_with_validation(
     user_message: str,
     schema_model: Type[BaseModel],
     ws_manager=None,
-    tier: str = "gemma",
+    tier: str = "gemini",
     max_retries: int = 3
 ) -> Any:
     """

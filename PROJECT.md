@@ -39,7 +39,7 @@ AI_character_story_generater/
 │   │   ├── character.py                       # Pydantic v2 データモデル (v2 §6.3.4準拠スキーマ)
 │   │   └── memory.py                          # 記憶・ムード・イベント処理モデル
 │   ├── tools/
-│   │   ├── llm_api.py                         # LLM API統合ラッパー (Anthropic + Gemini + フォールバック)
+│   │   ├── llm_api.py                         # LLM API統合ラッパー (Anthropic + Google AI Studio + フォールバック)
 │   │   └── agent_utils.py                     # Worker検証 + Markdownセクションパーサー
 │   ├── websocket/
 │   │   └── handler.py                         # WebSocket接続管理 + 思考ストリーミング
@@ -149,7 +149,7 @@ graph TB
 1. **Tier -1 Creative Director** (Opus): Tool-Callingによる自律推敲ループ。search_web + file_read + request_critique + submit_final_concept の4ツール。Self-Critiqueチェックリスト [A]-[F] の6カテゴリ。
 2. **Tier 0 Master Orchestrator** (Opus): Phase A-1→A-2→A-3→D順次制御。各Phase完了後にEvaluator-Optimizerループで即時評価・再生成。
 3. **Phase Orchestrators**: 各Phase内のWorker群を管理。A-1=8 Workers、A-2=15 Workers（v2 §6.4.2準拠）、A-3=Planner(自然言語)+Writer(JSON一括)、D=4 Workers(自然言語)+EventWriter(JSON)。
-4. **Workers**: プロファイル別モデル（high_quality=sonnet, draft=gemini）。
+4. **Workers**: プロファイル別モデル（high_quality=sonnet, draft=gemini）。最低ティア=Gemini 2.5 Pro。
 
 **Phase A-2 Worker 15分割構成（v2 §6.4.2準拠）:**
 ```
@@ -174,7 +174,7 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 
 **日次ループ（Day 1-7）:**
 ```
-各日のイベント(4-6個) → 動的活性化(5-10パラメータ選択)
+各日のイベント(4-6個) → 動的活性化(5-10パラメータ選択, マクロプロフィール+経験DB入力)
 → 衝動系エージェント(Perceiver+Impulsive統合, raw text出力)
 → 【感情強度判定】intensity=high → Reflectiveバイパス / それ以外 → Reflective実行(raw text出力)
 → 出力検証(#1-#52漏洩チェック, raw textベース)
@@ -209,7 +209,7 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 | high_quality | opus | sonnet | 全7種ON | 4 | 本番提出用 |
 | standard | sonnet | sonnet | 5種ON | 3 | 推奨バランス |
 | fast | sonnet | gemini | 3種ON | 2 | 素早い確認 |
-| draft | sonnet | gemini | 2種ON | 2 | 最小コスト（旧gemma→gemini変更済） |
+| draft | sonnet | gemini | 2種ON | 2 | 最小コスト（最低ティア=Gemini 2.5 Pro） |
 
 #### データモデル（v2 §6.3.4準拠拡張済）
 
@@ -276,13 +276,13 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 
 **(a) 当初設計**: Claude Agent SDK使用を前提。
 **(b) 変更・根拠**: SDK未確認のため、直接Anthropic APIおよびGoogle Generative AIに切替。
-**(c) 採用プラクティス**: `call_llm()` 統一インターフェースで、実在する最新モデルID（`claude-opus-4-6`等）を直接指定。エラー時にはフォールバックルーティング（Anthropic → Gemini 2.5 Pro）が作動。
+**(c) 採用プラクティス**: `call_llm()` 統一インターフェースで、実在する最新モデルID（`claude-opus-4-6`等）を直接指定。エラー時にはフォールバックルーティング（Anthropic → Gemini 2.5 Pro）が作動。モデルティアは3段階: opus / sonnet / gemini（Gemini 2.5 Pro）。
 
 ### 2b. Gemini 2.5 Proフォールバックの思考トークン対策
 
 **(a) 当初設計**: Claudeと同じ`max_tokens`値をそのままGeminiへ渡していた。`system_prompt`はフォールバック時に`user_message`に文字列結合して渡していた。
 **(b) 変更・根拠**: Gemini 2.5 Proは内部で「思考トークン」を使用し、`max_output_tokens`の予算を消費する。例えば`max_tokens=3000`の場合、思考だけで3000トークン全てを使い切り、実際の出力が0トークン（`finish_reason=MAX_TOKENS`）になる問題が発覚。また`system_prompt`を`user_message`に結合する方式ではGeminiの`system_instruction`機能が使われず、指示の分離が機能しなかった。
-**(c) 採用プラクティス**: `call_gemma()`でGemini 2.5 Pro検出時に`max_output_tokens`を自動的に4倍（最低16384）に拡張。全tier(opus/sonnet/gemini/gemma)のフォールバックで`system_prompt`を`call_gemma`の`system_prompt`引数として正しく渡すよう修正。
+**(c) 採用プラクティス**: `call_google_ai()`でGemini 2.5 Pro検出時に`max_output_tokens`を自動的に4倍（最低16384）に拡張。全tier(opus/sonnet/gemini)のフォールバックで`system_prompt`を`call_google_ai`の`system_prompt`引数として正しく渡すよう修正。
 
 ### 3. 隠蔽原則の実装
 
@@ -320,7 +320,7 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 - Phase A-3 Planner: 自然言語テキスト出力に変更
 - Phase A-3 Writer: 個別並列生成から全エピソード一括JSON生成に統合（LLM呼び出し回数削減: 1+N → 2回）
 - `llm_api.py`: 4段階フォールバック付き`_extract_json()`ヘルパー追加。`call_llm()`にjson_mode失敗時の自動リトライ（最大3回）を実装
-- draftプロファイル: `worker_tier`を`gemma`→`gemini`に変更（Gemma 4はJSON信頼性が低すぎる）
+- draftプロファイル: `worker_tier`を`gemini`に統一（Gemma 4は完全廃止済み）
 - **判断基準**: 「そのデータをコードが機械的にパースするか？」Yes → JSON、No → 自然言語
 
 ### 7. Phase A-2 Worker 細分化
@@ -345,7 +345,7 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 
 **(a) 当初設計**: Impulsive AgentとReflective Agentを常に並列実行し、統合エージェントが両方の出力を統合していた。
 **(b) 変更・根拠**: 現実の人間心理では、感情が極端に高まった状態（パニック、激怒、歓喜の絶頂等）では理性的判断が介入できない。並列実行は計算効率は良いが、心理学的リアリティに欠けていた。
-**(c) 採用プラクティス**: Impulsive Agent実行後に軽量な感情強度判定ステップ（`_evaluate_emotion_intensity`, tier=gemma, JSON出力）を追加。`intensity=high`の場合、Reflective Agentを完全スキップし、空のReflectiveOutputを統合エージェントに渡す。統合エージェント側は理性参照なしの旨をシステムプロンプトに明記。
+**(c) 採用プラクティス**: Impulsive Agent実行後に軽量な感情強度判定ステップ（`_evaluate_emotion_intensity`, tier=gemini, JSON出力）を追加。`intensity=high`の場合、Reflective Agentを完全スキップし、空のReflectiveOutputを統合エージェントに渡す。統合エージェント側は理性参照なしの旨をシステムプロンプトに明記。
 
 ### 11. 4つの個別チェックAI（整合性検証レイヤー）
 
@@ -356,7 +356,7 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
   - `TemperamentChecker`: 活性化済み気質パラメータ（Cloningerモデル）との整合性
   - `PersonalityChecker`: 活性化済み性格パラメータ（Big Five/HEXACO）との整合性
   - `ValuesChecker`: 価値観（Schwartz・MFT・理想自己・義務自己）との整合性
-  全チェッカーは裏方エージェント（隠蔽原則対象外）、tier=gemma（低コスト）、severity=majorのみログ警告。
+  全チェッカーは裏方エージェント（隠蔽原則対象外）、tier=gemini（低コスト）、severity=majorのみログ警告。
 
 ### 12. key memoryの短期記憶からの分離
 
@@ -407,6 +407,29 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
   - DailyLoopOrchestrator初期化時に最新スナップショットを自動ロードし、保存済み日の翌日から再開
   - KeyMemoryStoreと同一のファイル管理パターン（日単位バージョン管理、最新ファイル=現在状態）
 
+### 17. Gemma 4完全廃止とGemini 2.5 Pro最低ティア統一
+
+**(a) 当初設計**: 最低コストティアとしてGemma 4 (gemma-4-31b-it)を`tier="gemma"`で使用。`call_gemma()`関数がGemma 4とGemini 2.5 Proの両方をルーティングしていた。TokenTrackerにgemma専用カウンターを保持。
+**(b) 変更・根拠**: Gemma 4はJSON出力が致命的に不安定（113回のパース失敗）で既に実質使用停止状態だった。コードベースにGemma 4パスが残存することで混乱と保守負担が発生。最低ティアはGemini 2.5 Proで十分な品質を確保できるため、Gemma 4を完全廃止。
+**(c) 採用プラクティス**:
+  - `LLMModels.GEMMA_4_MOE`定数を削除。ティア体系は3段階（opus / sonnet / gemini）に統一
+  - `call_gemma()` → `call_google_ai()`にリネーム、デフォルトモデルをGemini 2.5 Proに変更
+  - `_call_llm_once()`から`tier=="gemma"`ブロックを完全削除
+  - 全エージェント・Worker・チェッカーの`tier="gemma"`デフォルトを`tier="gemini"`に一括変更
+  - TokenTrackerからgemma専用カウンターを削除し、geminiカウンターに統合
+
+### 18. パラメータ動的活性化エージェントへのマクロプロフィール・経験DB入力追加
+
+**(a) 当初設計**: 活性化エージェントの入力は「全52パラメータカタログ（数値入り）+ 現在ムード + シーン記述」のみ。マクロプロフィールと自伝的エピソードは「動的活性化の対象外」として独立参照される設計だった。また、tierが`"gemma"`にハードコードされ、プロファイル連動していなかった。
+**(b) 変更・根拠**: パラメータの活性化判断にはキャラクターの背景が不可欠。例えば「職場の昇進を断られた」シーンでは、キャラの夢のタイムライン・人間関係・過去の挫折体験を知らなければ、どのパラメータ（達成志向、自尊感情、怒り等）が発火すべきか正確に判断できない。
+**(c) 採用プラクティス**:
+  - `DynamicActivationAgent.__init__()`に`macro_profile`と`episodes`を追加
+  - `_build_macro_summary()`: マクロプロフィールをコンパクト要約（名前・職業・価値観コア・夢・人間関係）
+  - `_build_episodes_summary()`: 自伝的エピソードを`[時期/カテゴリ] 要約100字`形式で圧縮
+  - `activate()`のLLMプロンプトに`【キャラクター背景】`と`【自伝的エピソード】`セクションを追加
+  - システムプロンプトの抽出ルールに「キャラクターの背景・経歴・人間関係を考慮」する旨を明記
+  - tier バグ修正: オーケストレータから`tier=self.profile.worker_tier`を渡すよう変更
+
 ---
 
 ## パート3: プロジェクト管理
@@ -425,6 +448,7 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 | Stage 8: 日次ループ高度化 | ✅ 実装完了 | 感情強度判定・4チェックAI・統合エージェント拡張・key memory分離・フォールバック多層化 |
 | Stage 9: エージェント統合・コンテキスト拡充 | ✅ 実装完了 | Perceiver+Impulsive統合・raw text pass-through・全エージェントへのマクロ/世界設定/経験DB同梱 |
 | Stage 10: ストレージ統一・状態永続化 | ✅ 実装完了 | 1キャラ=1ディレクトリ統一・ShortTermMemoryDB/MoodState日単位永続化・日次ループ再開対応 |
+| Stage 11: Gemma4廃止・活性化エージェント強化 | ✅ 実装完了 | Gemma4完全廃止→Gemini 2.5 Pro統一、活性化エージェントにマクロプロフィール・経験DB入力追加 |
 
 ### 次のアクション
 
@@ -437,14 +461,14 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 > [!WARNING]
 > - Anthropic APIのクレジット残高不足により全Claude呼び出しがGemini 2.5 Proへフォールバック中。本稼働時は有償Tierキーが必要。
 > - Gemini 2.5 Proの思考トークン問題は修正済み。JSON依存排除・リトライ機構追加も完了。
-> - draftプロファイルのworker_tierをgemma→geminiに変更済み（Gemma 4のJSON信頼性問題を解消）。
+> - Gemma 4を完全廃止し、最低ティアをGemini 2.5 Proに統一済み。`call_gemma()`→`call_google_ai()`にリネーム。
 > - 全Agenticエージェント（Director, Integration, Diary）でClaude→Gemini→デフォルト値の3層フォールバック実装済み。
 > - end-of-day処理の各ステップ（内省・日記・key memory・翌日予定）に個別エラーハンドリング追加済み。
 
 
 
 
-##アプリの再起動方法
+## アプリの再起動方法
 プロジェクトルートから以下のコマンドで起動・再起動できます：
 
 1. 既存プロセスの停止
@@ -453,8 +477,14 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 # ポート8001を使っているPIDを確認
 netstat -ano | grep ":8001.*LISTENING"
 
+パワーシェルの場合：netstat -ano | Select-String ":8001"
+
 # そのPIDを強制終了（例: PID 86056の場合）
 taskkill //PID <PID番号> //F
+
+taskkill /F /IM python.exe　強制的に全て終了
+
+パワーシェルの場合：taskkill /F /PID 86056
 2. アプリの起動
 
 

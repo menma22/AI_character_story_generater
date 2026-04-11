@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 class BaseChecker:
     """チェッカー基底クラス"""
 
-    def __init__(self, checker_type: str, ws_manager=None, tier: str = "gemma"):
+    def __init__(self, checker_type: str, ws_manager=None, tier: str = "gemini"):
         self.checker_type = checker_type
         self.ws = ws_manager
         self.tier = tier
@@ -44,7 +44,7 @@ class ProfileChecker(BaseChecker):
     - 日常ルーティン、趣味、習慣
     """
 
-    def __init__(self, ws_manager=None, tier: str = "gemma"):
+    def __init__(self, ws_manager=None, tier: str = "gemini"):
         super().__init__("プロフィール", ws_manager, tier)
 
     async def check(self, output_text: str, macro_profile_json: str) -> CheckResult:
@@ -94,7 +94,7 @@ class TemperamentChecker(BaseChecker):
     裏方エージェントのため、パラメータ名・値に直接アクセス可能。
     """
 
-    def __init__(self, ws_manager=None, tier: str = "gemma"):
+    def __init__(self, ws_manager=None, tier: str = "gemini"):
         super().__init__("気質", ws_manager, tier)
 
     async def check(self, output_text: str, activated_temperament_text: str) -> CheckResult:
@@ -143,7 +143,7 @@ class PersonalityChecker(BaseChecker):
     出力がBig Five/HEXACOの性格パラメータ（#24-#50）に整合しているか検証。
     """
 
-    def __init__(self, ws_manager=None, tier: str = "gemma"):
+    def __init__(self, ws_manager=None, tier: str = "gemini"):
         super().__init__("性格", ws_manager, tier)
 
     async def check(self, output_text: str, activated_personality_text: str) -> CheckResult:
@@ -193,7 +193,7 @@ class ValuesChecker(BaseChecker):
     ※ 価値観違反チェック（§4.6c）とは別に、出力の全体的な価値観一貫性を検証する。
     """
 
-    def __init__(self, ws_manager=None, tier: str = "gemma"):
+    def __init__(self, ws_manager=None, tier: str = "gemini"):
         super().__init__("価値観", ws_manager, tier)
 
     async def check(self, output_text: str, values_context: str) -> CheckResult:

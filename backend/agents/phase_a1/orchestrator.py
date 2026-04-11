@@ -27,7 +27,7 @@ async def run_worker(
     system_prompt: str,
     user_message: str,
     ws_manager=None,
-    tier: str = "gemma",
+    tier: str = "gemini",
 ) -> dict:
     """共通Worker呼び出し"""
     if ws_manager:

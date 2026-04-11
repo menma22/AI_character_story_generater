@@ -1,6 +1,6 @@
 """
 LLM API 統合ラッパー
-Anthropic (Opus/Sonnet) と Google AI Studio (Gemma 4) を統一インターフェースで呼び出す。
+Anthropic (Opus/Sonnet) と Google AI Studio (Gemini 2.5 Pro) を統一インターフェースで呼び出す。
 Prompt Caching対応、トークン消費追跡付き。
 """
 
@@ -37,8 +37,6 @@ class TokenTracker:
         self.sonnet_output = 0
         self.sonnet_cache_write = 0
         self.sonnet_cache_read = 0
-        self.gemma_input = 0
-        self.gemma_output = 0
         self.gemini_input = 0
         self.gemini_output = 0
         self.total_calls = 0
@@ -60,12 +58,9 @@ class TokenTracker:
             self.sonnet_output += output_tokens
             self.sonnet_cache_write += cache_write
             self.sonnet_cache_read += cache_read
-        elif "gemini" in model.lower():
+        else:
             self.gemini_input += input_tokens
             self.gemini_output += output_tokens
-        else:
-            self.gemma_input += input_tokens
-            self.gemma_output += output_tokens
     
     def estimated_cost_usd(self) -> float:
         """推定コスト（USD）"""
@@ -82,7 +77,6 @@ class TokenTracker:
             "sonnet": {"input": self.sonnet_input, "output": self.sonnet_output,
                        "cache_write": self.sonnet_cache_write, "cache_read": self.sonnet_cache_read},
             "gemini": {"input": self.gemini_input, "output": self.gemini_output},
-            "gemma": {"input": self.gemma_input, "output": self.gemma_output},
             "estimated_cost_usd": round(self.estimated_cost_usd(), 4),
         }
 
@@ -272,27 +266,27 @@ async def call_anthropic(
         raise
 
 
-# ─── Google AI Studio (Gemma 4) ───────────────────────────────
+# ─── Google AI Studio (Gemini 2.5 Pro) ────────────────────────
 
-_gemma_configured = False
+_google_ai_configured = False
 
-def configure_gemma():
-    global _gemma_configured
-    if not _gemma_configured and APIKeys.GOOGLE_AI:
+def configure_google_ai():
+    global _google_ai_configured
+    if not _google_ai_configured and APIKeys.GOOGLE_AI:
         genai.configure(api_key=APIKeys.GOOGLE_AI)
-        _gemma_configured = True
+        _google_ai_configured = True
 
 
-async def call_gemma(
+async def call_google_ai(
     user_message: str,
     system_prompt: Optional[str] = None,
-    model: str = LLMModels.GEMMA_4_MOE,
+    model: str = LLMModels.GEMINI_2_5_PRO,
     max_tokens: int = 4096,
     temperature: float = 1.0,
     json_mode: bool = False,
 ) -> dict:
     """
-    Google AI Studio (Gemma 4) 呼び出し
+    Google AI Studio (Gemini 2.5 Pro) 呼び出し
     
     Args:
         user_message: ユーザーメッセージ
@@ -305,7 +299,7 @@ async def call_gemma(
     Returns:
         {"content": str, "usage": dict}
     """
-    configure_gemma()
+    configure_google_ai()
 
     generation_config = genai.types.GenerationConfig(
         max_output_tokens=max_tokens,
@@ -338,27 +332,27 @@ async def call_gemma(
                 )
             if not content:
                 finish = getattr(response.candidates[0], "finish_reason", "UNKNOWN") if response.candidates else "NO_CANDIDATES"
-                logger.warning(f"[Gemma] Empty response, finish_reason={finish}. Returning empty.")
+                logger.warning(f"[Google AI] Empty response, finish_reason={finish}. Returning empty.")
         usage = {
             "input_tokens": getattr(response.usage_metadata, "prompt_token_count", 0) if response.usage_metadata else 0,
             "output_tokens": getattr(response.usage_metadata, "candidates_token_count", 0) if response.usage_metadata else 0,
         }
         
         token_tracker.record(model, usage)
-        logger.info(f"[Gemma] {model} | in={usage['input_tokens']} out={usage['output_tokens']}")
+        logger.info(f"[Google AI] {model} | in={usage['input_tokens']} out={usage['output_tokens']}")
         
         if json_mode:
             parsed = _extract_json(content)
             if parsed is not None:
                 return {"content": parsed, "raw": content, "usage": usage, "model": model}
             else:
-                logger.warning(f"[Gemini/Gemma] JSON extraction failed (model={model}, len={len(content)}). Preview: {content[:200]}")
+                logger.warning(f"[Google AI] JSON extraction failed (model={model}, len={len(content)}). Preview: {content[:200]}")
                 return {"content": content, "raw": content, "usage": usage, "model": model, "_json_failed": True}
         
         return {"content": content, "usage": usage, "model": model}
         
     except Exception as e:
-        logger.error(f"[Gemma] Error calling {model}: {e}")
+        logger.error(f"[Google AI] Error calling {model}: {e}")
         raise
 
 
@@ -390,7 +384,7 @@ async def _call_llm_once(
             )
         except Exception as e:
             logger.warning(f"[call_llm] Claude ({tier}) failed: {e}. Falling back to Gemini 2.5 Pro.")
-            return await call_gemma(
+            return await call_google_ai(
                 system_prompt=system_prompt,
                 user_message=user_message,
                 model=LLMModels.GEMINI_2_5_PRO,
@@ -400,20 +394,10 @@ async def _call_llm_once(
             )
 
     if tier == "gemini":
-        return await call_gemma(
+        return await call_google_ai(
             system_prompt=system_prompt,
             user_message=user_message,
             model=LLMModels.GEMINI_2_5_PRO,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            json_mode=json_mode,
-        )
-
-    if tier == "gemma":
-        return await call_gemma(
-            system_prompt=system_prompt,
-            user_message=user_message,
-            model=LLMModels.GEMMA_4_MOE,
             max_tokens=max_tokens,
             temperature=temperature,
             json_mode=json_mode,
@@ -438,7 +422,6 @@ async def call_llm(
     Claude優先フォールバック方式:
     - tier="opus"/"sonnet" → まずClaudeを試行。失敗時にGemini 2.5 Proへ自動フォールバック。
     - tier="gemini" → Gemini 2.5 Pro直接指定。
-    - tier="gemma" → Gemma 4直接指定。
 
     Returns:
         {"content": str or dict, "usage": dict}
@@ -626,7 +609,7 @@ async def call_llm_agentic_gemini(
     """
     Google Geminiを用いた自立ループの実装 (Claude版とは完全にロジックを分離)
     """
-    configure_gemma()
+    configure_google_ai()
     model_name = LLMModels.GEMINI_2_5_PRO
     
     # Tool定義の変換: JSONSchema → Gemini SDK の protos.Schema 形式

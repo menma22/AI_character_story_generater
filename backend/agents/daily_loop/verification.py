@@ -40,7 +40,7 @@ LEAK_KEYWORDS = [
 class OutputVerificationAgent:
     """裏方出力検証エージェント"""
 
-    def __init__(self, ws_manager=None, tier: str = "gemma"):
+    def __init__(self, ws_manager=None, tier: str = "gemini"):
         self.ws = ws_manager
         self.tier = tier
 

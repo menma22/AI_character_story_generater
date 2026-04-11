@@ -30,7 +30,7 @@ AI_SMELL_WORDS = [
 class DiarySelfCritic:
     """日記出力チェック（Self-Critic）"""
     
-    def __init__(self, voice_fingerprint: VoiceFingerprint, ws_manager=None, tier: str = "gemma"):
+    def __init__(self, voice_fingerprint: VoiceFingerprint, ws_manager=None, tier: str = "gemini"):
         self.voice = voice_fingerprint
         self.ws = ws_manager
         self.tier = tier
