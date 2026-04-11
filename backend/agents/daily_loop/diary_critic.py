@@ -88,9 +88,9 @@ class DiarySelfCritic:
         
         if len(diary.content) < 200:
             issues.append(f"日記が短すぎる ({len(diary.content)}字、最低200字推奨)")
-        
-        if len(diary.content) > 800:
-            issues.append(f"日記が長すぎる ({len(diary.content)}字、最大600字推奨)")
+
+        if len(diary.content) > 500:
+            issues.append(f"日記が長すぎる ({len(diary.content)}字、500字以下にしてください)")
         
         if not issues:
             await self._notify("日記チェックOK ✓", "complete")

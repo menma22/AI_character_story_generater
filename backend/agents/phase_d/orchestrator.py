@@ -8,7 +8,7 @@ v10 §2.5 / v2 §6.6 準拠。
 - SupportingCharactersWorker: 周囲の人物
 - NarrativeArcDesigner: 物語アーク + Day5山場設計
 - ConflictIntensityDesigner: 葛藤強度アーク
-- WeeklyEventWriter: 28-42件のイベント一括生成
+- WeeklyEventWriter: 14-28件のイベント一括生成
 
 設計方針:
 - Step 1-4はプロンプトコンテキストとしてのみ使用されるため、
@@ -91,7 +91,7 @@ CONFLICT_INTENSITY_PROMPT = """あなたは7日間の葛藤強度アークを設
 # ── Step 5: イベント生成（JSON必須 — 機械的にパースしてEventモデルに格納） ──
 
 WEEKLY_EVENT_WRITER_PROMPT = """あなたは7日間のイベント列を一括生成するWeeklyEventWriterです。
-NarrativeArcDesignerの設計に従い、各日4-6件、合計28-42件のイベントを生成してください。
+NarrativeArcDesignerの設計に従い、各日2-4件、合計14-28件のイベントを生成してください。
 
 【メタデータ制約（v10 §2.5, v2 §6.6.6 厳守）】
 
@@ -242,7 +242,7 @@ class PhaseDOrchestrator:
             await self.ws.send_agent_thought("[Phase D] NarrativeArc", f"物語アーク設計完了 ({len(arc_text)}字)", "complete")
 
         # ── Step 5: WeeklyEventWriter (イベント生成、JSON必須) ──
-        await self._notify("Step 5: 28-42件のイベントを一括生成中...")
+        await self._notify("Step 5: 14-28件のイベントを一括生成中...")
 
         event_result = await call_llm(
             tier=self.profile.director_tier,

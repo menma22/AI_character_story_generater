@@ -473,7 +473,7 @@ class DailyLoopOrchestrator:
 あなたの出力は、理性側の分析レポートと共に、キャラクター本人の意識下に渡されます。
 これは「考える前の反応」です。理性的な判断はReflective Agentの仕事です。
 
-必ず、以下のセクションを、Markdownのセクションヘッダー（##）で区切って出力してください。
+以下のセクションは必ず、Markdownのセクションヘッダー（##）で区切って出力してください。
 
 ## 現象的記述
 （五感を使った描写、4-6文。視覚・聴覚・触覚・嗅覚を含む具体的な知覚描写）
@@ -686,9 +686,11 @@ class DailyLoopOrchestrator:
         system_prompt = f"""あなたは主人公AIの「出来事周辺情報統合エージェント」です。
 衝動ルートと理性ルートの意見を統合し、最終的な行動を決定するとともに、
 この出来事に対して生じた事象、主人公の動き、感情などをストーリーとしてまとめてください。
+衝動的な無意識的な反応に関するレポートが【衝動ブランチの報告】で、理性的な意識的な反応に関するレポートが【理性ブランチの報告】であり、その二つを融合させます。状況によって、衝動的な反応を優先したりしてください。例えば、怒りが高まっているときは、衝動的な反応を優先します。
+また、必ず、衝動的反応、理性的反応それぞれに従ったと仮定したときに起こりうる良い出来事と悪い出来事をそれぞれ2つ以上上げ、それも加味してストーリーを構築してください。
 
 【あなたの役割】
-1. 行動決定: 衝動と理性の2つのルートを踏まえて最終行動を決める
+1. 行動や選択など決定: 衝動と理性の2つのルートを踏まえて主人公のとる行動や選択・スタンスを決める
 2. 周辺情報統合: 出来事の背景、周囲の状況、登場人物の反応を描写
 3. 情景描写: 五感を含む文学的な場面描写を執筆
 4. 結果と後日譚: 行動後に何が起こったか、小さな波紋を描く
@@ -912,7 +914,7 @@ class DailyLoopOrchestrator:
         result = await call_llm(
             tier=self.profile.worker_tier,
             system_prompt="""あなたは主人公AIの内省エージェントです。
-今日1日の出来事を振り返り、内省メモを生成してください。
+今日1日の出来事を振り返り、キャラクターの主観で内省メモを生成してください。
 
 【3工程】
 1. 自己推測（Bem Self-Perception Theory）: 自分の行動パターンから自分はどういう人間かを推測する
@@ -1008,7 +1010,7 @@ class DailyLoopOrchestrator:
                 input_schema={
                     "type": "object",
                     "properties": {
-                        "final_diary_text": {"type": "string", "description": "最終的な日記の全文（300-600字程度）。一人称視点で本人が書いたように。"}
+                        "final_diary_text": {"type": "string", "description": "最終的な日記の全文（約400字、500字以下）。一人称視点で本人が書いたように。"}
                     },
                     "required": ["final_diary_text"]
                 },
@@ -1025,12 +1027,29 @@ class DailyLoopOrchestrator:
 - 一人称視点で、そのキャラクターらしい文体で書くこと
 - 避ける語彙は絶対に使わないこと（「成長」「気づき」「学び」等のAI臭い語彙）
 - 全ての出来事を書く必要はない。主観的に重要だと感じたことだけを書く
-- 300-600字程度
+- 約400字（500字以下）
 
 【エージェンティック行動指針】
 1. まず日記のドラフトを頭の中で執筆し、`check_diary_rules` ツールを使って自身の口癖や禁止語彙に反していないか自発的にテストしてください。
 2. もし不合格（FAILED）が返ってきたら、指摘された点に基づいて自ら文章を書き直し、再度ツールでチェックしてください。
 3. 合格（SUCCESS）が返ってきたら、そのテキストを `submit_final_diary` ツールで提出して任務を完了してください。"""
+
+        # Day1特別処理: 世界観・設定紹介セクション
+        if day == 1:
+            system_prompt += f"""
+
+【Day 1 特別指示: 世界観・設定紹介】
+これは物語の第1日目の日記です。読者がこの日記を読み始めるにあたって、
+以下の情報を「あなた（主人公）自身の言葉と声で」自然に織り込んでください:
+
+- あなたは誰で、どういう存在なのか
+- なぜここ（この世界・この場所）にいるのか
+- この世界はどんな場所なのか（あなたの目を通して）
+- あなたが今置かれている状況
+
+※ 説明的・辞書的な記述は禁止。あなた自身が日記の冒頭で自然に触れる形で書くこと。
+※ 世界観紹介と今日の出来事の感想を合わせて約400字（500字以下）に収めること。
+※ この日記が「物語の入口」として機能するよう、読者の興味を引く書き方を心がけること。"""
 
         # チェッカーフィードバック（再生成時のみ）
         diary_feedback_section = ""
@@ -1382,9 +1401,30 @@ class DailyLoopOrchestrator:
                             next_day=day + 1,
                             events_store=self.package.weekly_events_store,
                         )
-                        if new_event:
-                            self.package.weekly_events_store.events.append(new_event)
-                            day_state.next_day_plans = [p.model_dump() for p in plans]
+                        # stage2がNoneの場合、plans[0]から直接フォールバックEvent生成
+                        if not new_event:
+                            logger.warning(f"[DailyLoop] Day {day}: stage2がNone → plans[0]からフォールバックEvent生成")
+                            valid_slots = {"morning", "late_morning", "noon", "afternoon", "evening", "night", "late_night"}
+                            preferred = plans[0].preferred_time if plans[0].preferred_time in valid_slots else "afternoon"
+                            plan_count = sum(1 for e in self.package.weekly_events_store.events if e.source == "protagonist_plan")
+                            new_event = Event(
+                                id=f"evt_plan_{plan_count + 1:03d}",
+                                day=day + 1,
+                                time_slot=preferred,
+                                known_to_protagonist=True,
+                                source="protagonist_plan",
+                                expectedness="high",
+                                content=plans[0].action,
+                                involved_characters=[],
+                                meaning_to_character=plans[0].motivation,
+                                narrative_arc_role="standalone_ripple",
+                                conflict_type=None,
+                                connected_episode_id=None,
+                                connected_values=[],
+                            )
+                            plans[0].inserted = True
+                        self.package.weekly_events_store.events.append(new_event)
+                        day_state.next_day_plans = [p.model_dump() for p in plans]
                 except Exception as e:
                     logger.error(f"[DailyLoop] Day {day} 翌日予定計画エラー: {e}")
 
