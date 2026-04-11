@@ -92,6 +92,129 @@ class KeyMemoryStore:
         return None
 
 
+class ShortTermMemoryStore:
+    """短期記憶DB（normal_area + diary_store）を日単位でファイル永続化。
+    各日のスナップショットを保持し、最新ファイル＝現在状態。"""
+
+    def __init__(self, character_name: str):
+        safe_name = character_name.replace("/", "_").replace("\\", "_")
+        self.dir = AppConfig.STORAGE_DIR / safe_name / "short_term_memory"
+        self.dir.mkdir(parents=True, exist_ok=True)
+
+    def save(self, day: int, memory_db: ShortTermMemoryDB) -> Path:
+        """その日の記憶圧縮完了後のスナップショットを保存"""
+        path = self.dir / f"day_{day:02d}.json"
+        data = {
+            "day": day,
+            "normal_area": [m.model_dump(mode="json") for m in memory_db.normal_area],
+            "diary_store": memory_db.diary_store,
+        }
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        logger.info(f"[ShortTermMemoryStore] Day {day} snapshot saved to {path}")
+        return path
+
+    def load_latest(self) -> Optional[ShortTermMemoryDB]:
+        """最新日のスナップショットをロードして復元"""
+        files = sorted(self.dir.glob("day_*.json"))
+        if not files:
+            return None
+        try:
+            data = json.loads(files[-1].read_text(encoding="utf-8"))
+            db = ShortTermMemoryDB(
+                normal_area=[ShortTermMemoryNormal(**m) for m in data.get("normal_area", [])],
+                diary_store=data.get("diary_store", []),
+            )
+            logger.info(f"[ShortTermMemoryStore] Restored from {files[-1].name} ({len(db.normal_area)} entries)")
+            return db
+        except Exception as e:
+            logger.warning(f"[ShortTermMemoryStore] Failed to load latest: {e}")
+            return None
+
+    def load_day(self, day: int) -> Optional[ShortTermMemoryDB]:
+        """指定日のスナップショットをロード"""
+        path = self.dir / f"day_{day:02d}.json"
+        if path.exists():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                return ShortTermMemoryDB(
+                    normal_area=[ShortTermMemoryNormal(**m) for m in data.get("normal_area", [])],
+                    diary_store=data.get("diary_store", []),
+                )
+            except Exception as e:
+                logger.warning(f"[ShortTermMemoryStore] Failed to load day {day}: {e}")
+        return None
+
+    def get_latest_day(self) -> int:
+        """最新の保存済み日数を返す（0 = まだ保存なし）"""
+        files = sorted(self.dir.glob("day_*.json"))
+        if not files:
+            return 0
+        try:
+            return int(files[-1].stem.split("_")[1])
+        except (IndexError, ValueError):
+            return 0
+
+
+class MoodStateStore:
+    """ムード状態（PAD 3次元）を日単位でファイル永続化。
+    daily_mood（Peak-End集約）とcarry_over_mood（翌日開始値）の両方を保持。"""
+
+    def __init__(self, character_name: str):
+        safe_name = character_name.replace("/", "_").replace("\\", "_")
+        self.dir = AppConfig.STORAGE_DIR / safe_name / "mood_states"
+        self.dir.mkdir(parents=True, exist_ok=True)
+
+    def save(self, day: int, daily_mood: MoodState, carry_over_mood: MoodState) -> Path:
+        """その日のムード状態を保存"""
+        path = self.dir / f"day_{day:02d}.json"
+        data = {
+            "day": day,
+            "daily_mood": daily_mood.model_dump(mode="json"),
+            "carry_over_mood": carry_over_mood.model_dump(mode="json"),
+        }
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        logger.info(f"[MoodStateStore] Day {day} mood saved to {path}")
+        return path
+
+    def load_latest_carry_over(self) -> Optional[MoodState]:
+        """最新日のcarry_over_mood（翌日開始ムード）をロード"""
+        files = sorted(self.dir.glob("day_*.json"))
+        if not files:
+            return None
+        try:
+            data = json.loads(files[-1].read_text(encoding="utf-8"))
+            mood = MoodState(**data["carry_over_mood"])
+            logger.info(f"[MoodStateStore] Restored carry-over mood from {files[-1].name}: V={mood.valence:.1f} A={mood.arousal:.1f} D={mood.dominance:.1f}")
+            return mood
+        except Exception as e:
+            logger.warning(f"[MoodStateStore] Failed to load latest: {e}")
+            return None
+
+    def load_day(self, day: int) -> Optional[dict]:
+        """指定日のdaily_mood + carry_over_moodをロード"""
+        path = self.dir / f"day_{day:02d}.json"
+        if path.exists():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                return {
+                    "daily_mood": MoodState(**data["daily_mood"]),
+                    "carry_over_mood": MoodState(**data["carry_over_mood"]),
+                }
+            except Exception as e:
+                logger.warning(f"[MoodStateStore] Failed to load day {day}: {e}")
+        return None
+
+    def get_latest_day(self) -> int:
+        """最新の保存済み日数を返す（0 = まだ保存なし）"""
+        files = sorted(self.dir.glob("day_*.json"))
+        if not files:
+            return 0
+        try:
+            return int(files[-1].stem.split("_")[1])
+        except (IndexError, ValueError):
+            return 0
+
+
 class DailyLoopOrchestrator:
     """Day 1-7 日次ループオーケストレータ（v10 §4 完全準拠）"""
     

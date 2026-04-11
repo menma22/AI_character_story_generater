@@ -247,21 +247,23 @@ async def resume_character_generation(character_name: str, profile_name: str, ev
         await manager.send_error(f"再開エラー: {str(e)}")
 
 async def _finalize_character_generation(package):
-    """生成完了後の保存と通知"""
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    """生成完了後の保存と通知（作業ディレクトリに統一保存）"""
+    from backend.storage.md_storage import safe_name
+
     char_name = "unknown"
     if package.macro_profile and package.macro_profile.basic_info:
         char_name = package.macro_profile.basic_info.name
-    
-    save_dir = AppConfig.STORAGE_DIR / f"{char_name}_{timestamp}"
+
+    # 作業ディレクトリと同一パスに保存（1キャラ=1ディレクトリ）
+    save_dir = AppConfig.STORAGE_DIR / safe_name(char_name)
     save_dir.mkdir(parents=True, exist_ok=True)
-    
+
     pkg_json = package.model_dump(mode="json")
     (save_dir / "package.json").write_text(
         json.dumps(pkg_json, ensure_ascii=False, indent=2),
         encoding="utf-8"
     )
-    
+
     await manager.send_progress("complete", 1.0, f"キャラクター「{char_name}」の生成が完了しました")
     await manager.send_phase_result("complete", {
         "package_name": save_dir.name,
