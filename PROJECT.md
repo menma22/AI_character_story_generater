@@ -137,8 +137,8 @@ graph TB
 **4層エージェント階層（Day 0）:**
 1. **Tier -1 Creative Director** (Opus): Tool-Callingによる自律推敲ループ。search_web + file_read + request_critique + submit_final_concept の4ツール。Self-Critiqueチェックリスト [A]-[F] の6カテゴリ。
 2. **Tier 0 Master Orchestrator** (Opus): Phase A-1→A-2→A-3→D順次制御。各Phase完了後にEvaluator-Optimizerループで即時評価・再生成。
-3. **Phase Orchestrators**: 各Phase内のWorker群を管理。A-1=8 Workers、A-2=15 Workers（v2 §6.4.2準拠）、A-3=Planner+Writers、D=5 Workers。
-4. **Workers**: プロファイル別モデル（high_quality=sonnet, draft=gemma）。
+3. **Phase Orchestrators**: 各Phase内のWorker群を管理。A-1=8 Workers、A-2=15 Workers（v2 §6.4.2準拠）、A-3=Planner(自然言語)+Writer(JSON一括)、D=4 Workers(自然言語)+EventWriter(JSON)。
+4. **Workers**: プロファイル別モデル（high_quality=sonnet, draft=gemini）。
 
 **Phase A-2 Worker 15分割構成（v2 §6.4.2準拠）:**
 ```
@@ -177,8 +177,8 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 **出力形式の設計原則:**
 | 出力の用途 | 形式 | 例 |
 |-----------|------|-----|
-| システムがプログラム的にパースする値 | JSON | パラメータID、violation_detected(bool)、Tool Calling decision_package |
-| エージェント間でプロンプトとして渡すもの | 構造化Markdown/自然言語 | Perceiver出力、Impulsive/Reflective出力、内省メモ、情景描写 |
+| コードが機械的にパースしてPydanticモデルに格納する値 | JSON (`json_mode=True`) | パラメータID、Episode Writer全出力、WeeklyEventWriter全出力、Tool Calling |
+| エージェント間でプロンプトコンテキストとして渡すもの | 自然言語テキスト | Phase D Step1-4（世界設定・人物・物語アーク・葛藤強度）、Phase A-3 Planner出力、Perceiver/Impulsive/Reflective出力 |
 | 最終出力 | 自然な文章 | 日記、ナラティブ |
 
 **隠蔽原則（implicit/explicit非対称）:**
@@ -187,12 +187,12 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 - 日記生成AI: 気質・性格パラメータを知らない（行動からの推測のみ）
 
 **品質プロファイル別モデル設定:**
-| Profile | director_tier | worker_tier | Evaluator | 備考 |
-|---------|--------------|-------------|-----------|------|
-| high_quality | opus | sonnet | 全7種ON | 本番提出用 |
-| standard | sonnet | sonnet | 5種ON | 推奨バランス |
-| fast | sonnet | gemini | 3種ON | 素早い確認 |
-| draft | sonnet | gemma | 2種ON | 最小コスト |
+| Profile | director_tier | worker_tier | Evaluator | retry回数 | 備考 |
+|---------|--------------|-------------|-----------|-----------|------|
+| high_quality | opus | sonnet | 全7種ON | 4 | 本番提出用 |
+| standard | sonnet | sonnet | 5種ON | 3 | 推奨バランス |
+| fast | sonnet | gemini | 3種ON | 2 | 素早い確認 |
+| draft | sonnet | gemini | 2種ON | 2 | 最小コスト（旧gemma→gemini変更済） |
 
 #### データモデル（v2 §6.3.4準拠拡張済）
 
@@ -280,13 +280,32 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 - `parse_markdown_sections()` ユーティリティで各セクションをPydanticモデルのフィールドに分配
 - 統合エージェントへの入力も `json.dumps(model.model_dump())` から自然言語テキストに変更
 
-### 6. Phase A-2 Worker 細分化
+### 6. Phase A-3/D: 不要なJSON依存の排除
+
+**(a) 当初設計**: Phase D の全5ステップ（WorldContext, SupportingCharacters, NarrativeArc, ConflictIntensity, WeeklyEventWriter）および Phase A-3 の全ステップ（EpisodePlanner, 個別EpisodeWriter×N）を `json_mode=True` でJSON出力させ、全結果をJSONパースしていた。
+**(b) 変更・根拠**: Phase D Step1-4およびA-3 Plannerの出力は次のLLMへのプロンプトコンテキストとしてしか使われず、機械的なパースは不要だった。Anthropic APIクレジット枯渇→Geminiフォールバック環境下で、Gemma 4 (31B)のJSON出力が致命的に不安定で113回のJSONパース失敗が発生し、エピソード・イベントが全く生成されなかった。根本原因は「プロンプトとして渡すだけのデータにJSON出力を強制していた」こと。
+**(c) 採用プラクティス**:
+- Phase D Step1-4: `json_mode` を完全撤廃。自然言語テキストで出力し、そのまま次ステップのコンテキストに渡す
+- Phase D Step5 (WeeklyEventWriter): JSON維持（28-42件のEventモデルへ機械的格納が必要）
+- Phase A-3 Planner: 自然言語テキスト出力に変更
+- Phase A-3 Writer: 個別並列生成から全エピソード一括JSON生成に統合（LLM呼び出し回数削減: 1+N → 2回）
+- `llm_api.py`: 4段階フォールバック付き`_extract_json()`ヘルパー追加。`call_llm()`にjson_mode失敗時の自動リトライ（最大3回）を実装
+- draftプロファイル: `worker_tier`を`gemma`→`gemini`に変更（Gemma 4はJSON信頼性が低すぎる）
+- **判断基準**: 「そのデータをコードが機械的にパースするか？」Yes → JSON、No → 自然言語
+
+### 7. Phase A-2 Worker 細分化
 
 **(a) 当初設計**: MVP段階では4つの統合Worker（気質全部、性格全部、対他者認知、規範層）で実行。
 **(b) 変更・根拠**: v2 §6.4.2 で15 Workerへの分割が明確に規定。単一LLMが52パラメータを一度に生成するとコンテキスト負荷で品質が低下し、一部再生成も困難。
 **(c) 採用プラクティス**: v10 §3.3のカテゴリ分類（A1-A4, B1-B5）に沿って10パラメータWorker + 4規範層Worker + 1ルールベース導出の計15 Workerに分割。Step 1(10並列) → Step 2(4並列) → Step 3(逐次) の3段階で実行。
 
-### 7. WebサーチおよびMDファイル保存ルーティング
+### 8. フロントエンド状態管理: package_nameの一貫性
+
+**(a) 当初設計**: `currentPackage._package_name` は履歴読み込み時（`loadPackage()`）のみで設定されていた。
+**(b) 変更・根拠**: 新規キャラクター生成完了時（`onGenerationComplete()`）では `_package_name` がセットされず、直後の日記シミュレーション開始時に `'unknown'` がバックエンドに送信され「パッケージが見つかりません」エラーが発生していた。履歴経由でのみ日記生成が動作する状態だった。
+**(c) 採用プラクティス**: `onGenerationComplete()` 内で `currentPackage._package_name = result.package_name` を設定し、生成フロー・履歴フロー両方で一貫して `_package_name` が保持されるよう修正。
+
+### 9. WebサーチおよびMDファイル保存ルーティング
 
 **(a) 当初設計**: データ出力はJSONオブジェクトやインメモリ保持に留まっていた。
 **(b) 変更・根拠**: 世界観に深みを持たせるリサーチ能力と、人間可読なMD永続化が必要。
@@ -312,7 +331,7 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 
 ### 次のアクション
 
-1. **E2Eテスト実行** → draftプロファイルでキャラクター生成 + 日記生成を通しで実行し、全パイプラインの動作を確認する
+1. **E2Eテスト実行（Day0→日記シミュレーション通し）** → draftプロファイルでキャラクター生成→日記生成までを連続実行し、全フローの動作を確認する
 2. **提出用キャラクター生成** → High Qualityプロファイルで全EvaluatorをONにし、MDデータベース出力まで通して実行する
 3. **Phase A-1 Workerプロンプト更新** → 追加されたMacroProfileフィールド（second_person_by_context, emoji_usage等）を生成するようWorkerプロンプトを拡充する
 
@@ -320,4 +339,5 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 
 > [!WARNING]
 > - Anthropic APIのクレジット残高不足により全Claude呼び出しがGemini 2.5 Proへフォールバック中。本稼働時は有償Tierキーが必要。
-> - Gemini 2.5 Proの思考トークン問題（`max_output_tokens`枯渇による空レスポンス）は修正済み（`max_output_tokens`自動4倍拡張 + `system_prompt`の正しいパススルー）。
+> - Gemini 2.5 Proの思考トークン問題は修正済み。JSON依存排除・リトライ機構追加も完了。
+> - draftプロファイルのworker_tierをgemma→geminiに変更済み（Gemma 4のJSON信頼性問題を解消）。
