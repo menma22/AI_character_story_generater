@@ -301,7 +301,8 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 | Stage 3: エージェント自律化 | ✅ 実装完了 | コア3種(Director, Action, Diary)のTool-Using化 |
 | Stage 4: UX改善 | ⬜ 未着手 | 共同編集モード（v2 §3.4）|
 | Stage 5: インフラ・完成 | ✅ 実装完了 | Webサーチ・MD永続化・E2Eテスト済 |
-| Stage 6: 仕様書完全準拠 | ✅ 実装完了 | バグ修正5件、JSON→自然言語化、スキーマ拡張、A-2 15Worker化、Creative Director強化 |
+| Stage 6: 仕様書完全準拠 | ✅ 実装完了 | バグ修正、A-2 15Worker化完了 |
+| Stage 7: 監査・運用保守 | ✅ 実装完了 | 全エージェントプロンプトの抽出・構造化レポート作成 |
 
 ### 次のアクション
 

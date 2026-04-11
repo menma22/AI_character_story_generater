@@ -93,6 +93,7 @@ class ActivationLog(BaseModel):
     """パラメータ動的活性化のログ（v10 §3.5準拠）"""
     activated_temperament_ids: list[int] = Field(default_factory=list)
     activated_personality_ids: list[int] = Field(default_factory=list)
+    activated_cognition_ids: list[int] = Field(default_factory=list)
     activated_values: list[str] = Field(default_factory=list)
     activation_reasoning: str = ""
 

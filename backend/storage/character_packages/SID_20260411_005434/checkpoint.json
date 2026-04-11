@@ -1,0 +1,16 @@
+{
+  "metadata": {
+    "version": "2.0",
+    "generated_at": "2026-04-11T00:54:34.374393",
+    "generator": "script-ai-app v2",
+    "upstream_spec": "specification_v10.md",
+    "total_llm_calls": 0,
+    "total_cost_usd": 0.0
+  },
+  "concept_package": null,
+  "macro_profile": null,
+  "micro_parameters": null,
+  "autobiographical_episodes": null,
+  "weekly_events_store": null,
+  "audit_report": {}
+}
