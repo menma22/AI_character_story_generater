@@ -190,7 +190,7 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 → 【4つの個別チェックAI】Profile/Temperament/Personality/Values並列チェック
 → 価値観違反チェック
 → 内省(Self-Perception + 過去統合 + 再解釈, raw text出力)
-→ 日記生成: Agentic日記執筆(言語的表現方法[LinguisticExpression]全情報注入・AI臭さツール検証込み)
+→ 日記生成: Agentic日記執筆(言語的表現方法[LinguisticExpression]全情報注入・check_diary_rules必須ゲート付き・submit時強制チェック)
 → 【4つの個別チェックAI】日記出力チェック
 → ムード更新(Peak-End Rule) → key memory抽出(個別ファイル保存) + 記憶圧縮 + 翌日予定追加(必須イベント化)
 → ムードcarry-over(減衰+閾値リセット)
@@ -488,6 +488,16 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
   - **WebSocket新アクション**: `regenerate_artifact`（AI再生成、カスケードオプション付き）、`save_artifact_edit`（手動JSON編集の保存、Pydanticバリデーション付き）
   - **フロントエンド**: 各タブにアクションバー（再生成/編集ボタン）、再生成モーダル（自然言語指示入力+下流カスケード警告+プログレス表示）、編集モーダル（JSONテキストエリア+バリデーションエラー表示）
 
+### 23. 日記エージェント提出ガード強化（submit_final_diary 必須チェック）
+
+**(a) 当初設計**: 日記エージェントは `check_diary_rules` → `submit_final_diary` の順でツールを呼ぶようプロンプトで指示していたが、プログラム的な強制はなかった。LLMが `check_diary_rules` をスキップして直接 `submit_final_diary` を呼ぶことが可能だった。また、`diary_critic` が None（voice_fingerprint 不在）の場合、`check_diary_rules` が無条件 SUCCESS を返しチェックが完全にバイパスされていた。
+**(b) 変更・根拠**: プロンプト依存の制御はLLMの判断に左右されるため信頼性が不十分。提出物の品質ゲートは確定的（deterministic）であるべき。
+**(c) 採用プラクティス**:
+  - `check_passed` / `last_checked_draft` フラグによる状態管理を追加
+  - `submit_final_diary` 内で `check_passed == False` または `last_checked_draft != final_diary_text` の場合、自動で `check_diary_rules` を強制実行。不合格なら提出拒否
+  - `diary_critic` 不在時も AI臭い語彙ブラックリスト（14語）＋ 文字数（200-500字）の最低限ルールベースチェックを実施
+  - **設計原則**: エージェントの自律的な品質チェックはプロンプト指示 + プログラム的ガードの二重保証
+
 ---
 
 ## パート3: プロジェクト管理
@@ -511,6 +521,7 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 | Stage 13: 言語的表現方法の独立化 | ✅ 実装完了 | VoiceFingerprint→LinguisticExpression独立化、抽象的喋り方雰囲気+日記書き方の空気感追加、日記生成プロンプトにのみ注入 |
 | Stage 14: エージェンティック生成化 | ✅ 実装完了 | Phase A-3/D Step5のエージェンティック化、Creative Director自己批判強化、2層自己批判(外部批評+内省)導入 |
 | Stage 15: アーティファクト個別再生成・編集 | ✅ 実装完了 | regeneration.py新設、全5オーケストレータにregeneration_context注入、WS 2アクション追加、再生成/編集モーダルUI |
+| Stage 16: 日記エージェント提出ガード強化 | ✅ 実装完了 | submit_final_diary に check_diary_rules 必須ゲート追加、critic不在時も最低限ルールベースチェック実施 |
 
 ### 次のアクション
 
