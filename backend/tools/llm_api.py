@@ -242,7 +242,21 @@ async def call_gemma(
     try:
         response = await asyncio.to_thread(gmodel.generate_content, user_message)
         
-        content = response.text if response.text else ""
+        # finish_reason=MAX_TOKENS の場合、response.text が例外を投げる → 安全に取得
+        try:
+            content = response.text if response.text else ""
+        except ValueError:
+            # finish_reason が STOP 以外 (MAX_TOKENS=2, SAFETY=3 等) の場合
+            # parts から可能な限りテキストを抽出
+            content = ""
+            if response.candidates and response.candidates[0].content.parts:
+                content = "".join(
+                    p.text for p in response.candidates[0].content.parts
+                    if hasattr(p, "text") and p.text
+                )
+            if not content:
+                finish = getattr(response.candidates[0], "finish_reason", "UNKNOWN") if response.candidates else "NO_CANDIDATES"
+                logger.warning(f"[Gemma] Empty response, finish_reason={finish}. Returning empty.")
         usage = {
             "input_tokens": getattr(response.usage_metadata, "prompt_token_count", 0) if response.usage_metadata else 0,
             "output_tokens": getattr(response.usage_metadata, "candidates_token_count", 0) if response.usage_metadata else 0,

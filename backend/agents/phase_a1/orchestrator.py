@@ -310,10 +310,10 @@ class PhaseA1Orchestrator:
         # Step 5: 全情報を統合したMarkdownプロセの生成 (ハイブリッド化)
         await self._notify("Step 5: プロフィール統合Markdownを生成中...")
         summary_prose = await call_llm(
-            tier=self.profile.worker_tier, # 修正: プロファイル設定に従う
+            tier=self.profile.worker_tier,
             system_prompt=SUMMARY_PROMPT,
             user_message=f"これまでの生成結果:\n{json.dumps(basic_info.model_dump(), ensure_ascii=False)}\n{json.dumps(family_obj.model_dump(), ensure_ascii=False)}\n{json.dumps(lifestyle_obj.model_dump(), ensure_ascii=False)}\n{json.dumps(dream_obj.model_dump(), ensure_ascii=False)}\n{json.dumps(voice_obj.model_dump(), ensure_ascii=False)}\n{json.dumps(values_obj.model_dump(), ensure_ascii=False)}\n{json.dumps(secret_obj.model_dump(), ensure_ascii=False)}",
-            max_tokens=2000,
+            max_tokens=8000,
             json_mode=False
         )
 

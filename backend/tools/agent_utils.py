@@ -60,12 +60,12 @@ async def run_worker_with_validation(
             status = "実行中..." if attempts == 1 else f"自己修復中 ({attempts}/{max_retries})..."
             await ws_manager.send_agent_thought(f"Worker:{worker_name}", status, "thinking")
 
-        # LLM呼び出し
+        # LLM呼び出し（パラメータ数が多い場合に備え十分なトークンを確保）
         result = await call_llm(
             tier=tier,
             system_prompt=system_prompt,
             user_message=current_user_message,
-            max_tokens=3000,
+            max_tokens=8000,
             json_mode=True,
         )
         
