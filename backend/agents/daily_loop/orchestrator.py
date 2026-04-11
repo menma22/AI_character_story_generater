@@ -223,17 +223,29 @@ class DailyLoopOrchestrator:
         self.profile = profile
         self.ws = ws_manager
         
-        # 状態
-        self.current_mood = MoodState()
-        self.memory_db = ShortTermMemoryDB()
-        self.day_results: list[DayProcessingState] = []
-        self.action_buffer: list[str] = []
-
-        # key memory: 短期記憶とは別ファイルとして管理
+        # キャラ名解決（全Storeで共通使用）
         cname = ""
         if self.package.macro_profile and self.package.macro_profile.basic_info:
             cname = self.package.macro_profile.basic_info.name
-        self.key_memory_store = KeyMemoryStore(cname or "Unknown_Character")
+        self._cname = cname or "Unknown_Character"
+
+        # 各Store初期化
+        self.key_memory_store = KeyMemoryStore(self._cname)
+        self.memory_store = ShortTermMemoryStore(self._cname)
+        self.mood_store = MoodStateStore(self._cname)
+
+        # 状態: 既存スナップショットがあれば復元、なければ初期値
+        restored_mood = self.mood_store.load_latest_carry_over()
+        self.current_mood = restored_mood if restored_mood else MoodState()
+
+        restored_memory = self.memory_store.load_latest()
+        self.memory_db = restored_memory if restored_memory else ShortTermMemoryDB()
+
+        self.day_results: list[DayProcessingState] = []
+        self.action_buffer: list[str] = []
+
+        if restored_mood or restored_memory:
+            logger.info(f"[DailyLoop] 既存状態を復元: mood={'restored' if restored_mood else 'fresh'}, memory={'restored' if restored_memory else 'fresh'}")
         
         # サブエージェント初期化
         self.activation_agent = None
@@ -1143,9 +1155,13 @@ class DailyLoopOrchestrator:
     # ─── メインループ ──────────────────────────────────────────
     async def run(self, days: int = 7) -> list[DayProcessingState]:
         """日次ループを実行（v10 §4 完全準拠）"""
-        await self._notify(f"日次ループ開始: {days}日間")
-        
-        for day in range(1, days + 1):
+        # 既に保存済みの日がある場合、その翌日から再開
+        start_day = self.memory_store.get_latest_day() + 1
+        if start_day > 1:
+            await self._notify(f"Day {start_day - 1}まで保存済み → Day {start_day}から再開")
+        await self._notify(f"日次ループ開始: Day {start_day}〜{days}")
+
+        for day in range(start_day, days + 1):
             await self._notify(f"=== Day {day} 開始 ===")
             if self.ws:
                 await self.ws.send_progress("daily_loop", (day - 1) / days, f"Day {day} 処理中")
@@ -1338,6 +1354,8 @@ class DailyLoopOrchestrator:
             # §4.9.3.2 記憶圧縮
             try:
                 await self._compress_memories(day, diary)
+                # 短期記憶スナップショットをファイルに永続化
+                self.memory_store.save(day, self.memory_db)
             except Exception as e:
                 logger.error(f"[DailyLoop] Day {day} 記憶圧縮エラー: {e}")
 
@@ -1367,9 +1385,12 @@ class DailyLoopOrchestrator:
                     logger.error(f"[DailyLoop] Day {day} 翌日予定計画エラー: {e}")
 
             # §4.9.5 ムードcarry-over
-            day_state.daily_mood = self.current_mood.model_copy()
+            daily_mood_snapshot = self.current_mood.model_copy()
+            day_state.daily_mood = daily_mood_snapshot
             self._mood_carry_over()
-            
+            # ムード状態をファイルに永続化（daily_mood + carry_over後のmood）
+            self.mood_store.save(day, daily_mood_snapshot, self.current_mood.model_copy())
+
             self.day_results.append(day_state)
             
             try:
