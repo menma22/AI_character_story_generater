@@ -725,7 +725,7 @@ class DailyLoopOrchestrator:
         known_str = "既知（事前に知っている予定）" if event.known_to_protagonist else "未知（予想外の出来事）"
         system_prompt = f"""あなたは主人公AIの「出来事周辺情報統合エージェント」です。
 衝動ルートと理性ルートの意見を統合し、最終的な行動を決定するとともに、
-この出来事に対して生じた事象、主人公の動き、感情などをストーリーとしてまとめてください。
+この出来事に対して生じた事象やその前後の情報、主人公の動き、感情などをストーリーとしてまとめてください。
 衝動的な無意識的な反応に関するレポートが【衝動ブランチの報告】で、理性的な意識的な反応に関するレポートが【理性ブランチの報告】であり、その二つを融合させます。状況によって、衝動的な反応を優先したりしてください。例えば、怒りが高まっているときは、衝動的な反応を優先します。
 また、必ず、衝動的反応、理性的反応それぞれに従ったと仮定したときに起こりうる良い出来事と悪い出来事をそれぞれ2つ以上上げ、それも加味してストーリーを構築してください。
 
@@ -1003,30 +1003,58 @@ class DailyLoopOrchestrator:
         ])
         
         final_diary_content = ""
-        
+        check_passed = False  # check_diary_rules がSUCCESSを返したかのフラグ
+        last_checked_draft = ""  # チェック済みドラフトの内容
+
         async def check_diary_rules(draft_diary_text: str = None) -> dict:
             """現在書き上げたドラフトが言語的指紋（口癖や避ける語彙）に違反していないかチェックする"""
+            nonlocal check_passed, last_checked_draft
             if not draft_diary_text:
                 return {"status": "FAILED", "message": "ERROR: draft_diary_text引数が欠落しています。"}
             await self._notify("日記ドラフトの言語規則チェック中...")
             if not self.diary_critic:
-                return {"status": "SUCCESS", "message": "No critic available. Proceed to submit_final_diary."}
-                
+                # critic不在でも最低限のルールベースチェックを実施
+                issues = []
+                for word in ["成長", "気づき", "学び", "視野が広がっ", "新たな発見",
+                             "自己成長", "大切なこと", "心の成長", "前向き", "ポジティブ",
+                             "チャレンジ", "ステップアップ", "自分を見つめ直", "大事にしたい"]:
+                    if word in draft_diary_text:
+                        issues.append(f"AI臭い語彙: {word}")
+                if len(draft_diary_text) > 500:
+                    issues.append(f"日記が長すぎる ({len(draft_diary_text)}字、500字以下にしてください)")
+                if len(draft_diary_text) < 200:
+                    issues.append(f"日記が短すぎる ({len(draft_diary_text)}字、最低200字推奨)")
+                if issues:
+                    check_passed = False
+                    return {"status": "FAILED", "issues_found": issues, "advice": f"以下の問題を修正して再度ドラフトを作成してください:\n- " + "\n- ".join(issues)}
+                check_passed = True
+                last_checked_draft = draft_diary_text
+                return {"status": "SUCCESS", "message": "基本チェック通過。このまま submit_final_diary で提出してください。"}
+
             temp_diary = DiaryEntry(day=day, content=draft_diary_text, mood_at_writing=self.current_mood)
             # Critic（ルールベース + 違反指摘）を呼び出すが、添削済テキストは使わず「指摘（issues）」のみを返す
             result = await self.diary_critic.critique(temp_diary, self.current_mood)
-            
+
             if result["passed"]:
+                check_passed = True
+                last_checked_draft = draft_diary_text
                 return {"status": "SUCCESS", "message": "完璧です。禁止語彙もAI臭さもありません。このまま submit_final_diary で提出してください。"}
             else:
+                check_passed = False
                 issues = "\n- ".join(result["issues"])
                 return {"status": "FAILED", "issues_found": result["issues"], "advice": f"以下の問題を修正して再度ドラフトを作成してください:\n- {issues}"}
 
         async def submit_final_diary(final_diary_text: str = None) -> dict:
             """全てのチェックを通過した最終的な日記テキストを提出する"""
+            nonlocal check_passed, last_checked_draft, final_diary_content
             if not final_diary_text:
                 return {"status": "FAILED", "message": "ERROR: final_diary_text引数が欠落しています。"}
-            nonlocal final_diary_content
+            # check_diary_rules を経由していない場合は強制チェック
+            if not check_passed or last_checked_draft != final_diary_text:
+                await self._notify("提出前の強制チェックを実行中...")
+                check_result = await check_diary_rules(final_diary_text)
+                if check_result["status"] != "SUCCESS":
+                    return {"status": "FAILED", "message": f"提出拒否: check_diary_rules を先に通過させてください。{check_result.get('advice', '')}"}
             final_diary_content = final_diary_text
             await self._notify("最終日記が完成・提出されました。", "complete")
             return {"status": "SUCCESS", "message": "Diary submitted successfully."}
@@ -1066,8 +1094,12 @@ class DailyLoopOrchestrator:
 【日記のルール】
 - 一人称視点で、そのキャラクターらしい文体で書くこと
 - 避ける語彙は絶対に使わないこと（「成長」「気づき」「学び」等のAI臭い語彙）
-- 全ての出来事を書く必要はない。主観的に重要だと感じたことだけを書く
+- 全ての出来事を書く必要はない。主観的に重要だと感じたことだけを書く。しかし、1日全体を見渡しての所感を書くのは推奨
+- 日々の経験や記憶、感情、認識の変化が反映されているとよい。
+- 第3者が日記だけを見て、理解でき、納得でき、面白い日記である必要がある。
+- 与えられた、マクロプロフィール、世界設定、今日の出来事、内省メモ、現在のムード、記憶コンテキストを全て加味して、日記を作成してください。
 - 約400字（500字以下）
+
 
 【エージェンティック行動指針】
 1. まず日記のドラフトを頭の中で執筆し、`check_diary_rules` ツールを使って自身の口癖や禁止語彙に反していないか自発的にテストしてください。
