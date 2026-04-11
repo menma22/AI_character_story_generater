@@ -15,7 +15,7 @@ AI_character_story_generater/
 │   ├── config.py                              # 設定管理 (APIキー, 4段階プロファイル, モデル定義)
 │   ├── agents/
 │   │   ├── creative_director/
-│   │   │   └── director.py                    # Tier -1: Creative Director (Opus, Self-Critique, Web検索, file_read)
+│   │   │   └── director.py                    # Tier -1: Creative Director (5フェーズ, 2層自己批判, Web検索必須, file_read)
 │   │   ├── master_orchestrator/
 │   │   │   └── orchestrator.py                # Tier 0: Phase A-1→A-2→A-3→D 順次制御 + Evaluator統合
 │   │   ├── phase_a1/
@@ -23,9 +23,9 @@ AI_character_story_generater/
 │   │   ├── phase_a2/
 │   │   │   └── orchestrator.py                # Phase A-2: ミクロパラメータ 52個 + 規範層 (15 Workers, v2 §6.4.2準拠)
 │   │   ├── phase_a3/
-│   │   │   └── orchestrator.py                # Phase A-3: 自伝的エピソード (McAdams, redemption bias対策)
+│   │   │   └── orchestrator.py                # Phase A-3: 自伝的エピソード (エージェンティック, 2層自己批判)
 │   │   ├── phase_d/
-│   │   │   └── orchestrator.py                # Phase D: 7日間イベント列 (14-28件, 2軸メタデータ)
+│   │   │   └── orchestrator.py                # Phase D: 7日間イベント列 (Step5エージェンティック, 2層自己批判)
 │   │   ├── daily_loop/
 │   │   │   ├── orchestrator.py                # Day 1-7 日次ループ (RIM + 感情強度判定 + 内省 + 日記)
 │   │   │   ├── activation.py                  # パラメータ動的活性化 (5-10個選択, v10 §3.5)
@@ -456,6 +456,17 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
   - `MacroProfile.voice_fingerprint`は後方互換のため残存（concrete_featuresからコピー）
   - Daily Loop: `_build_voice_context()`を拡張し、abstract_feel + diary_writing_atmosphere全フィールドを日記生成プロンプトに注入
 
+### 21. エピソード/イベント生成のエージェンティック化と2層自己批判メカニズム
+
+**(a) 当初設計**: Phase A-3（エピソード生成）はPlannerとWriterの2回のone-shot `call_llm()`呼び出し。Phase D Step 5（イベント生成）も1回のone-shot `call_llm(json_mode=True)`。Creative Directorは既にエージェンティックだったが、Web検索回数に最低保証がなく、プロンプトの「複数回検索」指示に依存していた。
+**(b) 変更・根拠**: one-shot生成では品質にばらつきがあり、McAdamsカテゴリ分布やRedemption Bias、イベントのメタデータ制約違反を自律的に修正する手段がなかった。また、外部批評（request_critique）がpassしても「まあいいか」で妥協している可能性があり、真に品質を確信するメカニズムが不在。Creative Directorのリサーチが浅く、1-2回の検索で済ませてドラフトに入るケースがあった。
+**(c) 採用プラクティス**:
+  - **2層自己批判メカニズム（全ループ共通）**: (1) `request_critique` — 別LLMインスタンスによる客観評価（verdict: pass/refine）、(2) `self_reflect` — 「本当にこれでいいのか？妥協していないか？」を自問（convinced: true/false）。両方passで初めて`submit_`ツールが解放される厳格なゲート
+  - **Phase A-3**: Planner/Writerを統合した1つのエージェンティックループ。4ツール（draft_episodes → request_critique → self_reflect → submit_final_episodes）。draft時にcritique_passed/self_reflect_convincedをリセット。フォールバックとして従来の2ステップone-shotを保持
+  - **Phase D Step 5**: Steps 1-4（コンテキスト生成）は現状維持。Step 5のみエージェンティック化。4ツール（draft_events → request_critique → self_reflect → submit_final_events）。draft_eventsは構造バリデーション内蔵（イベント数・分布・禁止source・expectedness分布）
+  - **Creative Director強化**: `search_count`カウンターで検索回数追跡。`min_research_searches`（config.pyで設定: high_quality=5, standard=3, fast=2, draft=1）回未満では`request_critique`がBLOCKED。5フェーズ構造化（計画→リサーチ→ドラフト→外部批評→自己内省→提出）。`self_reflect`ツール追加（convincedでなければcritique_passedもリセット→再ドラフト）
+  - **self_reflect失敗時のリセット**: convinced=falseが返ると`critique_passed`もFalseにリセットされ、再度ドラフト→critique→self_reflectのフルループが必要。中途半端な妥協を構造的に防止
+
 ---
 
 ## パート3: プロジェクト管理
@@ -477,6 +488,7 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 | Stage 11: Gemma4廃止・活性化エージェント強化 | ✅ 実装完了 | Gemma4完全廃止→Gemini 2.5 Pro統一、活性化エージェントにマクロプロフィール・経験DB入力追加 |
 | Stage 12: Day1世界観導入・イベント数調整・翌日予定必須化 | ✅ 実装完了 | Day1日記に世界観セクション追加、日記文字数約400字統一、イベント数2-4件/日、翌日予定フォールバック |
 | Stage 13: 言語的表現方法の独立化 | ✅ 実装完了 | VoiceFingerprint→LinguisticExpression独立化、抽象的喋り方雰囲気+日記書き方の空気感追加、日記生成プロンプトにのみ注入 |
+| Stage 14: エージェンティック生成化 | ✅ 実装完了 | Phase A-3/D Step5のエージェンティック化、Creative Director自己批判強化、2層自己批判(外部批評+内省)導入 |
 
 ### 次のアクション
 
