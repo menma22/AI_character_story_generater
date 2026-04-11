@@ -3,6 +3,22 @@
  * 脚本パッケージ・日記データをHTML要素にレンダリングする
  */
 
+/**
+ * アーティファクトごとのアクションバー（再生成・編集ボタン）
+ */
+function artifactActionBar(artifactName) {
+    return `
+        <div class="artifact-actions">
+            <button class="btn-artifact" onclick="openRegenerateModal('${artifactName}')" title="AIで再生成">
+                <span class="btn-artifact-icon">&#x21bb;</span> 再生成
+            </button>
+            <button class="btn-artifact" onclick="openEditModal('${artifactName}')" title="JSONを直接編集">
+                <span class="btn-artifact-icon">&#x270E;</span> 編集
+            </button>
+        </div>
+    `;
+}
+
 const Renderer = {
     /**
      * concept_packageを表示
@@ -11,7 +27,7 @@ const Renderer = {
         if (!concept) return '<p class="text-muted">未生成</p>';
         const ps = concept.psychological_hints || {};
         const wn = ps.want_and_need || {};
-        return `
+        return artifactActionBar('concept_package') + `
             <div class="content-card">
                 <h3>キャラクターコンセプト</h3>
                 <div class="value" style="white-space:pre-wrap; line-height:1.7">${concept.character_concept || ''}</div>
@@ -70,7 +86,7 @@ const Renderer = {
         const bi = profile.basic_info || {};
         const vf = profile.voice_fingerprint || {};
         const vc = profile.values_core || {};
-        return `
+        return artifactActionBar('macro_profile') + `
             <div class="content-card">
                 <h3>基本情報</h3>
                 <div class="label">名前</div><div class="value">${bi.name || ''}</div>
@@ -103,6 +119,7 @@ const Renderer = {
     renderParameters(params) {
         if (!params) return '<p class="text-muted">未生成</p>';
 
+        const actionBar = artifactActionBar('micro_parameters');
         const renderParamList = (list, title) => {
             if (!list?.length) return '';
             return `
@@ -127,7 +144,8 @@ const Renderer = {
             `;
         };
 
-        return renderParamList(params.temperament, '気質パラメータ（23個）') +
+        return actionBar +
+               renderParamList(params.temperament, '気質パラメータ（23個）') +
                renderParamList(params.personality, '性格パラメータ（27個）') +
                renderParamList(params.other_cognition, '対他者認知（2個）');
     },
@@ -137,7 +155,7 @@ const Renderer = {
      */
     renderEpisodes(episodes) {
         if (!episodes?.episodes?.length) return '<p class="text-muted">未生成</p>';
-        return episodes.episodes.map(ep => `
+        return artifactActionBar('autobiographical_episodes') + episodes.episodes.map(ep => `
             <div class="content-card">
                 <h3>${ep.id} — ${ep.metadata?.category || ''}</h3>
                 <div class="event-meta" style="margin-bottom: var(--space-sm)">
@@ -155,13 +173,14 @@ const Renderer = {
      */
     renderEvents(store) {
         if (!store?.events?.length) return '<p class="text-muted">未生成</p>';
+        const actionBar = artifactActionBar('weekly_events_store');
         const byDay = {};
         store.events.forEach(evt => {
             if (!byDay[evt.day]) byDay[evt.day] = [];
             byDay[evt.day].push(evt);
         });
 
-        return Object.keys(byDay).sort((a, b) => a - b).map(day => `
+        return actionBar + Object.keys(byDay).sort((a, b) => a - b).map(day => `
             <div class="event-day-group">
                 <div class="event-day-label">Day ${day}</div>
                 ${byDay[day].map(evt => `

@@ -205,12 +205,14 @@ class PhaseA3Orchestrator:
         micro_parameters: MicroParameters,
         profile: EvaluationProfile,
         ws_manager=None,
+        regeneration_context: str | None = None,
     ):
         self.concept = concept
         self.macro = macro_profile
         self.micro = micro_parameters
         self.profile = profile
         self.ws = ws_manager
+        self.regeneration_context = regeneration_context
 
     async def _notify(self, content: str, status: str = "thinking"):
         if self.ws:
@@ -218,7 +220,7 @@ class PhaseA3Orchestrator:
 
     def _full_context(self) -> str:
         """全コンテキストを文字列化"""
-        return (
+        ctx = (
             f"concept_package:\n{json.dumps(self.concept.model_dump(mode='json'), ensure_ascii=False, indent=2)}\n\n"
             f"macro_profile:\n{json.dumps(self.macro.model_dump(mode='json'), ensure_ascii=False, indent=2)}\n\n"
             f"主要気質パラメータ:\n{json.dumps([p.model_dump(mode='json') for p in self.micro.temperament[:9]], ensure_ascii=False, indent=2)}\n\n"
@@ -226,6 +228,9 @@ class PhaseA3Orchestrator:
             f"理想自己: {self.micro.ideal_self}\n"
             f"義務自己: {self.micro.ought_self}"
         )
+        if self.regeneration_context:
+            ctx += f"\n\n{self.regeneration_context}"
+        return ctx
 
     async def run(self) -> AutobiographicalEpisodes:
         """Phase A-3を実行（エージェンティックループ）"""

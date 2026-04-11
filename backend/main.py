@@ -176,12 +176,26 @@ async def handle_ws_message(data: dict, websocket: WebSocket):
             ws_active_tasks[task_id].cancel()
             ws_active_tasks.pop(task_id, None)
             
+    elif action == "regenerate_artifact":
+        package_name = data.get("package_name", "")
+        artifact_name = data.get("artifact_name", "")
+        instructions = data.get("instructions", "")
+        cascade = data.get("cascade", False)
+        profile_name = data.get("profile", AppConfig.DEFAULT_PROFILE)
+        asyncio.create_task(run_artifact_regeneration(package_name, artifact_name, instructions, cascade, profile_name))
+
+    elif action == "save_artifact_edit":
+        package_name = data.get("package_name", "")
+        artifact_name = data.get("artifact_name", "")
+        edited_data = data.get("data", {})
+        asyncio.create_task(save_manual_edit(package_name, artifact_name, edited_data))
+
     elif action == "get_status":
         await websocket.send_json({
             "type": "status",
             "cost": token_tracker.summary(),
         })
-    
+
     else:
         await websocket.send_json({
             "type": "error",
@@ -306,6 +320,123 @@ async def run_diary_generation(package_name: str, days: int = 7, profile_name: s
     except Exception as e:
         logger.error(f"Diary generation failed: {e}", exc_info=True)
         await manager.send_error(f"日記生成エラー: {str(e)}")
+
+
+# ─── アーティファクト再生成・編集 ─────────────────────────────
+
+async def run_artifact_regeneration(package_name: str, artifact_name: str, instructions: str, cascade: bool, profile_name: str):
+    """特定アーティファクトを再生成する"""
+    from backend.models.character import CharacterPackage
+    from backend.regeneration import regenerate_artifact, get_downstream_artifacts, ARTIFACT_TO_PHASE, ARTIFACT_LABELS
+    import dataclasses
+
+    pkg_path = AppConfig.STORAGE_DIR / package_name / "package.json"
+    if not pkg_path.exists():
+        await manager.send_error(f"パッケージが見つかりません: {package_name}")
+        return
+
+    if artifact_name not in ARTIFACT_TO_PHASE:
+        await manager.send_error(f"不明なアーティファクト: {artifact_name}")
+        return
+
+    try:
+        pkg_data = json.loads(pkg_path.read_text(encoding="utf-8"))
+        package = CharacterPackage(**pkg_data)
+
+        base_profile = PROFILES.get(profile_name, PROFILES["draft"])
+
+        label = ARTIFACT_LABELS.get(artifact_name, artifact_name)
+        await manager.send_progress("regeneration", 0.0, f"「{label}」を再生成中...")
+
+        # メインアーティファクトの再生成
+        package = await regenerate_artifact(package, artifact_name, instructions, base_profile, manager)
+
+        # カスケード再生成
+        regenerated = [artifact_name]
+        if cascade:
+            downstream = get_downstream_artifacts(artifact_name)
+            for i, ds_artifact in enumerate(downstream):
+                ds_label = ARTIFACT_LABELS.get(ds_artifact, ds_artifact)
+                await manager.send_progress("regeneration", (i + 1) / (len(downstream) + 1), f"カスケード再生成: {ds_label}")
+                package = await regenerate_artifact(package, ds_artifact, "", base_profile, manager)
+                regenerated.append(ds_artifact)
+
+        # 保存
+        save_dir = AppConfig.STORAGE_DIR / package_name
+        save_dir.mkdir(parents=True, exist_ok=True)
+        pkg_json = package.model_dump(mode="json")
+        (save_dir / "package.json").write_text(
+            json.dumps(pkg_json, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+
+        await manager.send_progress("regeneration", 1.0, "再生成完了")
+        await manager.send_phase_result("regenerate_complete", {
+            "package_name": package_name,
+            "regenerated": regenerated,
+            "cost": token_tracker.summary(),
+        })
+
+    except Exception as e:
+        logger.error(f"Artifact regeneration failed: {e}", exc_info=True)
+        await manager.send_error(f"再生成エラー: {str(e)}")
+
+
+async def save_manual_edit(package_name: str, artifact_name: str, edited_data: dict):
+    """手動編集されたアーティファクトを保存する"""
+    from backend.models.character import (
+        CharacterPackage, ConceptPackage, MacroProfile, LinguisticExpression,
+        MicroParameters, AutobiographicalEpisodes, WeeklyEventsStore,
+    )
+    from backend.regeneration import ARTIFACT_TO_PHASE, ARTIFACT_LABELS
+
+    pkg_path = AppConfig.STORAGE_DIR / package_name / "package.json"
+    if not pkg_path.exists():
+        await manager.send_error(f"パッケージが見つかりません: {package_name}")
+        return
+
+    if artifact_name not in ARTIFACT_TO_PHASE:
+        await manager.send_error(f"不明なアーティファクト: {artifact_name}")
+        return
+
+    # アーティファクト名 → Pydanticモデルのマッピング
+    model_map = {
+        "concept_package": ConceptPackage,
+        "macro_profile": MacroProfile,
+        "linguistic_expression": LinguisticExpression,
+        "micro_parameters": MicroParameters,
+        "autobiographical_episodes": AutobiographicalEpisodes,
+        "weekly_events_store": WeeklyEventsStore,
+    }
+
+    try:
+        pkg_data = json.loads(pkg_path.read_text(encoding="utf-8"))
+        package = CharacterPackage(**pkg_data)
+
+        # Pydanticモデルでバリデーション
+        model_cls = model_map.get(artifact_name)
+        if model_cls:
+            validated = model_cls(**edited_data)
+            setattr(package, artifact_name, validated)
+        else:
+            setattr(package, artifact_name, edited_data)
+
+        # 保存
+        pkg_json = package.model_dump(mode="json")
+        pkg_path.write_text(
+            json.dumps(pkg_json, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+
+        label = ARTIFACT_LABELS.get(artifact_name, artifact_name)
+        await manager.broadcast({
+            "type": "edit_saved",
+            "artifact": artifact_name,
+            "package_name": package_name,
+            "message": f"「{label}」の編集を保存しました",
+        })
+
+    except Exception as e:
+        logger.error(f"Manual edit save failed: {e}", exc_info=True)
+        await manager.send_error(f"編集保存エラー: {str(e)}")
 
 
 # ─── 起動 ────────────────────────────────────────────────────

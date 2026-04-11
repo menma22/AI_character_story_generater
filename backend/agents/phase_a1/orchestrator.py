@@ -265,10 +265,12 @@ class PhaseA1Orchestrator:
         concept: ConceptPackage,
         profile: EvaluationProfile,
         ws_manager=None,
+        regeneration_context: str | None = None,
     ):
         self.concept = concept
         self.profile = profile
         self.ws = ws_manager
+        self.regeneration_context = regeneration_context
     
     async def _notify(self, content: str, status: str = "thinking"):
         if self.ws:
@@ -281,6 +283,8 @@ class PhaseA1Orchestrator:
         """Phase A-1を実行し、MacroProfile + LinguisticExpression を返す"""
         await self._notify("Phase A-1: 9つのWorkerを実行します")
         concept_json = self._concept_context()
+        if self.regeneration_context:
+            concept_json += f"\n\n{self.regeneration_context}"
 
         # Step 1: BasicInfo（最上流、他の全Workerが参照）
         await self._notify("Step 1: BasicInfoWorker")

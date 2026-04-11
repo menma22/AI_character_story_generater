@@ -208,6 +208,59 @@
         </section>
     </main>
 
+    <!-- 再生成モーダル -->
+    <div id="regenerate-modal" class="modal hidden">
+        <div class="modal-overlay" onclick="closeRegenerateModal()"></div>
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="regen-modal-title">再生成</h3>
+                <button class="modal-close-btn" onclick="closeRegenerateModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <label for="regen-instructions" class="regen-label">変更したい内容を自然言語で指示してください（任意）</label>
+                <textarea id="regen-instructions" class="regen-textarea" placeholder="例: もっと内向的な性格にして / 職業を教師に変更 / エピソードを暗めにして..."></textarea>
+                <div id="regen-cascade-warning" class="cascade-warning hidden">
+                    <div class="cascade-header">
+                        <label class="cascade-label">
+                            <input type="checkbox" id="regen-cascade-check">
+                            下流のアーティファクトも再生成する
+                        </label>
+                    </div>
+                    <p id="regen-cascade-list" class="cascade-list"></p>
+                </div>
+                <div id="regen-progress-area" class="regen-progress-area hidden">
+                    <div class="progress-container">
+                        <div class="progress-bar" id="regen-progress-bar" style="width:0%"></div>
+                    </div>
+                    <p id="regen-detail" class="gen-detail"></p>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-primary" id="regen-submit-btn" onclick="executeRegeneration()">再生成</button>
+                <button class="btn-ghost" onclick="closeRegenerateModal()">キャンセル</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 編集モーダル -->
+    <div id="edit-modal" class="modal hidden">
+        <div class="modal-overlay" onclick="closeEditModal()"></div>
+        <div class="modal-content modal-content-wide">
+            <div class="modal-header">
+                <h3 id="edit-modal-title">JSON編集</h3>
+                <button class="modal-close-btn" onclick="closeEditModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <textarea id="edit-json-textarea" class="edit-textarea" spellcheck="false"></textarea>
+                <p id="edit-error-msg" class="edit-error hidden"></p>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-primary" id="edit-save-btn" onclick="saveArtifactEdit()">保存</button>
+                <button class="btn-ghost" onclick="closeEditModal()">キャンセル</button>
+            </div>
+        </div>
+    </div>
+
     <script src="/static/js/websocket.js"></script>
     <script src="/static/js/renderer.js"></script>
     <script src="/static/js/app.js"></script>

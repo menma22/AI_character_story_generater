@@ -348,11 +348,13 @@ class PhaseA2Orchestrator:
         macro_profile: MacroProfile,
         profile: EvaluationProfile,
         ws_manager=None,
+        regeneration_context: str | None = None,
     ):
         self.concept = concept
         self.macro = macro_profile
         self.profile = profile
         self.ws = ws_manager
+        self.regeneration_context = regeneration_context
 
     # ─── ユーティリティ ─────────────────────────────────────────
 
@@ -362,7 +364,7 @@ class PhaseA2Orchestrator:
 
     def _build_context_json(self) -> str:
         """concept_package + macro_profile の共通コンテキストを生成"""
-        return (
+        ctx = (
             f"concept_package:\n"
             f"{json.dumps(self.concept.model_dump(mode='json'), ensure_ascii=False, indent=2)}\n\n"
             f"macro_profile (basic_info):\n"
@@ -370,6 +372,9 @@ class PhaseA2Orchestrator:
             f"values_core:\n"
             f"{json.dumps(self.macro.values_core.model_dump(mode='json'), ensure_ascii=False)}"
         )
+        if self.regeneration_context:
+            ctx += f"\n\n{self.regeneration_context}"
+        return ctx
 
     # ─── Step 1: パラメータ Worker ─────────────────────────────
 

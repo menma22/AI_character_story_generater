@@ -36,10 +36,11 @@ SYSTEM_PROMPT = """あなたは「脚本AI」の最上位存在であるCreative
 - story_outline は必ず500字以上で、物語の「大まかな概要・7日間のあらすじ・通奏低音・
   この1週間の特徴」を概念レベルで濃密に書くこと
 - 両者の間に矛盾がないこと
+-既存のストーリーや人物、キャラクターをそのまま真似することは絶対にせず、参考にしつつ独自のアイデアにする
 
 【設計原則】
 1. 面白さが最優先。「読みたい」と思わせるキャラクターを設計せよ
-2. 内部矛盾（wantとneedのギャップ、気質と規範のギャップ）が面白さの源泉
+2. 内部矛盾（wantとneedのギャップ、気質と規範のギャップ）が面白さの源泉だが、ハートフルなエピソードを依頼されれば、なくてもよい
 3. AI臭い無難なキャラクターは不合格。「優しくて元気で好奇心旺盛」は最悪の例
 4. 具体性が命。誰にでも書ける抽象的な記述は全て不合格
 5. redemption bias（全てが成長と救済に向かう傾向）を警戒せよ
@@ -58,7 +59,7 @@ SYSTEM_PROMPT = """あなたは「脚本AI」の最上位存在であるCreative
    - Lieからの解放。ただし7日間で完全解放する必要はなく小さな揺らぎで十分
 5. Redemption bias の回避
    - 未解決・曖昧さ・contamination の要素を必ず含める
-6. ただただ気持ちが暖かくなる日常系の物語
+6. ただただ気持ちが暖かくなる日常系の物語、ハートフルな物語
 
 【心理学的基盤】
 - Cloninger精神生物学的気質モデル（NS/HA/RD/Persistence）
@@ -175,10 +176,11 @@ SELF_REFLECT_PROMPT = """あなたはCreative Directorの内なる声です。
 class CreativeDirector:
     """Tier -1: Creative Director"""
     
-    def __init__(self, profile: EvaluationProfile, ws_manager=None):
+    def __init__(self, profile: EvaluationProfile, ws_manager=None, regeneration_context: Optional[str] = None):
         self.profile = profile
         self.ws = ws_manager
         self.max_iterations = profile.director_self_critique_max_iterations
+        self.regeneration_context = regeneration_context
     
     async def _notify(self, content: str, status: str = "thinking"):
         if self.ws:
@@ -197,6 +199,8 @@ class CreativeDirector:
         user_msg = f"独創的で面白いキャラクターのconcept_packageを生成してください。必ず事前にsearch_webを最低{min_searches}回使用して多角的にリサーチしてください。検索{min_searches}回未満ではrequest_critiqueもsubmitも受け付けません。character_conceptは500字以上、story_outlineも500字以上で具体的に書いてください。"
         if theme:
             user_msg = f"以下のテーマに基づいて、独創的で面白いキャラクターのconcept_packageを生成してください。必ず事前にsearch_webを最低{min_searches}回使用して多角的にリサーチし、インスピレーションを得てからドラフトを作成してください。検索{min_searches}回未満ではrequest_critiqueもsubmitも受け付けません。\n\nテーマ: {theme}"
+        if self.regeneration_context:
+            user_msg += f"\n\n{self.regeneration_context}"
 
         final_concept_data = None
         self_critique_history = []

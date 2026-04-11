@@ -223,6 +223,7 @@ class PhaseDOrchestrator:
         episodes: AutobiographicalEpisodes,
         profile: EvaluationProfile,
         ws_manager=None,
+        regeneration_context: str | None = None,
     ):
         self.concept = concept
         self.macro = macro_profile
@@ -230,6 +231,7 @@ class PhaseDOrchestrator:
         self.episodes = episodes
         self.profile = profile
         self.ws = ws_manager
+        self.regeneration_context = regeneration_context
 
     async def _notify(self, content: str, status: str = "thinking"):
         if self.ws:
@@ -237,7 +239,7 @@ class PhaseDOrchestrator:
 
     def _full_context(self) -> str:
         """上流の全成果物を文字列化"""
-        return (
+        ctx = (
             f"concept_package:\n{json.dumps(self.concept.model_dump(mode='json'), ensure_ascii=False, indent=2)}\n\n"
             f"macro_profile:\n{json.dumps(self.macro.model_dump(mode='json'), ensure_ascii=False, indent=2)}\n\n"
             f"micro_parameters (主要):\n"
@@ -247,6 +249,9 @@ class PhaseDOrchestrator:
             f"  義務自己: {self.micro.ought_self}\n\n"
             f"autobiographical_episodes:\n{json.dumps([e.model_dump(mode='json') for e in self.episodes.episodes], ensure_ascii=False, indent=2)}"
         )
+        if self.regeneration_context:
+            ctx += f"\n\n{self.regeneration_context}"
+        return ctx
 
     async def run(self) -> WeeklyEventsStore:
         """Phase Dを実行"""

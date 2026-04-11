@@ -36,6 +36,22 @@ function setupWSHandlers() {
     wsManager.on('phase_result', (data) => {
         if (data.phase === 'complete') {
             onGenerationComplete(data.result);
+        } else if (data.phase === 'regenerate_complete') {
+            onRegenerationComplete(data.result);
+        }
+    });
+
+    wsManager.on('edit_saved', (data) => {
+        addThought('System', data.message || `${data.artifact} の編集を保存しました`, 'complete');
+        // パッケージを再取得して再描画
+        if (data.package_name && currentPackage) {
+            fetch(`/api/packages/${data.package_name}`)
+                .then(r => r.json())
+                .then(pkg => {
+                    currentPackage = pkg;
+                    currentPackage._package_name = data.package_name;
+                    renderResults(pkg);
+                });
         }
     });
 
@@ -432,7 +448,7 @@ async function loadPackage(name) {
 
 function downloadPackage() {
     if (!currentPackage) return;
-    
+
     const blob = new Blob([JSON.stringify(currentPackage, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -440,4 +456,186 @@ function downloadPackage() {
     a.download = `character_package_${Date.now()}.json`;
     a.click();
     URL.revokeObjectURL(url);
+}
+
+// ─── アーティファクト再生成 ──────────────────────────────────
+
+const ARTIFACT_LABELS = {
+    concept_package: 'コンセプト',
+    macro_profile: 'マクロプロフィール + 言語的表現',
+    linguistic_expression: 'マクロプロフィール + 言語的表現',
+    micro_parameters: 'ミクロパラメータ',
+    autobiographical_episodes: '自伝的エピソード',
+    weekly_events_store: 'イベント列',
+};
+
+const ARTIFACT_DEPENDENTS = {
+    concept_package: ['macro_profile', 'linguistic_expression', 'micro_parameters', 'autobiographical_episodes', 'weekly_events_store'],
+    macro_profile: ['micro_parameters', 'autobiographical_episodes', 'weekly_events_store'],
+    linguistic_expression: [],
+    micro_parameters: ['autobiographical_episodes', 'weekly_events_store'],
+    autobiographical_episodes: ['weekly_events_store'],
+    weekly_events_store: [],
+};
+
+// アーティファクト名 → パッケージJSONのキー
+const ARTIFACT_PKG_KEYS = {
+    concept_package: 'concept_package',
+    macro_profile: 'macro_profile',
+    linguistic_expression: 'linguistic_expression',
+    micro_parameters: 'micro_parameters',
+    autobiographical_episodes: 'autobiographical_episodes',
+    weekly_events_store: 'weekly_events_store',
+};
+
+let currentRegenArtifact = null;
+let isRegenerating = false;
+
+function openRegenerateModal(artifactName) {
+    if (isRegenerating) return;
+    currentRegenArtifact = artifactName;
+
+    const label = ARTIFACT_LABELS[artifactName] || artifactName;
+    document.getElementById('regen-modal-title').textContent = `再生成: ${label}`;
+    document.getElementById('regen-instructions').value = '';
+    document.getElementById('regen-progress-area').classList.add('hidden');
+    document.getElementById('regen-progress-bar').style.width = '0%';
+    document.getElementById('regen-detail').textContent = '';
+    document.getElementById('regen-submit-btn').disabled = false;
+
+    // 下流依存の警告
+    const dependents = ARTIFACT_DEPENDENTS[artifactName] || [];
+    const cascadeWarning = document.getElementById('regen-cascade-warning');
+    const cascadeList = document.getElementById('regen-cascade-list');
+    const cascadeCheck = document.getElementById('regen-cascade-check');
+
+    if (dependents.length > 0) {
+        const depLabels = dependents.map(d => ARTIFACT_LABELS[d] || d);
+        cascadeList.textContent = `影響を受けるアーティファクト: ${depLabels.join(', ')}`;
+        cascadeCheck.checked = false;
+        cascadeWarning.classList.remove('hidden');
+    } else {
+        cascadeWarning.classList.add('hidden');
+    }
+
+    document.getElementById('regenerate-modal').classList.remove('hidden');
+}
+
+function closeRegenerateModal() {
+    if (isRegenerating) return;
+    document.getElementById('regenerate-modal').classList.add('hidden');
+    currentRegenArtifact = null;
+}
+
+function executeRegeneration() {
+    if (!currentRegenArtifact || !currentPackage?._package_name || isRegenerating) return;
+
+    isRegenerating = true;
+    const instructions = document.getElementById('regen-instructions').value.trim();
+    const cascade = document.getElementById('regen-cascade-check')?.checked || false;
+
+    document.getElementById('regen-submit-btn').disabled = true;
+    document.getElementById('regen-progress-area').classList.remove('hidden');
+    document.getElementById('regen-detail').textContent = '再生成を開始しています...';
+
+    wsManager.send('regenerate_artifact', {
+        package_name: currentPackage._package_name,
+        artifact_name: currentRegenArtifact,
+        instructions: instructions,
+        cascade: cascade,
+        profile: document.getElementById('profile-select')?.value || 'draft',
+    });
+
+    addThought('System', `「${ARTIFACT_LABELS[currentRegenArtifact]}」の再生成を開始しました`, 'thinking');
+}
+
+function onRegenerationComplete(result) {
+    isRegenerating = false;
+
+    // モーダルを閉じる
+    document.getElementById('regenerate-modal').classList.add('hidden');
+    currentRegenArtifact = null;
+
+    const regenerated = (result.regenerated || []).map(a => ARTIFACT_LABELS[a] || a).join(', ');
+    addThought('System', `再生成完了: ${regenerated}`, 'complete');
+
+    // パッケージを再取得して再描画
+    if (result.package_name) {
+        fetch(`/api/packages/${result.package_name}`)
+            .then(r => r.json())
+            .then(pkg => {
+                currentPackage = pkg;
+                currentPackage._package_name = result.package_name;
+                renderResults(pkg);
+            })
+            .catch(err => console.error('Package reload error:', err));
+    }
+}
+
+// 再生成プログレスの更新（既存のupdateProgressと共用）
+// progressイベントの phase が 'regeneration' の場合にモーダル内のプログレスバーを更新
+const _originalUpdateProgress = updateProgress;
+updateProgress = function(phase, progress, detail) {
+    _originalUpdateProgress(phase, progress, detail);
+    if (phase === 'regeneration') {
+        const bar = document.getElementById('regen-progress-bar');
+        const detailEl = document.getElementById('regen-detail');
+        if (bar) bar.style.width = `${Math.min(progress * 100, 100)}%`;
+        if (detailEl) detailEl.textContent = detail || '';
+    }
+};
+
+// ─── アーティファクト編集 ──────────────────────────────────
+
+let currentEditArtifact = null;
+
+function openEditModal(artifactName) {
+    if (!currentPackage) return;
+    currentEditArtifact = artifactName;
+
+    const key = ARTIFACT_PKG_KEYS[artifactName];
+    const data = currentPackage[key];
+
+    const label = ARTIFACT_LABELS[artifactName] || artifactName;
+    document.getElementById('edit-modal-title').textContent = `JSON\u7de8\u96c6: ${label}`;
+    document.getElementById('edit-json-textarea').value = JSON.stringify(data, null, 2);
+    document.getElementById('edit-error-msg').classList.add('hidden');
+    document.getElementById('edit-save-btn').disabled = false;
+
+    document.getElementById('edit-modal').classList.remove('hidden');
+}
+
+function closeEditModal() {
+    document.getElementById('edit-modal').classList.add('hidden');
+    currentEditArtifact = null;
+}
+
+function saveArtifactEdit() {
+    if (!currentEditArtifact || !currentPackage?._package_name) return;
+
+    const textarea = document.getElementById('edit-json-textarea');
+    const errorMsg = document.getElementById('edit-error-msg');
+
+    let parsed;
+    try {
+        parsed = JSON.parse(textarea.value);
+    } catch (e) {
+        errorMsg.textContent = `JSON\u30d1\u30fc\u30b9\u30a8\u30e9\u30fc: ${e.message}`;
+        errorMsg.classList.remove('hidden');
+        return;
+    }
+
+    errorMsg.classList.add('hidden');
+    document.getElementById('edit-save-btn').disabled = true;
+
+    wsManager.send('save_artifact_edit', {
+        package_name: currentPackage._package_name,
+        artifact_name: currentEditArtifact,
+        data: parsed,
+    });
+
+    addThought('System', `「${ARTIFACT_LABELS[currentEditArtifact]}」の編集を送信中...`, 'thinking');
+
+    // モーダルを閉じる
+    closeEditModal();
 }
