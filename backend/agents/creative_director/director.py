@@ -336,7 +336,7 @@ class CreativeDirector:
                     system_prompt=agentic_sys_prompt,
                     user_message=user_msg,
                     tools=tools,
-                    max_iterations=self.max_iterations * 3,
+                    max_iterations=max(10, self.max_iterations * 3),
                 )
             except Exception as e:
                 logger.warning(f"[CreativeDirector] Claude ({self.profile.director_tier}) agentic failed: {e}. Falling back to Gemini.")
@@ -345,7 +345,7 @@ class CreativeDirector:
                     system_prompt=agentic_sys_prompt,
                     user_message=user_msg,
                     tools=tools,
-                    max_iterations=self.max_iterations * 3,
+                    max_iterations=max(10, self.max_iterations * 3),
                 )
         elif self.profile.director_tier == "gemini":
             from backend.tools.llm_api import call_llm_agentic_gemini

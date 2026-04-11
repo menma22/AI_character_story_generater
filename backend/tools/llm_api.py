@@ -557,12 +557,21 @@ async def call_llm_agentic_gemini(
                 if isinstance(current_message, genai.protos.Part) and current_message.function_response:
                     call_name = current_message.function_response.name
                     resp_data = current_message.function_response.response
-                    fallback_text = f"【システム通知】前回のツール '{call_name}' の実行結果は以下の通りです。この情報を元に思考を継続してください:\n{json.dumps(resp_data, ensure_ascii=False)}"
+                    fallback_text = f"【システム通知】前回のツール '{call_name}' の実行結果は以下の通りです。この情報を元に思考を継続してください:\n{json.dumps(resp_data, ensure_ascii=False, default=str)}"
                     # 履歴を一度戻し、テキストとして追加
-                    chat.history.pop() # 失敗したメッセージ送信を履歴から消す（SDKが自動追加している場合がある）
+                    try:
+                        chat.history.pop()
+                    except (IndexError, Exception):
+                        pass
                     response = await asyncio.to_thread(chat.send_message, fallback_text)
                 else:
-                    raise e
+                    # 初回メッセージやテキストメッセージの場合もリトライ
+                    fallback_text = "前回の指示でエラーが発生しました。ツールを正しく呼び出してください。JSONの引数に問題がないか確認し、再度実行してください。"
+                    try:
+                        chat.history.pop()
+                    except (IndexError, Exception):
+                        pass
+                    response = await asyncio.to_thread(chat.send_message, fallback_text)
             else:
                 raise e
         
@@ -573,6 +582,22 @@ async def call_llm_agentic_gemini(
         }
         token_tracker.record(model_name, usage)
         
+        # finish_reason チェック (MALFORMED_FUNCTION_CALLがレスポンスとして返る場合)
+        if response.candidates:
+            finish_reason = getattr(response.candidates[0], 'finish_reason', None)
+            finish_str = str(finish_reason) if finish_reason else ""
+            if "MALFORMED" in finish_str or "MALFORMED_FUNCTION_CALL" in finish_str:
+                warn_msg = f"[System] Gemini finish_reason: {finish_str}。ツール呼び出し形式を修正して再試行します。"
+                logger.warning(f"[call_llm_agentic_gemini] {warn_msg}")
+                if manager:
+                    await manager.send_agent_thought("System", warn_msg, "warning")
+                try:
+                    chat.history.pop()
+                except (IndexError, Exception):
+                    pass
+                current_message = "前回のツール呼び出しでJSON形式エラーが発生しました。引数のJSONを正しい形式で再度ツールを呼び出してください。"
+                continue
+
         # モデルの回答確認 (安全性のチェックを追加)
         if not response.candidates or not response.candidates[0].content.parts:
             warn_msg = "[System] Geminiから有効な回答が得られませんでした（セーフティフィルター等の影響の可能性があります）。再試行します。"
@@ -592,7 +617,7 @@ async def call_llm_agentic_gemini(
         
         if part.function_call:
             call = part.function_call
-            tool_msg = f"ツールを実行中: {call.name} (引数: {call.args})"
+            tool_msg = f"ツールを実行中: {call.name} (引数: {dict(call.args) if hasattr(call.args, 'items') else call.args})"
             logger.info(f"[call_llm_agentic_gemini] {tool_msg}")
             if manager:
                 await manager.send_agent_thought("Creative Director (Gemini)", tool_msg, "thinking")
@@ -601,8 +626,14 @@ async def call_llm_agentic_gemini(
                 try:
                     handler = tool_map[call.name]
                     import inspect
-                    # 引数のマッピング (GenerativeModelの引数は辞書形式)
-                    args = {k: v for k, v in call.args.items()}
+                    # 引数のマッピング: MapCompositeを再帰的にプレーンなdictに変換
+                    def _to_plain(obj):
+                        if hasattr(obj, 'items'):
+                            return {k: _to_plain(v) for k, v in obj.items()}
+                        elif isinstance(obj, (list, tuple)):
+                            return [_to_plain(i) for i in obj]
+                        return obj
+                    args = _to_plain(call.args)
                     
                     if inspect.iscoroutinefunction(handler):
                         result_data = await handler(**args)
@@ -619,10 +650,12 @@ async def call_llm_agentic_gemini(
                 is_error = True
             
             # ツール結果を返信してループ継続 (Google SDKの内部プロトコルに準拠)
+            # result_dataにMapComposite等のproto型が混入していないことを保証
+            plain_result = json.loads(json.dumps(result_data, default=str))
             current_message = genai.protos.Part(
                 function_response=genai.protos.FunctionResponse(
                     name=call.name,
-                    response=result_data
+                    response=plain_result
                 )
             )
             
