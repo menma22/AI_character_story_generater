@@ -24,8 +24,7 @@ class ShortTermMemoryNormal(BaseModel):
 
 
 class ShortTermMemoryDB(BaseModel):
-    """短期記憶DB（2領域構造、v10 §5.1準拠）"""
-    key_memories: list[KeyMemory] = Field(default_factory=list, description="7日間フル保持")
+    """短期記憶DB（通常領域のみ、v10 §5.1準拠。key memoryは別ファイル管理）"""
     normal_area: list[ShortTermMemoryNormal] = Field(default_factory=list, description="段階圧縮")
     diary_store: list[str] = Field(default_factory=list, description="7日分の日記本文（圧縮せず全文保持）")
 
@@ -63,7 +62,12 @@ class ReflectiveOutput(BaseModel):
 
 
 class IntegrationOutput(BaseModel):
-    """統合エージェントの出力（v10 §4.6 Step 3準拠）"""
+    """出来事周辺情報統合エージェントの出力（v10 §4.6 Step 3+4 統合）
+
+    行動決定に加え、出来事の周辺情報・行動後の結果・情景描写・
+    主人公の動きと感情をストーリーとして統合する。
+    """
+    # --- 行動決定系（従来のStep 3） ---
     impulse_route_good: str = Field("", description="衝動ルートの良いこと予測")
     impulse_route_bad: str = Field("", description="衝動ルートの悪いこと予測")
     reflective_route_good: str = Field("", description="理性ルートの良いこと予測")
@@ -72,6 +76,13 @@ class IntegrationOutput(BaseModel):
     higgins_ought_gap: str = Field("", description="Ought不一致（不安系）")
     final_action: str = Field("", description="最終行動決定")
     emotion_change: str = Field("", description="気持ちの変化の短文記述")
+    # --- 出来事周辺情報統合系（新規: Step 4統合） ---
+    surrounding_context: str = Field("", description="出来事の周辺情報・状況描写")
+    action_consequences: str = Field("", description="行動後の結果・影響")
+    scene_description: str = Field("", description="濃密な情景描写")
+    aftermath: str = Field("", description="後日譚")
+    protagonist_movement: str = Field("", description="主人公の動き・感情状態")
+    story_segment: str = Field("", description="統合されたストーリーセグメント")
 
 
 class SceneNarration(BaseModel):
@@ -89,6 +100,12 @@ class ValuesViolationResult(BaseModel):
     brief_reflection: str = Field("", description="簡易内省メモ")
 
 
+class EmotionIntensityResult(BaseModel):
+    """感情強度判定の結果（Impulsive Agent出力後に判定）"""
+    intensity: str = Field("medium", description="low/medium/high")
+    reasoning: str = Field("", description="判定理由")
+
+
 class ActivationLog(BaseModel):
     """パラメータ動的活性化のログ（v10 §3.5準拠）"""
     activated_temperament_ids: list[int] = Field(default_factory=list)
@@ -96,6 +113,15 @@ class ActivationLog(BaseModel):
     activated_cognition_ids: list[int] = Field(default_factory=list)
     activated_values: list[str] = Field(default_factory=list)
     activation_reasoning: str = ""
+
+
+class CheckResult(BaseModel):
+    """4つの個別チェックAIの結果"""
+    checker_type: str = Field("", description="profile/temperament/personality/values")
+    passed: bool = True
+    issues: list[str] = Field(default_factory=list)
+    severity: str = Field("none", description="none/minor/major")
+    suggestion: str = ""
 
 
 class NextDayPlan(BaseModel):

@@ -27,9 +27,10 @@ AI_character_story_generater/
 │   │   ├── phase_d/
 │   │   │   └── orchestrator.py                # Phase D: 7日間イベント列 (28-42件, 2軸メタデータ)
 │   │   ├── daily_loop/
-│   │   │   ├── orchestrator.py                # Day 1-7 日次ループ (RIM + 内省 + 日記, 自然言語出力)
+│   │   │   ├── orchestrator.py                # Day 1-7 日次ループ (RIM + 感情強度判定 + 内省 + 日記)
 │   │   │   ├── activation.py                  # パラメータ動的活性化 (5-10個選択, v10 §3.5)
 │   │   │   ├── verification.py                # 裏方出力検証 (#1-#52漏洩チェック, v10 §4.6b)
+│   │   │   ├── checkers.py                    # 4つの個別チェックAI (Profile/Temperament/Personality/Values)
 │   │   │   ├── diary_critic.py                # 日記Self-Critic (言語的指紋+AI臭さ検証)
 │   │   │   └── next_day_planning.py           # 翌日予定追加 (Stage1+2, protagonist_plan)
 │   │   └── evaluators/
@@ -164,13 +165,16 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 **日次ループ（Day 1-7）:**
 ```
 各日のイベント(4-6個) → 動的活性化(5-10パラメータ選択)
-→ Perceiver(自然言語出力) → [Impulsive | Reflective](並列, 自然言語出力)
+→ Perceiver(自然言語出力) → Impulsive Agent(自然言語出力)
+→ 【感情強度判定】intensity=high → Reflectiveバイパス / それ以外 → Reflective実行
 → 出力検証(#1-#52漏洩チェック)
-→ 統合(Higgins): Agentic行動決定(事前シミュレーションツール使用)
-→ 情景描写(自然言語出力) → 価値観違反チェック
+→ 出来事周辺情報統合エージェント(Agentic: 行動決定+情景描写+ストーリー統合)
+→ 【4つの個別チェックAI】Profile/Temperament/Personality/Values並列チェック
+→ 価値観違反チェック
 → 内省(Self-Perception + 過去統合 + 再解釈, 自然言語出力)
 → 日記生成: Agentic日記執筆(言語的指紋・AI臭さツール検証込み)
-→ ムード更新(Peak-End Rule) → key memory抽出 + 記憶圧縮 + 翌日予定追加
+→ 【4つの個別チェックAI】日記出力チェック
+→ ムード更新(Peak-End Rule) → key memory抽出(個別ファイル保存) + 記憶圧縮 + 翌日予定追加
 → ムードcarry-over(減衰+閾値リセット)
 ```
 
@@ -204,7 +208,10 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 | `AutobiographicalEpisodes` | 自伝的エピソード（5-8個） | A-3 | McAdams 5カテゴリ + redemption bias対策 |
 | `WeeklyEventsStore` | 7日間イベント列（28-42件） | D | 2軸メタデータ(known/unknown x expectedness) |
 | `MoodState` | PAD 3次元ムード | 日次ループ | Peak-End Rule + carry-over |
-| `ShortTermMemoryDB` | 記憶（key memory + 段階圧縮） | 日次ループ | LLM段階圧縮(400→200→80→20字) |
+| `ShortTermMemoryDB` | 記憶（通常領域のみ、段階圧縮） | 日次ループ | LLM段階圧縮(400→200→80→20字) |
+| `KeyMemoryStore` | key memory（個別ファイル管理、7日間フル保持） | 日次ループ | `key_memories/day_01.json`形式で保存 |
+| `EmotionIntensityResult` | 感情強度判定（low/medium/high） | 日次ループ | Impulsive後にJSON判定 |
+| `CheckResult` | 4個別チェックAIの結果 | 日次ループ | passed/issues/severity |
 | `EventPackage` | 1イベント処理結果 | 日次ループ | 全エージェント出力を包含 |
 
 #### UI/UX
@@ -268,7 +275,7 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 
 **(a) 当初設計**: Python側の固定化された順次・反復ループ構造。
 **(b) 変更・根拠**: V10仕様書に基づく「真のエージェンティックな振る舞い」を実現するため。
-**(c) 採用プラクティス**: Anthropic Tool Calling機能を統合した `call_llm_agentic` インフラを構築し、CreativeDirector、Integration Agent(行動決定)、DiaryGenerationAgentの3コアを Tool-using Autonomous Agent へ置換。
+**(c) 採用プラクティス**: Anthropic Tool Calling機能を統合した `call_llm_agentic` インフラを構築し、CreativeDirector、Integration Agent(行動決定)、DiaryGenerationAgentの3コアを Tool-using Autonomous Agent へ置換。全Agenticエージェントは `self.profile.worker_tier` に基づき Claude→Gemini自動フォールバック（try/except + `call_llm_agentic_gemini`）を実装。内部ツール（`simulate_action_consequences`等）のtierもプロファイル連動。
 
 ### 5. エージェント出力形式: JSON → 自然言語（構造化Markdown）
 
@@ -305,7 +312,45 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 **(b) 変更・根拠**: 新規キャラクター生成完了時（`onGenerationComplete()`）では `_package_name` がセットされず、直後の日記シミュレーション開始時に `'unknown'` がバックエンドに送信され「パッケージが見つかりません」エラーが発生していた。履歴経由でのみ日記生成が動作する状態だった。
 **(c) 採用プラクティス**: `onGenerationComplete()` 内で `currentPackage._package_name = result.package_name` を設定し、生成フロー・履歴フロー両方で一貫して `_package_name` が保持されるよう修正。
 
-### 9. WebサーチおよびMDファイル保存ルーティング
+### 9. 行動決定エージェント → 出来事周辺情報統合エージェントへの進化
+
+**(a) 当初設計**: 行動決定エージェント(`_integration`)と情景描写エージェント(`_scene_narration`)を分離。統合エージェントは行動決定のみを担当し、別途の情景描写エージェントが場面を描写していた。
+**(b) 変更・根拠**: 行動決定と情景描写は密接に関連しており、分離すると行動の文脈と場面描写の間に乖離が生じていた。また、出来事の周辺情報（場所・時間・雰囲気）や行動後の結果を一貫したストーリーとして統合する層が不在だった。
+**(c) 採用プラクティス**: 「出来事周辺情報統合エージェント」として統合。1回のAgenticループで行動決定 + 周辺情報 + 情景描写 + 後日譚 + 主人公の動き + ストーリーセグメントを一括生成。`IntegrationOutput`モデルを6フィールド拡張（`surrounding_context`, `action_consequences`, `scene_description`, `aftermath`, `protagonist_movement`, `story_segment`）。
+
+### 10. 感情強度による理性バイパスメカニズム
+
+**(a) 当初設計**: Impulsive AgentとReflective Agentを常に並列実行し、統合エージェントが両方の出力を統合していた。
+**(b) 変更・根拠**: 現実の人間心理では、感情が極端に高まった状態（パニック、激怒、歓喜の絶頂等）では理性的判断が介入できない。並列実行は計算効率は良いが、心理学的リアリティに欠けていた。
+**(c) 採用プラクティス**: Impulsive Agent実行後に軽量な感情強度判定ステップ（`_evaluate_emotion_intensity`, tier=gemma, JSON出力）を追加。`intensity=high`の場合、Reflective Agentを完全スキップし、空のReflectiveOutputを統合エージェントに渡す。統合エージェント側は理性参照なしの旨をシステムプロンプトに明記。
+
+### 11. 4つの個別チェックAI（整合性検証レイヤー）
+
+**(a) 当初設計**: 出力検証は`OutputVerificationAgent`（パラメータ名漏洩チェック）のみ。行動・日記がキャラクター設定に忠実かの検証は暗黙的（LLMのプロンプト依存）。
+**(b) 変更・根拠**: LLMはプロンプトだけでは設定忠実度を保証できない。特に長いAgenticループ内で、キャラクターの気質や性格から逸脱した行動が生成されるケースが存在した。
+**(c) 採用プラクティス**: 4つの独立チェッカーを`checkers.py`に実装し、統合エージェント出力と日記出力の2箇所で並列実行:
+  - `ProfileChecker`: マクロプロフィール（名前・職業・生活様式・人間関係）との整合性
+  - `TemperamentChecker`: 活性化済み気質パラメータ（Cloningerモデル）との整合性
+  - `PersonalityChecker`: 活性化済み性格パラメータ（Big Five/HEXACO）との整合性
+  - `ValuesChecker`: 価値観（Schwartz・MFT・理想自己・義務自己）との整合性
+  全チェッカーは裏方エージェント（隠蔽原則対象外）、tier=gemma（低コスト）、severity=majorのみログ警告。
+
+### 12. key memoryの短期記憶からの分離
+
+**(a) 当初設計**: `ShortTermMemoryDB.key_memories: list[KeyMemory]`としてインメモリの短期記憶DBの一部として管理。
+**(b) 変更・根拠**: key memoryは段階圧縮の対象外（7日間フル保持）であり、短期記憶の通常領域（段階圧縮方式）とはライフサイクルが根本的に異なる。同一データ構造に混在させると管理上の複雑さが増す。
+**(c) 採用プラクティス**: `KeyMemoryStore`クラスを新設し、`key_memories/day_01.json`形式で個別ファイルとして永続化。`ShortTermMemoryDB`からは`key_memories`フィールドを削除。`_build_memory_context()`では`KeyMemoryStore.load_all()`で読み込み、従来と同じコンテキスト形式を維持。
+
+### 13. Geminiフォールバックの多層防御化
+
+**(a) 当初設計**: `call_llm_agentic`(Claude)失敗時に`call_llm_agentic_gemini`へ単層フォールバック。Geminiフォールバック自体が失敗した場合のハンドリングは未実装。`_introspection()`はtier="sonnet"をハードコード。
+**(b) 変更・根拠**: Claudeクレジット枯渇時にGeminiフォールバックが実行されても、Gemini側でもAPI障害やプロトコルエラーが発生しうる。フォールバックが無防備だと例外が日記生成全体をクラッシュさせていた。
+**(c) 採用プラクティス**: 3層の防御を実装:
+  1. Claude try/except → Gemini fallback try/except → デフォルト値フォールバック
+  2. end-of-day処理の各ステップ（内省・日記・key memory・翌日予定）に個別try/except追加
+  3. `_introspection()`のtierを`self.profile.worker_tier`に変更（プロファイル連動）
+
+### 14. WebサーチおよびMDファイル保存ルーティング
 
 **(a) 当初設計**: データ出力はJSONオブジェクトやインメモリ保持に留まっていた。
 **(b) 変更・根拠**: 世界観に深みを持たせるリサーチ能力と、人間可読なMD永続化が必要。
@@ -328,12 +373,13 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 | Stage 5: インフラ・完成 | ✅ 実装完了 | Webサーチ・MD永続化・E2Eテスト済 |
 | Stage 6: 仕様書完全準拠 | ✅ 実装完了 | バグ修正、A-2 15Worker化完了 |
 | Stage 7: 監査・運用保守 | ✅ 実装完了 | 全エージェントプロンプトの抽出・構造化レポート作成 |
+| Stage 8: 日次ループ高度化 | ✅ 実装完了 | 感情強度判定・4チェックAI・統合エージェント拡張・key memory分離・フォールバック多層化 |
 
 ### 次のアクション
 
 1. **E2Eテスト実行（Day0→日記シミュレーション通し）** → draftプロファイルでキャラクター生成→日記生成までを連続実行し、全フローの動作を確認する
-2. **提出用キャラクター生成** → High Qualityプロファイルで全EvaluatorをONにし、MDデータベース出力まで通して実行する
-3. **Phase A-1 Workerプロンプト更新** → 追加されたMacroProfileフィールド（second_person_by_context, emoji_usage等）を生成するようWorkerプロンプトを拡充する
+2. **4チェックAIのseverity=major時の自動再生成** → 現状はログ警告のみ。majorの場合にチェッカーフィードバックを添えて再生成するループ実装
+3. **提出用キャラクター生成** → High Qualityプロファイルで全EvaluatorをONにし、MDデータベース出力まで通して実行する
 
 ### ブロッカー
 
@@ -341,3 +387,32 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 > - Anthropic APIのクレジット残高不足により全Claude呼び出しがGemini 2.5 Proへフォールバック中。本稼働時は有償Tierキーが必要。
 > - Gemini 2.5 Proの思考トークン問題は修正済み。JSON依存排除・リトライ機構追加も完了。
 > - draftプロファイルのworker_tierをgemma→geminiに変更済み（Gemma 4のJSON信頼性問題を解消）。
+> - 全Agenticエージェント（Director, Integration, Diary）でClaude→Gemini→デフォルト値の3層フォールバック実装済み。
+> - end-of-day処理の各ステップ（内省・日記・key memory・翌日予定）に個別エラーハンドリング追加済み。
+
+
+
+
+##アプリの再起動方法
+プロジェクトルートから以下のコマンドで起動・再起動できます：
+
+1. 既存プロセスの停止
+
+
+# ポート8001を使っているPIDを確認
+netstat -ano | grep ":8001.*LISTENING"
+
+# そのPIDを強制終了（例: PID 86056の場合）
+taskkill //PID <PID番号> //F
+2. アプリの起動
+
+
+cd c:/Users/mahim/.gemini/antigravity/scratch/AI_character_story_generater
+python -m backend.main
+デフォルトで http://localhost:8001 で起動します
+バックグラウンドで実行したい場合は末尾に & を付けてください
+ワンライナー（停止＋再起動）：
+
+
+taskkill //F //FI "IMAGENAME eq python.exe" 2>/dev/null; cd c:/Users/mahim/.gemini/antigravity/scratch/AI_character_story_generater && python -m backend.main &
+注意: 上記の taskkill はすべてのPythonプロセスを止めるので、他にPythonプロセスが動いている場合はPID指定の方法を使ってください。

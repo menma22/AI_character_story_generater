@@ -9,8 +9,7 @@
   §4.6 Step 1 Impulsive Agent  } RIM並列
   §4.6 Step 2 Reflective Agent }
   §4.6b 裏方出力検証
-  §4.6 Step 3 統合エージェント（protagonist_plan対応）
-  §4.6 Step 4 情景描写・後日譚
+  §4.6 Step 3+4 出来事周辺情報統合エージェント（行動決定+情景描写+ストーリー統合）
   §4.6c 価値観違反チェック
   §4.6d イベントパッケージ完成
   ムード更新（イベント単位）
@@ -28,6 +27,7 @@ import json
 import asyncio
 import logging
 import math
+from pathlib import Path
 from typing import Optional
 
 from backend.models.character import (
@@ -39,17 +39,58 @@ from backend.models.memory import (
     DayProcessingState, PerceiverOutput, ImpulsiveOutput,
     ReflectiveOutput, IntegrationOutput, SceneNarration,
     ValuesViolationResult, EventPackage, IntrospectionMemo,
-    DiaryEntry, ActivationLog,
+    DiaryEntry, ActivationLog, EmotionIntensityResult,
 )
 from backend.tools.llm_api import call_llm
 from backend.tools.agent_utils import parse_markdown_sections
-from backend.config import EvaluationProfile
+from backend.config import EvaluationProfile, AppConfig
 from backend.agents.daily_loop.activation import DynamicActivationAgent
 from backend.agents.daily_loop.verification import OutputVerificationAgent
 from backend.agents.daily_loop.next_day_planning import NextDayPlanningAgent
 from backend.agents.daily_loop.diary_critic import DiarySelfCritic
+from backend.agents.daily_loop.checkers import (
+    ProfileChecker, TemperamentChecker, PersonalityChecker, ValuesChecker,
+)
 
 logger = logging.getLogger(__name__)
+
+
+class KeyMemoryStore:
+    """key memoryを短期記憶とは別の個別ファイルとして管理（1日1ファイル、7日間フル保持）"""
+
+    def __init__(self, character_name: str):
+        safe_name = character_name.replace("/", "_").replace("\\", "_")
+        self.dir = AppConfig.STORAGE_DIR / safe_name / "key_memories"
+        self.dir.mkdir(parents=True, exist_ok=True)
+
+    def save(self, km: KeyMemory) -> Path:
+        """key memoryを個別JSONファイルとして保存"""
+        path = self.dir / f"day_{km.day:02d}.json"
+        path.write_text(json.dumps(km.model_dump(mode="json"), ensure_ascii=False, indent=2), encoding="utf-8")
+        logger.info(f"[KeyMemoryStore] Day {km.day} key memory saved to {path}")
+        return path
+
+    def load_all(self) -> list[KeyMemory]:
+        """全key memoryをロード（日付順）"""
+        memories = []
+        for p in sorted(self.dir.glob("day_*.json")):
+            try:
+                data = json.loads(p.read_text(encoding="utf-8"))
+                memories.append(KeyMemory(**data))
+            except Exception as e:
+                logger.warning(f"[KeyMemoryStore] Failed to load {p}: {e}")
+        return memories
+
+    def load_day(self, day: int) -> Optional[KeyMemory]:
+        """指定日のkey memoryをロード"""
+        path = self.dir / f"day_{day:02d}.json"
+        if path.exists():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                return KeyMemory(**data)
+            except Exception as e:
+                logger.warning(f"[KeyMemoryStore] Failed to load day {day}: {e}")
+        return None
 
 
 class DailyLoopOrchestrator:
@@ -65,6 +106,12 @@ class DailyLoopOrchestrator:
         self.memory_db = ShortTermMemoryDB()
         self.day_results: list[DayProcessingState] = []
         self.action_buffer: list[str] = []
+
+        # key memory: 短期記憶とは別ファイルとして管理
+        cname = ""
+        if self.package.macro_profile and self.package.macro_profile.basic_info:
+            cname = self.package.macro_profile.basic_info.name
+        self.key_memory_store = KeyMemoryStore(cname or "Unknown_Character")
         
         # サブエージェント初期化
         self.activation_agent = None
@@ -77,11 +124,17 @@ class DailyLoopOrchestrator:
         self.next_day_agent = NextDayPlanningAgent(ws_manager, tier=self.profile.worker_tier)
         
         self.diary_critic = None
-        if (self.package.macro_profile and 
+        if (self.package.macro_profile and
             self.package.macro_profile.voice_fingerprint):
             self.diary_critic = DiarySelfCritic(
                 self.package.macro_profile.voice_fingerprint, ws_manager, tier=self.profile.worker_tier
             )
+
+        # 4つの個別チェックAI
+        self.profile_checker = ProfileChecker(ws_manager, tier="gemma")
+        self.temperament_checker = TemperamentChecker(ws_manager, tier="gemma")
+        self.personality_checker = PersonalityChecker(ws_manager, tier="gemma")
+        self.values_checker = ValuesChecker(ws_manager, tier="gemma")
     
     async def _notify(self, content: str, status: str = "thinking"):
         if self.ws:
@@ -115,9 +168,10 @@ class DailyLoopOrchestrator:
         return "[]"
     
     def _build_memory_context(self) -> str:
-        """短期記憶DBのコンテキスト"""
+        """短期記憶DB + key memory（別ファイル）のコンテキスト"""
         parts = []
-        for km in self.memory_db.key_memories:
+        # key memoryは別ファイルから読み込み
+        for km in self.key_memory_store.load_all():
             parts.append(f"[Day {km.day} key memory]: {km.content}")
         for nm in self.memory_db.normal_area:
             parts.append(f"[Day {nm.day} {nm.stage}]: {nm.summary[:200]}")
@@ -201,6 +255,96 @@ class DailyLoopOrchestrator:
             automatic_attention=sections.get("自動的注意配分", ""),
         )
     
+    # ─── 4つの個別チェックAI ──────────────────────────────────
+    async def _run_consistency_checks(self, output_text: str, activation: ActivationLog, label: str) -> list:
+        """4つのチェッカーを並列実行して整合性を検証する"""
+        await self._notify(f"{label}: 4つの個別チェックAIを並列実行中...")
+
+        # コンテキスト構築
+        macro_json = self._build_macro_context()[:1500]
+
+        # 活性化パラメータのテキスト取得
+        activated_temperament_text = ""
+        activated_personality_text = ""
+        values_context = ""
+        if self.activation_agent:
+            activated_temperament_text = self.activation_agent.get_activated_params_text(
+                ActivationLog(
+                    activated_temperament_ids=activation.activated_temperament_ids,
+                    activated_personality_ids=[],
+                    activated_cognition_ids=[],
+                )
+            )
+            activated_personality_text = self.activation_agent.get_activated_params_text(
+                ActivationLog(
+                    activated_temperament_ids=[],
+                    activated_personality_ids=activation.activated_personality_ids,
+                    activated_cognition_ids=[],
+                )
+            )
+        if self.package.micro_parameters:
+            values_parts = []
+            if self.package.micro_parameters.schwartz_values:
+                values_parts.append(f"Schwartz価値観: {json.dumps(self.package.micro_parameters.schwartz_values, ensure_ascii=False)}")
+            if self.package.micro_parameters.ideal_self:
+                values_parts.append(f"理想自己: {self.package.micro_parameters.ideal_self}")
+            if self.package.micro_parameters.ought_self:
+                values_parts.append(f"義務自己: {self.package.micro_parameters.ought_self}")
+            values_context = "\n".join(values_parts)
+
+        try:
+            results = await asyncio.gather(
+                self.profile_checker.check(output_text, macro_json),
+                self.temperament_checker.check(output_text, activated_temperament_text),
+                self.personality_checker.check(output_text, activated_personality_text),
+                self.values_checker.check(output_text, values_context),
+                return_exceptions=True,
+            )
+            # エラーをフィルタ
+            valid_results = []
+            for r in results:
+                if isinstance(r, Exception):
+                    logger.warning(f"[チェッカー] チェック失敗: {r}")
+                else:
+                    valid_results.append(r)
+            return valid_results
+        except Exception as e:
+            logger.error(f"[チェッカー] 並列チェック全体エラー: {e}")
+            return []
+
+    # ─── 感情強度判定 ─────────────────────────────────────────
+    async def _evaluate_emotion_intensity(self, impulsive: ImpulsiveOutput) -> EmotionIntensityResult:
+        """Impulsive Agent出力後に感情強度を判定。
+        highの場合、理性ブランチ（Reflective Agent）をバイパスする。
+        """
+        result = await call_llm(
+            tier="gemma",
+            system_prompt="""あなたは感情強度の判定エージェントです。
+衝動系エージェント（Impulsive Agent）の出力を見て、感情の強度を判定してください。
+
+【判定基準】
+- high: 身体反応が激しい（手が震える、涙が溢れる、息ができない等）、
+  行動傾向が圧倒的（逃げ出したい、殴りたい、抱きしめたい等の切迫感）。
+  理性的な判断が困難な状態。
+- medium: 身体反応はあるが制御可能、行動傾向はあるが抑制できるレベル。
+- low: 穏やかな反応、大きな身体反応なし。
+
+出力形式: JSON
+{"intensity": "high/medium/low", "reasoning": "判定理由（1文）"}""",
+            user_message=(
+                f"【衝動的反応】{impulsive.impulse_reaction}\n\n"
+                f"【身体感覚】{impulsive.bodily_sensation}\n\n"
+                f"【行動傾向】{impulsive.action_tendency}\n\n"
+                f"【現在ムード】V={self.current_mood.valence:.1f} A={self.current_mood.arousal:.1f} D={self.current_mood.dominance:.1f}"
+            ),
+            json_mode=True,
+        )
+        data = result["content"] if isinstance(result["content"], dict) else {}
+        return EmotionIntensityResult(
+            intensity=data.get("intensity", "medium"),
+            reasoning=data.get("reasoning", ""),
+        )
+
     # ─── §4.6 Step 1: Impulsive Agent ────────────────────────
     async def _impulsive(self, event: Event, perceiver: PerceiverOutput, activation: ActivationLog) -> ImpulsiveOutput:
         """Impulsive Agent: 気質・性格層への反射反応（v10 §4.6 Step 1）"""
@@ -305,17 +449,21 @@ class DailyLoopOrchestrator:
             prediction=sections.get("予測", ""),
         )
     
-    # ─── §4.6 Step 3: 統合エージェント (Agentic Loop) ────────
+    # ─── §4.6 Step 3+4: 出来事周辺情報統合エージェント (Agentic Loop) ────────
     async def _integration(self, event: Event, impulsive: ImpulsiveOutput, reflective: ReflectiveOutput) -> IntegrationOutput:
-        """統合エージェント: 2ルート予測 + Higgins評価 + 行動決定（Tool-calling 自律ループ）"""
+        """出来事周辺情報統合エージェント: 行動決定 + 周辺情報 + 情景描写 + ストーリー統合（Tool-calling 自律ループ）
+
+        行動決定エージェントを拡張し、出来事の周辺情報や行動後の結果、
+        主人公の動きと感情をストーリーとしてまとめる役割を統合。
+        """
         from backend.tools.llm_api import AgentTool, call_llm_agentic
-        
+
         normative_context = ""
         values_context = ""
         if self.package.micro_parameters:
             normative_context = f"理想自己: {self.package.micro_parameters.ideal_self}\n義務自己: {self.package.micro_parameters.ought_self}"
             values_context = json.dumps(self.package.micro_parameters.schwartz_values, ensure_ascii=False)
-        
+
         protagonist_plan_note = ""
         if event.source == "protagonist_plan":
             protagonist_plan_note = (
@@ -323,15 +471,18 @@ class DailyLoopOrchestrator:
                 "このイベントは前日あなた（主人公）が日記の中で「やりたい」と計画したものです。\n"
                 "実際にやるかやらないかは、今の気分・状況・優先順位で自律的に判断してください。\n"
             )
-        
+
+        # 感情強度が高い場合の理性バイパス判定
+        reflective_bypassed = not reflective.inner_analysis
+
         final_decision_data = {}
-        
+
         async def simulate_action_consequences(action_idea: str = None) -> dict:
             """行動案をテストし、価値観違反や将来の予測をシミュレーションして事前に確認する"""
             if not action_idea:
                 return {"status": "FAILED", "message": "ERROR: action_idea引数が欠落しています。"}
             await self._notify(f"行動案のシミュレーション中: {action_idea[:30]}...")
-            
+
             res = await call_llm(
                 tier=self.profile.worker_tier,
                 system_prompt="あなたは主人公の行動シミュレーターです。この行動をとった場合の良い点・悪い点、および自身の持つ価値観への違反度（罪悪感を生むか）をフィードバックしてください。JSON形式: {\"pros\": \"...\", \"cons\": \"...\", \"values_violation_risk\": \"high/medium/low\", \"feedback\": \"...\"}",
@@ -342,13 +493,41 @@ class DailyLoopOrchestrator:
             return data
 
         async def submit_final_decision(decision_package: dict = None) -> dict:
-            """十分に検討した最終的な行動決定を提出し、ミッションを完了する"""
+            """最終的な行動決定と周辺情報・情景描写を統合して提出し、ミッションを完了する"""
             if not decision_package:
                 return {"status": "FAILED", "message": "ERROR: decision_package引数が欠落しています。"}
             nonlocal final_decision_data
             final_decision_data = decision_package
-            await self._notify("最終行動が決定・提出されました。", "complete")
-            return {"status": "SUCCESS", "message": "Decision submitted successfully. Thank you."}
+            await self._notify("出来事周辺情報統合エージェント: 最終決定・ストーリー提出完了。", "complete")
+            return {"status": "SUCCESS", "message": "Decision and story submitted successfully. Thank you."}
+
+        # submit_final_decision用の拡張スキーマ
+        decision_properties = {
+            "impulse_route_good": {"type": "string", "description": "衝動ルートの良いこと予測"},
+            "impulse_route_bad": {"type": "string", "description": "衝動ルートの悪いこと予測"},
+            "reflective_route_good": {"type": "string", "description": "理性ルートの良いこと予測（感情強度高で省略時はN/A）"},
+            "reflective_route_bad": {"type": "string", "description": "理性ルートの悪いこと予測（感情強度高で省略時はN/A）"},
+            "higgins_ideal_gap": {"type": "string", "description": "Ideal不一致（落胆・がっかり系）"},
+            "higgins_ought_gap": {"type": "string", "description": "Ought不一致（不安・罪悪感系）"},
+            "final_action": {"type": "string", "description": "最終的な行動決定（具体的に、3-5文）"},
+            "emotion_change": {"type": "string", "description": "気持ちの変化の短文記述"},
+            "surrounding_context": {"type": "string", "description": "出来事の周辺情報・状況描写（3-5文。場所・時間・周囲の人々・雰囲気など）"},
+            "action_consequences": {"type": "string", "description": "行動後の結果・影響（2-3文。周囲の反応、場の変化）"},
+            "scene_description": {"type": "string", "description": "濃密な情景描写（5-8文。五感を含む文学的描写）"},
+            "aftermath": {"type": "string", "description": "後日譚（2-4文。行動がもたらした小さな波紋）"},
+            "protagonist_movement": {"type": "string", "description": "主人公の動き・感情状態（2-3文。身体の動き、表情、内面の変化）"},
+            "story_segment": {"type": "string", "description": "統合ストーリーセグメント（上記全体を物語として自然に統合した文章、8-15文）"},
+        }
+
+        required_fields = [
+            "impulse_route_good", "impulse_route_bad",
+            "higgins_ideal_gap", "higgins_ought_gap",
+            "final_action", "emotion_change",
+            "surrounding_context", "scene_description", "aftermath",
+            "protagonist_movement", "story_segment",
+        ]
+        if not reflective_bypassed:
+            required_fields.extend(["reflective_route_good", "reflective_route_bad"])
 
         tools = [
             AgentTool(
@@ -365,23 +544,14 @@ class DailyLoopOrchestrator:
             ),
             AgentTool(
                 name="submit_final_decision",
-                description="十分なシミュレーションや検討を行った後、最終的な行動決定を提出します。",
+                description="行動決定に加え、出来事の周辺情報・情景描写・行動後の結果・主人公の動き・統合ストーリーを全て含む完全なパッケージを提出します。",
                 input_schema={
                     "type": "object",
                     "properties": {
                         "decision_package": {
                             "type": "object",
-                            "properties": {
-                                "impulse_route_good": {"type": "string"},
-                                "impulse_route_bad": {"type": "string"},
-                                "reflective_route_good": {"type": "string"},
-                                "reflective_route_bad": {"type": "string"},
-                                "higgins_ideal_gap": {"type": "string"},
-                                "higgins_ought_gap": {"type": "string"},
-                                "final_action": {"type": "string", "description": "最終的な行動決定（具体的に、3-5文）"},
-                                "emotion_change": {"type": "string"}
-                            },
-                            "required": ["impulse_route_good", "impulse_route_bad", "reflective_route_good", "reflective_route_bad", "higgins_ideal_gap", "higgins_ought_gap", "final_action", "emotion_change"]
+                            "properties": decision_properties,
+                            "required": required_fields,
                         }
                     },
                     "required": ["decision_package"]
@@ -389,18 +559,33 @@ class DailyLoopOrchestrator:
                 handler=submit_final_decision
             )
         ]
-        
-        system_prompt = f"""あなたは主人公AIの統合エージェント（行動決定者）です。
-衝動ルートと理性ルートの2つの意見を統合し、最終的な行動を決定してください。
+
+        # 理性バイパス時の追加指示
+        bypass_note = ""
+        if reflective_bypassed:
+            bypass_note = "\n\n【重要: 感情強度が高いため理性ブランチの報告はありません】\n衝動ブランチのみの情報で判断してください。reflective_route_good/badは 'N/A' としてください。\n"
+
+        known_str = "既知（事前に知っている予定）" if event.known_to_protagonist else "未知（予想外の出来事）"
+        system_prompt = f"""あなたは主人公AIの「出来事周辺情報統合エージェント」です。
+衝動ルートと理性ルートの意見を統合し、最終的な行動を決定するとともに、
+この出来事に対して生じた事象、主人公の動き、感情などをストーリーとしてまとめてください。
+
+【あなたの役割】
+1. 行動決定: 衝動と理性の2つのルートを踏まえて最終行動を決める
+2. 周辺情報統合: 出来事の背景、周囲の状況、登場人物の反応を描写
+3. 情景描写: 五感を含む文学的な場面描写を執筆
+4. 結果と後日譚: 行動後に何が起こったか、小さな波紋を描く
+5. ストーリー統合: 上記全てを1つの物語セグメントとして統合
 
 【Higgins自己不一致理論】
 - Ideal不一致（理想と現実のギャップ）→ 落胆・がっかり系の感情
 - Ought不一致（義務と現実のギャップ）→ 不安・罪悪感系の感情
 
 【エージェンティック行動指針】
-1. 一発で答えを出さず、行動のアイデアを思いついたら `simulate_action_consequences` ツールを使ってテストしてください。
-2. 複数の選択肢で迷うなら、複数回シミュレーションツールを使って比較してください。
-3. 最もキャラクターらしく、かつ物語として面白いと確信した行動案を `submit_final_decision` ツールで提出してください。"""
+1. まず行動アイデアを `simulate_action_consequences` でテストしてください。
+2. 最もキャラクターらしく物語として面白い行動案を確定したら、
+   行動決定 + 周辺情報 + 情景描写 + 後日譚 + 主人公の動き + 統合ストーリーを
+   全て含む完全なパッケージを `submit_final_decision` で提出してください。{bypass_note}"""
 
         # 衝動・理性ブランチの出力を自然言語のまま渡す
         impulsive_text = (
@@ -408,21 +593,27 @@ class DailyLoopOrchestrator:
             f"## 身体感覚\n{impulsive.bodily_sensation}\n\n"
             f"## 行動傾向\n{impulsive.action_tendency}"
         )
-        reflective_text = (
-            f"## 内面分析\n{reflective.inner_analysis}\n\n"
-            f"## 価値観との接続\n{reflective.value_connections}\n\n"
-            f"## 示唆\n{reflective.suggestion}\n\n"
-            f"## 予測\n{reflective.prediction}"
-        )
+        if reflective_bypassed:
+            reflective_text = "（感情強度が高いため省略）"
+        else:
+            reflective_text = (
+                f"## 内面分析\n{reflective.inner_analysis}\n\n"
+                f"## 価値観との接続\n{reflective.value_connections}\n\n"
+                f"## 示唆\n{reflective.suggestion}\n\n"
+                f"## 予測\n{reflective.prediction}"
+            )
 
         user_message = (
             f"{normative_context}{protagonist_plan_note}\n\n"
             f"【衝動ブランチの報告】\n{impulsive_text}\n\n"
             f"【理性ブランチの報告】\n{reflective_text}\n\n"
-            f"【現在発生しているイベント】\n{event.content}"
+            f"【現在発生しているイベント】\n{event.content}\n"
+            f"（時間帯: {event.time_slot} | {known_str} | 予想外度: {event.expectedness}）"
         )
-        
-        await self._notify("統合エージェント（行動決定）をエージェンティックモードで起動...")
+
+        await self._notify("出来事周辺情報統合エージェントをエージェンティックモードで起動...")
+
+        from backend.tools.llm_api import call_llm_agentic_gemini
 
         if self.profile.worker_tier in ("opus", "sonnet"):
             try:
@@ -435,22 +626,26 @@ class DailyLoopOrchestrator:
                 )
             except Exception as e:
                 logger.warning(f"[DailyLoop] Integration: Claude ({self.profile.worker_tier}) agentic failed: {e}. Falling back to Gemini.")
-                from backend.tools.llm_api import call_llm_agentic_gemini
+                try:
+                    await call_llm_agentic_gemini(
+                        system_prompt=system_prompt,
+                        user_message=user_message,
+                        tools=tools,
+                        max_iterations=6,
+                    )
+                except Exception as e2:
+                    logger.error(f"[DailyLoop] Integration: Gemini fallback also failed: {e2}. Using default decision.")
+        else:
+            try:
                 await call_llm_agentic_gemini(
                     system_prompt=system_prompt,
                     user_message=user_message,
                     tools=tools,
                     max_iterations=6,
                 )
-        elif self.profile.worker_tier in ("gemini", "gemma"):
-            from backend.tools.llm_api import call_llm_agentic_gemini
-            await call_llm_agentic_gemini(
-                system_prompt=system_prompt,
-                user_message=user_message,
-                tools=tools,
-                max_iterations=6,
-            )
-        
+            except Exception as e:
+                logger.error(f"[DailyLoop] Integration: Gemini agentic failed: {e}. Using default decision.")
+
         if not final_decision_data:
             # Fallback
             final_decision_data = {
@@ -458,50 +653,25 @@ class DailyLoopOrchestrator:
                 "reflective_route_good": "N/A", "reflective_route_bad": "N/A",
                 "higgins_ideal_gap": "N/A", "higgins_ought_gap": "N/A",
                 "final_action": "（判断に迷い、何もできなかった）",
-                "emotion_change": "混乱"
+                "emotion_change": "混乱",
+                "surrounding_context": "", "action_consequences": "",
+                "scene_description": "", "aftermath": "",
+                "protagonist_movement": "", "story_segment": "",
             }
-            
-        return IntegrationOutput(**{k: final_decision_data.get(k, "") for k in [
+
+        all_fields = [
             "impulse_route_good", "impulse_route_bad",
             "reflective_route_good", "reflective_route_bad",
             "higgins_ideal_gap", "higgins_ought_gap",
             "final_action", "emotion_change",
-        ]})
+            "surrounding_context", "action_consequences",
+            "scene_description", "aftermath",
+            "protagonist_movement", "story_segment",
+        ]
+        return IntegrationOutput(**{k: final_decision_data.get(k, "") for k in all_fields})
     
-    # ─── §4.6 Step 4: 情景描写 ─────────────────────────────
-    async def _scene_narration(self, event: Event, integration: IntegrationOutput) -> SceneNarration:
-        """情景描写 + 後日譚（v10 §4.6 Step 4）"""
-        known_str = "既知イベント" if event.known_to_protagonist else "未知イベント（予想外）"
-        
-        result = await call_llm(
-            tier="gemma",
-            system_prompt="""あなたは情景描写の執筆者です。
-行動決定に基づいて、その場面の濃密な情景描写と、直後の後日譚を書いてください。
+    # NOTE: _scene_narration() は出来事周辺情報統合エージェント (_integration) に統合済み
 
-以下の2セクションを、Markdownのセクションヘッダー（##）で区切って出力してください。
-
-## 情景描写
-（5-8文の濃密な描写。その場の空気感・色彩・音・匂い・温度・触感を含む。
-周囲の人物の表情や仕草、会話の具体的なやりとりも書く。文学的な品質を意識すること）
-
-## 後日譚
-（2-4文。行動の直後に起こったこと。周囲の反応、場の空気の変化、
-その行動がもたらした小さな波紋を描写する）""",
-            user_message=(
-                f"【イベント】{event.content}\n"
-                f"（{known_str} | 予想外度: {event.expectedness}）\n\n"
-                f"【行動決定】{integration.final_action}\n\n"
-                f"【気持ち変化】{integration.emotion_change}"
-            ),
-            json_mode=False,
-        )
-        raw_text = result["content"] if isinstance(result["content"], str) else str(result["content"])
-        sections = parse_markdown_sections(raw_text)
-        return SceneNarration(
-            scene_description=sections.get("情景描写", raw_text),
-            aftermath=sections.get("後日譚", ""),
-        )
-    
     # ─── §4.6c: 価値観違反チェック ──────────────────────────
     async def _values_violation(self, integration: IntegrationOutput) -> ValuesViolationResult:
         """価値観違反チェック（v10 §4.6c）"""
@@ -619,7 +789,7 @@ class DailyLoopOrchestrator:
                 activation_summary += f"- [{ep.event_id}] {ep.activation_log.activation_reasoning[:60]}...\n"
         
         result = await call_llm(
-            tier="sonnet",
+            tier=self.profile.worker_tier,
             system_prompt="""あなたは主人公AIの内省エージェントです。
 今日1日の出来事を振り返り、内省メモを生成してください。
 
@@ -754,6 +924,8 @@ class DailyLoopOrchestrator:
         
         await self._notify("日記生成エージェントを自律モードで起動...")
         
+        from backend.tools.llm_api import call_llm_agentic_gemini as _diary_gemini_fallback
+
         if self.profile.worker_tier in ("opus", "sonnet"):
             try:
                 await call_llm_agentic(
@@ -764,22 +936,26 @@ class DailyLoopOrchestrator:
                     max_iterations=6,
                 )
             except Exception as e:
-                logger.warning(f"[DailyLoop] Claude ({self.profile.worker_tier}) agentic failed: {e}. Falling back to Gemini.")
-                from backend.tools.llm_api import call_llm_agentic_gemini
-                await call_llm_agentic_gemini(
+                logger.warning(f"[DailyLoop] Diary: Claude ({self.profile.worker_tier}) agentic failed: {e}. Falling back to Gemini.")
+                try:
+                    await _diary_gemini_fallback(
+                        system_prompt=system_prompt,
+                        user_message=user_message,
+                        tools=tools,
+                        max_iterations=6,
+                    )
+                except Exception as e2:
+                    logger.error(f"[DailyLoop] Diary: Gemini fallback also failed: {e2}.")
+        else:
+            try:
+                await _diary_gemini_fallback(
                     system_prompt=system_prompt,
                     user_message=user_message,
                     tools=tools,
                     max_iterations=6,
                 )
-        elif self.profile.worker_tier in ("gemini", "gemma"):
-            from backend.tools.llm_api import call_llm_agentic_gemini
-            await call_llm_agentic_gemini(
-                system_prompt=system_prompt,
-                user_message=user_message,
-                tools=tools,
-                max_iterations=6,
-            )
+            except Exception as e:
+                logger.error(f"[DailyLoop] Diary: Gemini agentic failed: {e}.")
 
         if not final_diary_content:
             logger.warning("Agentic loop finished without submitting final diary.")
@@ -876,11 +1052,17 @@ class DailyLoopOrchestrator:
                 # §4.3 Perceiver
                 perceiver = await self._perceiver(event, activation)
                 
-                # §4.6 Step 1+2: RIM並列処理
-                impulsive, reflective = await asyncio.gather(
-                    self._impulsive(event, perceiver, activation),
-                    self._reflective(event, perceiver, activation),
-                )
+                # §4.6 Step 1: Impulsive Agent
+                impulsive = await self._impulsive(event, perceiver, activation)
+
+                # 感情強度判定: highなら理性ブランチをバイパス
+                emotion_intensity = await self._evaluate_emotion_intensity(impulsive)
+                if emotion_intensity.intensity == "high":
+                    await self._notify(f"  感情強度: 高 → 理性ブランチをバイパス（理由: {emotion_intensity.reasoning[:40]}）")
+                    reflective = ReflectiveOutput()  # 空のReflective出力
+                else:
+                    # §4.6 Step 2: Reflective Agent（通常実行）
+                    reflective = await self._reflective(event, perceiver, activation)
                 
                 # §4.6b 裏方出力検証
                 verification = await self.verification_agent.verify(perceiver, impulsive)
@@ -890,12 +1072,24 @@ class DailyLoopOrchestrator:
                     if verification["corrected_impulsive"]:
                         impulsive = verification["corrected_impulsive"]
                 
-                # §4.6 Step 3: 統合
+                # §4.6 Step 3+4: 出来事周辺情報統合（行動決定 + 情景描写 統合）
                 integration = await self._integration(event, impulsive, reflective)
-                
-                # §4.6 Step 4: 情景描写
-                scene = await self._scene_narration(event, integration)
-                
+
+                # 4つの個別チェックAI: 統合エージェント出力を検証
+                integration_check_text = (
+                    f"行動決定: {integration.final_action}\n"
+                    f"情景描写: {integration.scene_description}\n"
+                    f"後日譚: {integration.aftermath}\n"
+                    f"主人公の動き: {integration.protagonist_movement}\n"
+                    f"ストーリー: {integration.story_segment}"
+                )
+                check_results = await self._run_consistency_checks(
+                    integration_check_text, activation, "統合エージェント出力"
+                )
+                for cr in check_results:
+                    if not cr.passed:
+                        logger.warning(f"[チェッカー] {cr.checker_type} 不整合 ({cr.severity}): {'; '.join(cr.issues[:2])}")
+
                 # §4.6c: 価値観違反チェック
                 violation = await self._values_violation(integration)
                 
@@ -919,7 +1113,10 @@ class DailyLoopOrchestrator:
                     impulsive_output=impulsive,
                     reflective_output=reflective,
                     integration_output=integration,
-                    scene_narration=scene,
+                    scene_narration=SceneNarration(
+                        scene_description=integration.scene_description,
+                        aftermath=integration.aftermath,
+                    ),
                     values_violation=violation,
                     mood_before=self.current_mood.model_copy(),
                     mood_after=self.current_mood.model_copy(),
@@ -927,55 +1124,83 @@ class DailyLoopOrchestrator:
                 day_state.events_processed.append(event_pkg)
             
             # ─── 外層（1日の終わり）────────────────────────
-            
+
             # §4.7 内省フェーズ
             await self._notify(f"Day {day}: 内省フェーズ")
-            introspection = await self._introspection(day, day_state.events_processed)
+            try:
+                introspection = await self._introspection(day, day_state.events_processed)
+            except Exception as e:
+                logger.error(f"[DailyLoop] Day {day} 内省フェーズエラー: {e}")
+                introspection = IntrospectionMemo(full_memo="（内省生成に失敗しました）")
             day_state.introspection = introspection
-            
+
             # §4.8 日記生成 & §4.9.1 Self-Critic (Agentic統合済)
             await self._notify(f"Day {day}: 日記生成（自律チェック込み）")
-            diary = await self._generate_diary(day, day_state.events_processed, introspection)
-            
+            try:
+                diary = await self._generate_diary(day, day_state.events_processed, introspection)
+            except Exception as e:
+                logger.error(f"[DailyLoop] Day {day} 日記生成エラー: {e}")
+                diary = DiaryEntry(day=day, content="（日記生成に失敗しました）", mood_at_writing=self.current_mood.model_copy())
+
             day_state.diary = diary
-            
+
+            # 4つの個別チェックAI: 日記出力を検証
+            if diary.content and diary.content != "（日記生成に失敗しました）":
+                last_activation = day_state.events_processed[-1].activation_log if day_state.events_processed else ActivationLog()
+                diary_check_results = await self._run_consistency_checks(
+                    diary.content, last_activation, "日記出力"
+                )
+                for cr in diary_check_results:
+                    if not cr.passed:
+                        logger.warning(f"[日記チェッカー] {cr.checker_type} 不整合 ({cr.severity}): {'; '.join(cr.issues[:2])}")
+
             # 日記をストリーミング
             if self.ws:
                 await self.ws.send_diary_entry(day, diary.content)
-            
+
             # §4.9.2 ムード更新（Peak-End Rule）
             self._update_mood_daily(day_state)
-            
+
             # §4.9.3.1 key memory抽出
-            key_mem = await self._extract_key_memory(day, diary)
+            try:
+                key_mem = await self._extract_key_memory(day, diary)
+            except Exception as e:
+                logger.error(f"[DailyLoop] Day {day} key memory抽出エラー: {e}")
+                key_mem = KeyMemory(day=day, content=diary.content[:300], mood_at_extraction=self.current_mood.model_dump())
             day_state.key_memory = key_mem
-            self.memory_db.key_memories.append(key_mem)
-            
+            self.key_memory_store.save(key_mem)
+
             # §4.9.3.2 記憶圧縮
-            await self._compress_memories(day, diary)
-            
+            try:
+                await self._compress_memories(day, diary)
+            except Exception as e:
+                logger.error(f"[DailyLoop] Day {day} 記憶圧縮エラー: {e}")
+
             # §4.9.4 翌日予定追加（Day 7以外）
             if day < days:
                 await self._notify(f"Day {day}: 翌日予定の計画")
-                plans = await self.next_day_agent.stage1_protagonist_plan(
-                    day=day,
-                    diary=diary,
-                    introspection=introspection,
-                    current_mood=self.current_mood,
-                    macro_context=self._build_macro_context()[:500],
-                    voice_context=self._build_voice_context(),
-                )
-                
-                if plans and self.package.weekly_events_store:
-                    new_event = await self.next_day_agent.stage2_consistency_check(
-                        plans=plans,
-                        next_day=day + 1,
-                        events_store=self.package.weekly_events_store,
+                try:
+                    plans = await self.next_day_agent.stage1_protagonist_plan(
+                        day=day,
+                        diary=diary,
+                        introspection=introspection,
+                        current_mood=self.current_mood,
+                        macro_context=self._build_macro_context()[:500],
+                        voice_context=self._build_voice_context(),
                     )
-                    if new_event:
-                        self.package.weekly_events_store.events.append(new_event)
-                        day_state.next_day_plans = [p.model_dump() for p in plans]
-            
+
+                    if plans and self.package.weekly_events_store:
+                        new_event = await self.next_day_agent.stage2_consistency_check(
+                            plans=plans,
+                            next_day=day + 1,
+                            events_store=self.package.weekly_events_store,
+                        )
+                        if new_event:
+                            self.package.weekly_events_store.events.append(new_event)
+                            day_state.next_day_plans = [p.model_dump() for p in plans]
+                except Exception as e:
+                    logger.error(f"[DailyLoop] Day {day} 翌日予定計画エラー: {e}")
+
             # §4.9.5 ムードcarry-over
             day_state.daily_mood = self.current_mood.model_copy()
             self._mood_carry_over()
