@@ -117,6 +117,47 @@ async def save_character_profile(character_name: str, package: CharacterPackage)
                 md_content += f"- **Core Fear:** {getattr(psy, 'core_fear', '')}\n"
                 md_content += f"- **Life Goal:** {getattr(psy, 'life_goal', '')}\n\n"
     
+    # 2.5. Linguistic Expression (言語的表現方法)
+    if package.linguistic_expression:
+        md_content += "## 2.5. 言語的表現方法\n\n"
+        if package.linguistic_expression.raw_prose_markdown:
+            md_content += f"{package.linguistic_expression.raw_prose_markdown}\n\n"
+        else:
+            le = package.linguistic_expression
+            sc = le.speech_characteristics
+            vf = sc.concrete_features
+            md_content += "### 喋り方の特徴\n\n"
+            if sc.abstract_feel:
+                md_content += f"**雰囲気:** {sc.abstract_feel}\n\n"
+            md_content += f"- **一人称:** {vf.first_person}\n"
+            if vf.catchphrases:
+                md_content += f"- **口癖:** {', '.join(vf.catchphrases)}\n"
+            if vf.sentence_endings:
+                md_content += f"- **文末表現:** {', '.join(vf.sentence_endings)}\n"
+            md_content += f"- **漢字/ひらがな:** {vf.kanji_hiragana_tendency}\n"
+            if vf.avoided_words:
+                md_content += f"- **避ける語彙:** {', '.join(vf.avoided_words)}\n"
+            if sc.conversation_style:
+                md_content += f"- **会話スタイル:** {sc.conversation_style}\n"
+            if sc.emotional_expression_tendency:
+                md_content += f"- **感情表現:** {sc.emotional_expression_tendency}\n"
+            md_content += "\n"
+            da = le.diary_writing_atmosphere
+            md_content += "### 日記の書き方の雰囲気\n\n"
+            if da.raw_atmosphere_description:
+                md_content += f"**空気感:** {da.raw_atmosphere_description}\n\n"
+            if da.tone:
+                md_content += f"- **トーン:** {da.tone}\n"
+            if da.structure_tendency:
+                md_content += f"- **構成傾向:** {da.structure_tendency}\n"
+            if da.introspection_depth:
+                md_content += f"- **内省の深さ:** {da.introspection_depth}\n"
+            if da.what_gets_written:
+                md_content += f"- **書く内容:** {da.what_gets_written}\n"
+            if da.what_gets_omitted:
+                md_content += f"- **省略する傾向:** {da.what_gets_omitted}\n"
+            md_content += "\n"
+
     # 3. Micro Parameters (Dump as JSON block for exact parameters)
     if package.micro_parameters:
         md_content += "## 3. Micro Parameters (Esoteric Psychology)\n\n"

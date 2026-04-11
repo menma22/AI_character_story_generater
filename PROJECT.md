@@ -148,7 +148,7 @@ graph TB
 **4層エージェント階層（Day 0）:**
 1. **Tier -1 Creative Director** (Opus): Tool-Callingによる自律推敲ループ。search_web + file_read + request_critique + submit_final_concept の4ツール。Self-Critiqueチェックリスト [A]-[F] の6カテゴリ。
 2. **Tier 0 Master Orchestrator** (Opus): Phase A-1→A-2→A-3→D順次制御。各Phase完了後にEvaluator-Optimizerループで即時評価・再生成。
-3. **Phase Orchestrators**: 各Phase内のWorker群を管理。A-1=8 Workers、A-2=15 Workers（v2 §6.4.2準拠）、A-3=Planner(自然言語)+Writer(JSON一括)、D=4 Workers(自然言語)+EventWriter(JSON)。
+3. **Phase Orchestrators**: 各Phase内のWorker群を管理。A-1=8 Workers+LinguisticExpressionWorker（9Worker合計、PhaseA1Result返却）、A-2=15 Workers（v2 §6.4.2準拠）、A-3=Planner(自然言語)+Writer(JSON一括)、D=4 Workers(自然言語)+EventWriter(JSON)。
 4. **Workers**: プロファイル別モデル（high_quality=sonnet, draft=gemini）。最低ティア=Gemini 2.5 Pro。
 
 **Phase A-2 Worker 15分割構成（v2 §6.4.2準拠）:**
@@ -182,7 +182,7 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 → 【4つの個別チェックAI】Profile/Temperament/Personality/Values並列チェック
 → 価値観違反チェック
 → 内省(Self-Perception + 過去統合 + 再解釈, raw text出力)
-→ 日記生成: Agentic日記執筆(言語的指紋・AI臭さツール検証込み)
+→ 日記生成: Agentic日記執筆(言語的表現方法[LinguisticExpression]全情報注入・AI臭さツール検証込み)
 → 【4つの個別チェックAI】日記出力チェック
 → ムード更新(Peak-End Rule) → key memory抽出(個別ファイル保存) + 記憶圧縮 + 翌日予定追加(必須イベント化)
 → ムードcarry-over(減衰+閾値リセット)
@@ -216,7 +216,8 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 | モデル | 用途 | Phase | 拡張フィールド |
 |---|---|---|---|
 | `ConceptPackage` | キャラクター概念設計 | Tier -1 | psychological_hints(want_and_need, ghost_wound, lie) |
-| `MacroProfile` | マクロプロフィール（9セクション） | A-1 | VoiceFingerprint拡張(二人称, 絵文字, 自問頻度, 比喩頻度) |
+| `MacroProfile` | マクロプロフィール（9セクション） | A-1 | VoiceFingerprint拡張(二人称, 絵文字, 自問頻度, 比喩頻度)。voice_fingerprintは後方互換のため残存 |
+| `LinguisticExpression` | 言語的表現方法（独立生成アイテム） | A-1 | SpeechCharacteristics(concrete_features+abstract_feel+conversation_style+emotional_expression_tendency) + DiaryWritingAtmosphere(tone+structure+introspection+written/omitted+atmosphere)。日記生成プロンプトにのみ注入 |
 | `MicroParameters` | 52パラメータ + 規範層 | A-2 | 15 Worker対応サブモデル(SchwartzValuesOutput等) |
 | `AutobiographicalEpisodes` | 自伝的エピソード（5-8個） | A-3 | McAdams 5カテゴリ + redemption bias対策 |
 | `WeeklyEventsStore` | 7日間イベント列（14-28件） | D | 2軸メタデータ(known/unknown x expectedness) |
@@ -290,7 +291,7 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 **(b) 採用プラクティス**: 
 - Impulsive Agent: 活性化された気質・性格パラメータを直接渡す
 - Reflective Agent: 活性化された規範層のみ渡す（気質パラメータは渡さない）
-- 日記生成AI: `voice_fingerprint` のみ渡す（パラメータ値は一切渡さない）
+- 日記生成AI: `linguistic_expression`（言語的表現方法）全情報を渡す（パラメータ値は一切渡さない）
 - 検証エージェント: パラメータ名・ID (#1-#52) の漏洩をキーワード＋LLMで自動修正
 
 ### 4. コアAPI層の自律エージェント化 (Agentic Loops v10)
@@ -441,6 +442,20 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
   - 翌日予定にフォールバック実装: stage2がNone時にplans[0]から直接Event生成（source: "protagonist_plan"）
   - フォールバックEventの`time_slot`はpreferred_timeが有効なスロット名ならそのまま採用、不明なら"afternoon"
 
+### 20. VoiceFingerprint → LinguisticExpression（言語的表現方法の独立化）
+
+**(a) 当初設計**: キャラクターの喋り方・文体情報は`MacroProfile.voice_fingerprint`（VoiceFingerprint）としてマクロプロフィール内に埋め込み。Step 2の6並列Workerの1つ（VoiceWorker）が`concept_package + basic_info`のみから生成していた。出力は構造化された技術フィールド（一人称・口癖・文末表現・避ける語彙等）のみ。
+**(b) 変更・根拠**: VoiceFingerprint は具体的な特徴リストに留まり、「この人はどんな雰囲気で喋るか」という抽象的なイメージや、「この人の日記はどんな空気感があるか」というトーン・構成傾向が欠落していた。また、生成時のコンテキストが不十分（concept+basic_infoのみ）で、キャラクターの社会的立場・価値観・秘密・人間関係が喋り方に反映されていなかった。
+**(c) 採用プラクティス**:
+  - `LinguisticExpression`をCharacterPackageのトップレベル独立フィールドとして新設
+  - `SpeechCharacteristics`: 既存VoiceFingerprint(concrete_features) + abstract_feel(抽象的雰囲気) + conversation_style + emotional_expression_tendency
+  - `DiaryWritingAtmosphere`: tone + structure_tendency + introspection_depth + what_gets_written + what_gets_omitted + raw_atmosphere_description
+  - Phase A-1の実行フロー: Step 2からVoiceWorkerを除去（6→5並列）、Step 4(RelationshipNetwork)の後にStep 5として全Worker結果をコンテキストに持つLinguisticExpressionWorkerを順次実行
+  - `PhaseA1Result`データクラスで`MacroProfile + LinguisticExpression`をセット返却
+  - **データフロー制約**: LinguisticExpressionは日記生成プロンプトにのみ注入。Phase A-2/A-3/Dには一切渡さない
+  - `MacroProfile.voice_fingerprint`は後方互換のため残存（concrete_featuresからコピー）
+  - Daily Loop: `_build_voice_context()`を拡張し、abstract_feel + diary_writing_atmosphere全フィールドを日記生成プロンプトに注入
+
 ---
 
 ## パート3: プロジェクト管理
@@ -461,6 +476,7 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 | Stage 10: ストレージ統一・状態永続化 | ✅ 実装完了 | 1キャラ=1ディレクトリ統一・ShortTermMemoryDB/MoodState日単位永続化・日次ループ再開対応 |
 | Stage 11: Gemma4廃止・活性化エージェント強化 | ✅ 実装完了 | Gemma4完全廃止→Gemini 2.5 Pro統一、活性化エージェントにマクロプロフィール・経験DB入力追加 |
 | Stage 12: Day1世界観導入・イベント数調整・翌日予定必須化 | ✅ 実装完了 | Day1日記に世界観セクション追加、日記文字数約400字統一、イベント数2-4件/日、翌日予定フォールバック |
+| Stage 13: 言語的表現方法の独立化 | ✅ 実装完了 | VoiceFingerprint→LinguisticExpression独立化、抽象的喋り方雰囲気+日記書き方の空気感追加、日記生成プロンプトにのみ注入 |
 
 ### 次のアクション
 

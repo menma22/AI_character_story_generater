@@ -136,21 +136,23 @@ class MasterOrchestrator:
         cc_preview = concept.character_concept[:60] if concept.character_concept else "(未定義)"
         await self._notify(f"concept_package確定: {cc_preview}...")
         
-        # ─── Phase A-1: マクロプロフィール生成 ────────────────
+        # ─── Phase A-1: マクロプロフィール + 言語的表現方法 生成 ────────────────
         if not self.package.macro_profile:
-            await self._progress("phase_a1", 0.0, "Phase A-1: マクロプロフィール生成開始")
+            await self._progress("phase_a1", 0.0, "Phase A-1: マクロプロフィール + 言語的表現方法 生成開始")
             try:
                 from backend.agents.phase_a1.orchestrator import PhaseA1Orchestrator
-                macro_profile = await _execute_phase_with_retry(
+                phase_a1_result = await _execute_phase_with_retry(
                     "Phase A-1",
                     PhaseA1Orchestrator,
                     {"concept": concept, "profile": self.profile, "ws_manager": self.ws},
                     lambda res: evaluator.evaluate_phase_a1(res)
                 )
-                self.package.macro_profile = macro_profile
+                self.package.macro_profile = phase_a1_result.macro_profile
+                self.package.linguistic_expression = phase_a1_result.linguistic_expression
+                macro_profile = phase_a1_result.macro_profile
                 await self._checkpoint()
                 await self._progress("phase_a1", 1.0, "Phase A-1完了")
-                await self._notify(f"macro_profile確定: {macro_profile.basic_info.name}")
+                await self._notify(f"macro_profile + linguistic_expression 確定: {macro_profile.basic_info.name}")
             except Exception as e:
                 logger.error(f"Phase A-1 failed: {e}", exc_info=True)
                 await self._notify(f"Phase A-1エラー: {str(e)}", "error")

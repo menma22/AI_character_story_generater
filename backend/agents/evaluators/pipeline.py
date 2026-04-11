@@ -23,6 +23,7 @@ from backend.config import EvaluationProfile
 from backend.models.character import (
     ConceptPackage, MacroProfile, MicroParameters,
     AutobiographicalEpisodes, WeeklyEventsStore,
+    LinguisticExpression,
 )
 from backend.tools.llm_api import call_llm
 
@@ -68,6 +69,27 @@ class SchemaValidator:
             details=errors,
         )
     
+    @staticmethod
+    def validate_linguistic_expression(le: LinguisticExpression) -> ValidationResult:
+        errors = []
+        vf = le.speech_characteristics.concrete_features
+        if not vf.first_person:
+            errors.append("linguistic_expression: first_person が空です")
+        if len(vf.avoided_words) < 2:
+            errors.append("linguistic_expression: avoided_words が2個未満です（最低2個必要）")
+        if not le.speech_characteristics.abstract_feel:
+            errors.append("linguistic_expression: abstract_feel が空です")
+        if not le.diary_writing_atmosphere.tone:
+            errors.append("linguistic_expression: diary_writing_atmosphere.tone が空です")
+        if not le.diary_writing_atmosphere.raw_atmosphere_description:
+            errors.append("linguistic_expression: raw_atmosphere_description が空です")
+        return ValidationResult(
+            evaluator="SchemaValidator(LinguisticExpression)",
+            passed=len(errors) == 0,
+            error="; ".join(errors),
+            details=errors,
+        )
+
     @staticmethod
     def validate_micro_parameters(params: MicroParameters) -> ValidationResult:
         errors = []
@@ -208,7 +230,7 @@ concept_package、macro_profile、micro_parametersの間に矛盾がないかチ
 チェック項目:
 1. concept_packageの方向性とmacro_profileの設定が矛盾しないか
 2. psychological_hintsとmicro_parametersの値が整合するか
-3. voice_fingerprintとキャラクターの属性が整合するか
+3. voice_fingerprint（言語的表現方法）とキャラクターの属性が整合するか
 4. values_coreとschwartz_valuesが整合するか
 
 出力: JSON
@@ -449,10 +471,14 @@ class EvaluatorPipeline:
         self.profile = profile
         self.ws = ws_manager
     
-    async def evaluate_phase_a1(self, macro: MacroProfile) -> list[ValidationResult]:
+    async def evaluate_phase_a1(self, result) -> list[ValidationResult]:
         results = []
-        # SchemaValidator（常時ON）
+        # PhaseA1Result (macro_profile + linguistic_expression) または MacroProfile 直接
+        macro = result.macro_profile if hasattr(result, 'macro_profile') else result
         results.append(SchemaValidator.validate_macro_profile(macro))
+        # LinguisticExpression のバリデーション
+        if hasattr(result, 'linguistic_expression') and result.linguistic_expression:
+            results.append(SchemaValidator.validate_linguistic_expression(result.linguistic_expression))
         return results
     
     async def evaluate_phase_a2(self, micro: MicroParameters) -> list[ValidationResult]:

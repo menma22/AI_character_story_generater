@@ -262,10 +262,17 @@ class DailyLoopOrchestrator:
         self.next_day_agent = NextDayPlanningAgent(ws_manager, tier=self.profile.worker_tier)
         
         self.diary_critic = None
-        if (self.package.macro_profile and
-            self.package.macro_profile.voice_fingerprint):
+        # LinguisticExpression を優先、フォールバックで macro_profile.voice_fingerprint
+        voice_fp = None
+        if (self.package.linguistic_expression and
+            self.package.linguistic_expression.speech_characteristics.concrete_features):
+            voice_fp = self.package.linguistic_expression.speech_characteristics.concrete_features
+        elif (self.package.macro_profile and
+              self.package.macro_profile.voice_fingerprint):
+            voice_fp = self.package.macro_profile.voice_fingerprint
+        if voice_fp:
             self.diary_critic = DiarySelfCritic(
-                self.package.macro_profile.voice_fingerprint, ws_manager, tier=self.profile.worker_tier
+                voice_fp, ws_manager, tier=self.profile.worker_tier
             )
 
         # 4つの個別チェックAI
@@ -348,7 +355,40 @@ class DailyLoopOrchestrator:
         return "(周囲人物情報なし)"
 
     def _build_voice_context(self) -> str:
-        """言語的指紋のコンテキスト"""
+        """言語的表現方法のコンテキスト（日記生成プロンプトに注入）"""
+        le = self.package.linguistic_expression
+        if le:
+            vf = le.speech_characteristics.concrete_features
+            parts = [
+                f"一人称: {vf.first_person}",
+                f"口癖: {', '.join(vf.speech_patterns)}",
+                f"文末表現: {', '.join(vf.sentence_endings)}",
+                f"漢字/ひらがな: {vf.kanji_hiragana_tendency}",
+                f"避ける語彙: {', '.join(vf.avoided_words)}",
+            ]
+            # 抽象的な喋り方の雰囲気
+            if le.speech_characteristics.abstract_feel:
+                parts.append(f"喋り方の雰囲気: {le.speech_characteristics.abstract_feel}")
+            if le.speech_characteristics.conversation_style:
+                parts.append(f"会話スタイル: {le.speech_characteristics.conversation_style}")
+            if le.speech_characteristics.emotional_expression_tendency:
+                parts.append(f"感情表現の傾向: {le.speech_characteristics.emotional_expression_tendency}")
+            # 日記の書き方の雰囲気
+            da = le.diary_writing_atmosphere
+            if da.tone:
+                parts.append(f"日記のトーン: {da.tone}")
+            if da.structure_tendency:
+                parts.append(f"日記の構成傾向: {da.structure_tendency}")
+            if da.introspection_depth:
+                parts.append(f"内省の深さ: {da.introspection_depth}")
+            if da.what_gets_written:
+                parts.append(f"書く内容の方針: {da.what_gets_written}")
+            if da.what_gets_omitted:
+                parts.append(f"省略する傾向: {da.what_gets_omitted}")
+            if da.raw_atmosphere_description:
+                parts.append(f"日記の空気感: {da.raw_atmosphere_description}")
+            return "\n".join(parts)
+        # フォールバック: 旧形式（linguistic_expressionがない場合）
         if self.package.macro_profile and self.package.macro_profile.voice_fingerprint:
             vf = self.package.macro_profile.voice_fingerprint
             return (

@@ -134,6 +134,28 @@ class VoiceFingerprint(BaseModel):
     metaphor_irony_frequency: str = Field("", description="比喩・反語の頻度（よく使う/控えめ）")
     avoided_words: list[str] = Field(default_factory=list, description="避ける語彙")
 
+class SpeechCharacteristics(BaseModel):
+    """喋り方の特徴"""
+    concrete_features: VoiceFingerprint = Field(default_factory=VoiceFingerprint)
+    abstract_feel: str = Field("", description="喋り方の抽象的な雰囲気（例：『壊れかけのラジオのように、途切れ途切れで感情が滲む』）")
+    conversation_style: str = Field("", description="会話のテンポ・間の取り方・話題の転がし方")
+    emotional_expression_tendency: str = Field("", description="感情をどう言語化するか（直接的/婉曲/沈黙で示す等）")
+
+class DiaryWritingAtmosphere(BaseModel):
+    """日記の書き方の雰囲気"""
+    tone: str = Field("", description="日記全体のトーン（内省的/事務的/感情的/詩的/報告書的等）")
+    structure_tendency: str = Field("", description="日記の構成傾向（時系列/感情起点/断片的等）")
+    introspection_depth: str = Field("", description="内省の深さとスタイル")
+    what_gets_written: str = Field("", description="何を書いて何を書かないかの方針")
+    what_gets_omitted: str = Field("", description="意図的に省略・隠す傾向があるもの")
+    raw_atmosphere_description: str = Field("", description="この人の日記から漂う空気感（2-3文の散文記述）")
+
+class LinguisticExpression(BaseModel):
+    """キャラクターの言語的表現方法（Day 0独立生成アイテム）"""
+    speech_characteristics: SpeechCharacteristics = Field(default_factory=SpeechCharacteristics)
+    diary_writing_atmosphere: DiaryWritingAtmosphere = Field(default_factory=DiaryWritingAtmosphere)
+    raw_prose_markdown: str = Field("", description="言語的表現方法の全体記述Markdown")
+
 class ValuesCore(BaseModel):
     """価値観の核"""
     most_important: str = ""
@@ -321,6 +343,7 @@ class CharacterPackage(BaseModel):
     metadata: PackageMetadata = Field(default_factory=PackageMetadata)
     concept_package: Optional[ConceptPackage] = None
     macro_profile: Optional[MacroProfile] = None
+    linguistic_expression: Optional[LinguisticExpression] = None
     micro_parameters: Optional[MicroParameters] = None
     autobiographical_episodes: Optional[AutobiographicalEpisodes] = None
     weekly_events_store: Optional[WeeklyEventsStore] = None
