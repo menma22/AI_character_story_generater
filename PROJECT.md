@@ -25,7 +25,7 @@ AI_character_story_generater/
 │   │   ├── phase_a3/
 │   │   │   └── orchestrator.py                # Phase A-3: 自伝的エピソード (McAdams, redemption bias対策)
 │   │   ├── phase_d/
-│   │   │   └── orchestrator.py                # Phase D: 7日間イベント列 (28-42件, 2軸メタデータ)
+│   │   │   └── orchestrator.py                # Phase D: 7日間イベント列 (14-28件, 2軸メタデータ)
 │   │   ├── daily_loop/
 │   │   │   ├── orchestrator.py                # Day 1-7 日次ループ (RIM + 感情強度判定 + 内省 + 日記)
 │   │   │   ├── activation.py                  # パラメータ動的活性化 (5-10個選択, v10 §3.5)
@@ -174,7 +174,7 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 
 **日次ループ（Day 1-7）:**
 ```
-各日のイベント(4-6個) → 動的活性化(5-10パラメータ選択, マクロプロフィール+経験DB入力)
+各日のイベント(2-4個) → 動的活性化(5-10パラメータ選択, マクロプロフィール+経験DB入力)
 → 衝動系エージェント(Perceiver+Impulsive統合, raw text出力)
 → 【感情強度判定】intensity=high → Reflectiveバイパス / それ以外 → Reflective実行(raw text出力)
 → 出力検証(#1-#52漏洩チェック, raw textベース)
@@ -184,7 +184,7 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 → 内省(Self-Perception + 過去統合 + 再解釈, raw text出力)
 → 日記生成: Agentic日記執筆(言語的指紋・AI臭さツール検証込み)
 → 【4つの個別チェックAI】日記出力チェック
-→ ムード更新(Peak-End Rule) → key memory抽出(個別ファイル保存) + 記憶圧縮 + 翌日予定追加
+→ ムード更新(Peak-End Rule) → key memory抽出(個別ファイル保存) + 記憶圧縮 + 翌日予定追加(必須イベント化)
 → ムードcarry-over(減衰+閾値リセット)
 
 ※ 全エージェントにマクロプロフィール・世界設定・周囲人物・経験DB・key memoryを同梱
@@ -219,7 +219,7 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 | `MacroProfile` | マクロプロフィール（9セクション） | A-1 | VoiceFingerprint拡張(二人称, 絵文字, 自問頻度, 比喩頻度) |
 | `MicroParameters` | 52パラメータ + 規範層 | A-2 | 15 Worker対応サブモデル(SchwartzValuesOutput等) |
 | `AutobiographicalEpisodes` | 自伝的エピソード（5-8個） | A-3 | McAdams 5カテゴリ + redemption bias対策 |
-| `WeeklyEventsStore` | 7日間イベント列（28-42件） | D | 2軸メタデータ(known/unknown x expectedness) |
+| `WeeklyEventsStore` | 7日間イベント列（14-28件） | D | 2軸メタデータ(known/unknown x expectedness) |
 | `MoodState` | PAD 3次元ムード | 日次ループ | Peak-End Rule + carry-over |
 | `ShortTermMemoryDB` | 記憶（通常領域のみ、段階圧縮） | 日次ループ | LLM段階圧縮(400→200→80→20字) |
 | `KeyMemoryStore` | key memory（個別ファイル管理、7日間フル保持） | 日次ループ | `key_memories/day_01.json`形式で保存 |
@@ -316,7 +316,7 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 **(b) 変更・根拠**: Phase D Step1-4およびA-3 Plannerの出力は次のLLMへのプロンプトコンテキストとしてしか使われず、機械的なパースは不要だった。Anthropic APIクレジット枯渇→Geminiフォールバック環境下で、Gemma 4 (31B)のJSON出力が致命的に不安定で113回のJSONパース失敗が発生し、エピソード・イベントが全く生成されなかった。根本原因は「プロンプトとして渡すだけのデータにJSON出力を強制していた」こと。
 **(c) 採用プラクティス**:
 - Phase D Step1-4: `json_mode` を完全撤廃。自然言語テキストで出力し、そのまま次ステップのコンテキストに渡す
-- Phase D Step5 (WeeklyEventWriter): JSON維持（28-42件のEventモデルへ機械的格納が必要）
+- Phase D Step5 (WeeklyEventWriter): JSON維持（14-28件のEventモデルへ機械的格納が必要）
 - Phase A-3 Planner: 自然言語テキスト出力に変更
 - Phase A-3 Writer: 個別並列生成から全エピソード一括JSON生成に統合（LLM呼び出し回数削減: 1+N → 2回）
 - `llm_api.py`: 4段階フォールバック付き`_extract_json()`ヘルパー追加。`call_llm()`にjson_mode失敗時の自動リトライ（最大3回）を実装
@@ -430,6 +430,17 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
   - システムプロンプトの抽出ルールに「キャラクターの背景・経歴・人間関係を考慮」する旨を明記
   - tier バグ修正: オーケストレータから`tier=self.profile.worker_tier`を渡すよう変更
 
+### 19. Day1日記の世界観導入セクション・日記文字数統一・イベント数削減
+
+**(a) 当初設計**: 日記生成は全日同一プロンプト（300-600字、世界観紹介なし）。Phase Dのイベント数は各日4-6件（合計28-42件）。翌日予定のstage2整合性チェックがNone返却時はイベント未挿入。
+**(b) 変更・根拠**: Day1は物語の入口であり、読者が設定・世界観を理解するためのセクションが不可欠だった。日記文字数は約400字（500字以下）に統一し、読みやすさを優先。イベント数は2-4件に削減し、各イベントの描写密度と処理効率を向上。翌日予定が整合性チェック失敗でイベント化されないケースも排除。
+**(c) 採用プラクティス**:
+  - `_generate_diary()`にDay1条件分岐を追加: `day == 1`の場合、system_promptに世界観・自己紹介の特別指示を付加（主人公の声で自然に織り込む形式）
+  - 日記文字数を全日統一: プロンプト「約400字（500字以下）」、diary_criticの上限を800→500に修正
+  - Phase Dプロンプトを「各日2-4件、合計14-28件」に変更
+  - 翌日予定にフォールバック実装: stage2がNone時にplans[0]から直接Event生成（source: "protagonist_plan"）
+  - フォールバックEventの`time_slot`はpreferred_timeが有効なスロット名ならそのまま採用、不明なら"afternoon"
+
 ---
 
 ## パート3: プロジェクト管理
@@ -449,6 +460,7 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 | Stage 9: エージェント統合・コンテキスト拡充 | ✅ 実装完了 | Perceiver+Impulsive統合・raw text pass-through・全エージェントへのマクロ/世界設定/経験DB同梱 |
 | Stage 10: ストレージ統一・状態永続化 | ✅ 実装完了 | 1キャラ=1ディレクトリ統一・ShortTermMemoryDB/MoodState日単位永続化・日次ループ再開対応 |
 | Stage 11: Gemma4廃止・活性化エージェント強化 | ✅ 実装完了 | Gemma4完全廃止→Gemini 2.5 Pro統一、活性化エージェントにマクロプロフィール・経験DB入力追加 |
+| Stage 12: Day1世界観導入・イベント数調整・翌日予定必須化 | ✅ 実装完了 | Day1日記に世界観セクション追加、日記文字数約400字統一、イベント数2-4件/日、翌日予定フォールバック |
 
 ### 次のアクション
 
