@@ -248,6 +248,7 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 | `AutobiographicalEpisodes` | 自伝的エピソード（5-8個） | A-3 | McAdams 5カテゴリ + redemption bias対策 |
 | `WeeklyEventsStore` | 7日間イベント列（14-28件） | D | 2軸メタデータ(known/unknown x expectedness) |
 | `CharacterCapabilities` | 所持品・能力・可能行動（Phase D並列生成） | D | PossessedItem(name/description/always_carried/emotional_significance) × 5-10個、CharacterAbility(name/description/proficiency/origin) × 3-5個、AvailableAction(action/context/prerequisites) × 3-5個 |
+| `CapabilitiesHints` | 所持品・能力の方向性ヒント（Creative Director設計） | Tier -1 | key_possessions_hint / core_abilities_hint / signature_actions_hint の3フィールド。ConceptPackageに内包。Phase D capabilities生成の起点として参照 |
 | `MoodState` | PAD 3次元ムード | 日次ループ | Peak-End Rule + carry-over |
 | `ShortTermMemoryDB` | 記憶（通常領域のみ、段階圧縮） | 日次ループ | LLM段階圧縮(400→200→80→20字) |
 | `KeyMemoryStore` | key memory（個別ファイル管理、7日間フル保持） | 日次ループ | `key_memories/day_01.json`形式で保存 |
@@ -590,6 +591,19 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
     - Day全体の合計行 (Day N 合計 | 合計入力 | 合計出力 | 合計コスト)
   - **設計原則**: 各生成物完成時に「これまでのコスト」がスナップショットで「これからのコスト」と分離でき、生成物→コストの対応関係を明確化
 
+### Stage 28: Creative Director への CapabilitiesHints 追加
+
+**(a) 当初設計**: Stage 27 で CharacterCapabilities を Phase D で生成する際、方向性の起点は `concept_package` の JSON 全体とマクロプロフィールのみ。Creative Director は `psychological_hints`（気質・価値観の方向性）を出力していたが、「どんな所持品・能力が必要か」という capabilities の方向性ヒントは一切出力していなかった。Phase D の capabilities ワーカーは全コンテキストから暗黙的に推論するしかなく、Creative Director の意図が十分に反映されるかが不確実だった。
+
+**(b) 変更・根拠**: Creative Director はキャラクターの Want/Need/Ghost 構造を最も深く理解している立場であり、「この人物が持ち歩くべきもの」「物語に重要な能力」「固有の行動パターン」についての方向性を明示的に設計できる。暗黙的な推論よりも、Creative Director が明示的に `capabilities_hints` を設計し Phase D がそれを起点とする方が、物語整合性の高い所持品・能力が生成される。
+
+**(c) 採用プラクティス**:
+- **`CapabilitiesHints` モデル新設** (`backend/models/character.py`): `key_possessions_hint`（所持品の方向性）、`core_abilities_hint`（能力の方向性）、`signature_actions_hint`（行動パターンの方向性）の3フィールド。`ConceptPackage.capabilities_hints` として後方互換フィールドで追加（デフォルト空）。
+- **Creative Director 出力スキーマ更新** (`director.py`): SYSTEM_PROMPT の JSON 出力に `capabilities_hints` セクションを追加。各フィールドに「物語や感情的意味と接続するものを含める」等の設計指示を付記。
+- **批評チェックリスト更新**: SELF_CRITIQUE_PROMPT の [F] 実装可能性チェックに「capabilities_hints の3フィールドがキャラクターの職業・価値観・want と整合しているか」を追加。
+- **Phase D への明示的注入** (`phase_d/orchestrator.py`): `_full_context()` 内で `capabilities_hints` が存在する場合に専用テキストセクション（`【Creative Director capabilities_hints】`）としてコンテキストに追加。`CHARACTER_CAPABILITIES_PROMPT` の冒頭に hints を起点として参照する旨の指示を追加。
+- **設計原則**: Creative Director → Phase D への情報連鎖を psychological_hints と同様のパターンで capabilities にも拡張。上位設計者の意図が下位ワーカーに明示的に伝達される構造を維持。
+
 ### Stage 27: CharacterCapabilities（所持品・能力・可能行動）の追加
 
 **(a) 当初設計**: Phase D は WorldContext・SupportingCharacters の2タスクを並列生成するのみで、キャラクターが「実際に何を持っているか」「何ができるか」「何をとれるか」という具体的な情報を一切生成・保持していなかった。行動決定エージェント・日記生成エージェントは、マクロプロフィールや自伝的エピソードを参照して行動を決定していたが、所持品・道具・スキルへの参照は不可能だった。
@@ -730,6 +744,7 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 | Stage 25: APIキーの動的操作・伝播システム | ✅ 実装完了 | 全エージェント層（Master/DailyLoop/Workers/DailyAgents）への動的プロパゲーションとフロントエンドUIの統合を完了。 |
 | Stage 26: Phase A-2型ヒント欠落バグ修正 | ✅ 実装完了 | `backend/agents/phase_a2/orchestrator.py`で`Optional`型ヒントが使用されているのに`typing.Optional`がインポートされていなかった問題を修正。`from typing import Optional`追加。 |
 | Stage 27: CharacterCapabilities（所持品・能力・可能行動）追加 | ✅ 実装完了 | 4モデル新設（PossessedItem/CharacterAbility/AvailableAction/CharacterCapabilities）、Phase D に caps_task 並列追加、Master Orchestrator で package に格納、Daily Loop の統合・日記エージェントに投入、MD に 4.5 セクション追加 |
+| Stage 28: Creative Director への CapabilitiesHints 追加 | ✅ 実装完了 | `CapabilitiesHints`モデル新設・ConceptPackageに統合、Creative Director出力スキーマ/批評チェック更新、Phase Dの`_full_context()`でhints明示注入 |
 
 ### 次のアクション
 
