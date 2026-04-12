@@ -6,7 +6,7 @@
 
 ## パート1: アプリシステム概要
 
-![システムアーキテクチャ図 - APIキー伝播と多層エージェント構造](file:///C:/Users/mahim/.gemini/antigravity/brain/dc6680ae-7ab0-4006-b618-70009f5296fb/system_architecture_diagram_v23_1775860000000_png_1775979031686.png)
+![システムアーキテクチャ図 - APIキー動的伝播と多層エージェント構造](file:///C:/Users/mahim/.gemini/antigravity/brain/dc6680ae-7ab0-4006-b618-70009f5296fb/system_architecture_diagram_v25_api_key_system_1775981239290.png)
 
 ### ディレクトリ・ファイル構成
 
@@ -67,12 +67,13 @@ AI_character_story_generater/
 │           │       └── 003_summary.json       # さらに要約（段階的忘却）
 │           └── diaries/day_NN.md              # 日記本文（独立DB）
 ├── frontend/
-│   ├── index.html                             # メインUI (4画面構成)
-│   ├── css/style.css                          # プレミアムダークテーマ
+│   ├── index.html                             # メインUI (APIキー設定画面, 4画面構成)
+│   ├── css/style.css                          # プレミアムダークテーマ (設定モーダル対応)
 │   └── js/
 │       ├── websocket.js                       # WebSocket接続管理 (自動再接続)
 │       ├── renderer.js                        # データ → HTML レンダリング
-│       └── app.js                             # アプリケーションロジック
+│       ├── settings.js                        # APIキー管理 (localStorage 連携)
+│       └── app.js                             # アプリケーションロジック (ペイロードへのキー付加)
 ├── .env.example                               # 環境変数テンプレート
 ├── requirements.txt                           # Python依存関係
 ├── specification_v10.md                       # コア仕様書 (v10)
@@ -709,7 +710,7 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 | Stage 22: LinguisticExpression全フィールド活用・詳細バリデーション | ✅ 実装完了 | `_build_voice_context()`を完全拡張（二人称、絵文字、自問頻度、比喩頻度を追加）、`LinguisticExpressionValidator`新設、日記agenticループに`validate_linguistic_expression`ツール追加（check_diary_rules→validate_linguistic_expression→third_party_review の3段階ゲート化） |
 | Stage 23: 各ステップごとのトークン消費コスト記録システム | ✅ 実装完了 | `TokenTracker.snapshot()`と`cost_since()`メソッド追加、`DayProcessingState.cost_records`フィールド追加、DailyLoopOrchestratorで各ステップ前後のスナップショット取得、daily_logs末尾にコスト記録テーブル出力 |
 | Stage 24: Opusエージェントのフォールバック先をGemini 3.1 Proに更新 | ✅ 実装完了 | `config.py`に`GEMINI_3_1_PRO`定数追加、`_call_gemini_with_flash_fallback()`に`gemini_model`パラメータ追加、Opus失敗時のみ`GEMINI_3_1_PRO`を指定、Sonnet/Gemini tierはGemini 2.5 Pro維持 |
-| Stage 25: APIキーの動的操作・伝播システム | ✅ 実装完了 | フロントエンドからのAPIキー(OpenAI, Anthropic, Google AI)入力・保存・送信、WebSocket経由の動的伝播、バックエンド全エージェントへの api_keys 注入、llm_api.py での動的キー優先ロジックの確立 |
+| Stage 25: APIキーの動的操作・伝播システム | ✅ 実装完了 | 全エージェント層（Master/DailyLoop/Workers/DailyAgents）への動的プロパゲーションとフロントエンドUIの統合を完了。 |
 
 ### 次のアクション
 
