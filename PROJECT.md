@@ -650,6 +650,19 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 - **フォールバック**: エージェンティックループ失敗時は one-shot JSON 生成に切り替え（後方互換維持）
 - **設計原則**: 「高品質タスクはエージェント化し、Web 検索による事前調査と多層品質ゲートで設計の密度を保証する」パターンを CharacterCapabilities にも適用。
 
+### Stage 32: `_generate_diary` NameError修正 + linguistic_expression の user_message 明示注入
+
+**(a) 当初の設計**: `_build_voice_context()` が `linguistic_expression` から構築した声の文脈（voice）は `system_prompt` の `【言語的指紋（厳守事項）】{voice}` セクションにのみ注入されていた。`user_message` には `linguistic_expression` に関連するコンテキストブロックが存在しなかった。また、`_generate_diary()` の user_message 構築箇所（line 1484）で `normative_context` と `protagonist_plan_note` が参照されていたが、これらの変数は別メソッド (`_integration()`, 約 line 802) で定義されており、`_generate_diary()` のローカルスコープには存在しなかった。
+
+**(b) 変更・根拠**: 
+- **NameError バグ**: Python のスコープルール上、クラスメソッド間でローカル変数は共有されない。`normative_context` と `protagonist_plan_note` は `_generate_diary()` 内で未定義のため、日記生成実行時に必ず `NameError` が発生していた。
+- **言語的表現データの伝達不足**: `system_prompt` への注入だけでは、特に Gemini フォールバック環境下や長い system_prompt でデータが希薄化するリスクがあった。`LinguisticExpressionWorker` が精密に設計した書き方設定（一人称・口癖・日記トーン・空気感等）を、日記生成 AI が確実に参照できるよう user_message にも明示的に渡す必要があった。
+
+**(c) 採用プラクティス**:
+- **NameError 解消**: `_generate_diary()` の冒頭（voice/event_summaries 定義直後）に `normative_context` と `protagonist_plan_note` を明示的に定義。`normative_context` は `self.package.micro_parameters` が存在する場合に `ideal_self` と `ought_self` から構築。`protagonist_plan_note` は日記コンテキストでは不要なため空文字で定義。
+- **言語的表現の user_message 明示注入**: `voice_section = wrap_context('言語的表現方法（最重要 — 必ず守ること）', voice, 'diary')` を user_message のコンテキストブロックに追加（voice が空でない場合のみ）。これにより system_prompt と user_message の両方に言語的表現データが存在し、二重の確実な参照が保証される。
+- **設計原則**: 「キャラクターの言語的指紋は system_prompt（行動規範として）と user_message（参照すべきコンテキストとして）の双方に注入し、どちらの経路でも確実に参照可能にする」。
+
 ### Stage 28: Creative Director への CapabilitiesHints 追加
 
 **(a) 当初設計**: Stage 27 で CharacterCapabilities を Phase D で生成する際、方向性の起点は `concept_package` の JSON 全体とマクロプロフィールのみ。Creative Director は `psychological_hints`（気質・価値観の方向性）を出力していたが、「どんな所持品・能力が必要か」という capabilities の方向性ヒントは一切出力していなかった。Phase D の capabilities ワーカーは全コンテキストから暗黙的に推論するしかなく、Creative Director の意図が十分に反映されるかが不確実だった。
@@ -806,6 +819,7 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 | Stage 28: Creative Director への CapabilitiesHints 追加 | ✅ 実装完了 | `CapabilitiesHints`モデル新設・ConceptPackageに統合、Creative Director出力スキーマ/批評チェック更新、Phase Dの`_full_context()`でhints明示注入 |
 | Stage 29: DailyLoopOrchestrator重大破損復元 | ✅ 修正完了 | コミット6eae012で1000行以上消失していた問題を2caa6f8ベースで復元、api_keys+capabilities統合 |
 | Stage 30: 性格・気質パラメータ隠蔽 + 短期記憶優先チェッカー設計 | ✅ 実装完了 | パラメータ #1-#52 の設計記録 |
+| Stage 32: `_generate_diary` NameError修正 + linguistic_expression の user_message 明示注入 | ✅ 修正完了 | normative_context/protagonist_plan_note 未定義バグ解消、言語的表現データを user_message にも明示追加 |
 | Stage 31: CharacterCapabilitiesWorker をエージェントに昇格 | ✅ 実装完了 | `capabilities_agent.py` 新設、search_web 2回以上必須+批評+内省の5フェーズエージェント化、Phase D Step 2.5 として独立実行 |
 
 ### 次のアクション
