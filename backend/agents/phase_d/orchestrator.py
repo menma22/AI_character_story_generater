@@ -93,8 +93,6 @@ CONFLICT_INTENSITY_PROMPT = """あなたは7日間の葛藤強度アークを設
 
 自然な文章で回答してください。"""
 
-# CHARACTER_CAPABILITIES_PROMPT は capabilities_agent.py の CharacterCapabilitiesAgent に移行。
-# このファイルでは参照しない。
 
 # ── Step 5: イベント生成（エージェンティック化） ──
 
