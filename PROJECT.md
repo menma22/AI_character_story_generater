@@ -56,8 +56,13 @@ AI_character_story_generater/
 │           ├── key_memories/day_NN.json       # key memory（7日間フル保持）
 │           ├── short_term_memory/day_NN.json  # 短期記憶DB日単位スナップショット
 │           ├── mood_states/day_NN.json        # ムード状態日単位スナップショット
-│           ├── daily_logs/Day_N.md            # 日次ログ
-│           └── diaries/day_NN.md              # 日記本文
+│           ├── daily_logs/
+│           │   ├── Day_N.md                   # 包括的MDアーカイブ（人間用）
+│           │   └── day_NN/                    # 行動ログ日別フォルダ（短期記憶DB）
+│           │       ├── 001_full.json          # 全行動ログ
+│           │       ├── 002_summary.json       # 要約（~半分）
+│           │       └── 003_summary.json       # さらに要約（段階的忘却）
+│           └── diaries/day_NN.md              # 日記本文（独立DB）
 ├── frontend/
 │   ├── index.html                             # メインUI (4画面構成)
 │   ├── css/style.css                          # プレミアムダークテーマ
@@ -561,6 +566,7 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 | Stage 16: 日記エージェント提出ガード強化 | ✅ 実装完了 | submit_final_diary に check_diary_rules 必須ゲート追加、critic不在時も最低限ルールベースチェック実施 |
 | Stage 17: diary_critic LLMベース簡素化 | ✅ 実装完了 | ルールベースチェック全廃止→LLM一括検証、corrected_diary廃止→issues指摘のみ、MacroProfile注入 |
 | Stage 18: 第三者検証AI + コンテキスト説明付与 | ✅ 実装完了 | ThirdPartyReviewer新設（読者視点5観点チェック）、日記agenticループにthird_party_reviewツール追加（3段階ゲート化）、全エージェントにwrap_contextによるコンテキスト説明付与（what/why/how 3点説明） |
+| Stage 19: デイリーログ要約・記憶システム再設計 | ✅ 実装完了 | 翌日予定AIを日記生成の前に移動（日記に明日への意向を反映可能に）、DailyLogStore新設（日別フォルダ管理・段階的LLM要約による忘却プロセス）、日記を独立DBとして分離（参照用）、short_term_memoryのソースをdiary→行動ログに変更、_compress_memoriesを_create_daily_log_and_summarizeに置換 |
 
 ### 次のアクション
 

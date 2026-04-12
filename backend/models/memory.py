@@ -1,6 +1,6 @@
 """
 記憶システムのデータモデル（v10 §5準拠）
-短期記憶DB（key memory + 通常領域）、行動履歴バッファ、日記本文ストア
+短期記憶DB（key memory + 通常領域）、デイリーログ（行動ログ）、日記本文ストア
 """
 
 from __future__ import annotations
@@ -13,6 +13,16 @@ class KeyMemory(BaseModel):
     day: int
     content: str = Field(..., max_length=300, description="本当に重要だった瞬間")
     mood_at_extraction: dict = Field(default_factory=dict, description="抽出時のPAD")
+
+
+class DailyLogEntry(BaseModel):
+    """デイリーログエントリ（行動ログ1日分、フォルダ内バージョン管理）"""
+    day: int
+    version: int = Field(..., description="ファイルバージョン（001=全文, 002+=要約）")
+    content: str = Field("", description="ログ内容（全文または要約済み）")
+    char_count: int = 0
+    is_summary: bool = Field(False, description="要約済みかどうか")
+    created_at_day: int = Field(0, description="このバージョンが作成された日（Day N）")
 
 
 class ShortTermMemoryNormal(BaseModel):

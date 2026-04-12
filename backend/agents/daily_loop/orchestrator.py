@@ -15,11 +15,12 @@
   ムード更新（イベント単位）
 1日の終わり:
   §4.7 内省フェーズ
-  §4.8 日記生成
+  §4.9.4 翌日予定追加（Stage 1 + Stage 2）★ 日記の前に移動
+  §4.8 日記生成（翌日予定を参照可能）
   §4.9.1 日記Self-Critic
   §4.9.2 ムード更新（Peak-End Rule）
-  §4.9.3 key memory抽出 + 記憶圧縮
-  §4.9.4 翌日予定追加（Stage 1 + Stage 2）
+  §4.9.3.1 key memory抽出
+  §4.9.3.2 デイリーログ保存 & 要約（日別フォルダ管理）
   §4.9.5 DB更新 + ムードcarry-over
 """
 
@@ -40,6 +41,7 @@ from backend.models.memory import (
     ReflectiveOutput, IntegrationOutput, SceneNarration,
     ValuesViolationResult, EventPackage, IntrospectionMemo,
     DiaryEntry, ActivationLog, EmotionIntensityResult,
+    DailyLogEntry,
 )
 from backend.tools.llm_api import call_llm
 from backend.config import EvaluationProfile, AppConfig
@@ -217,14 +219,96 @@ class MoodStateStore:
             return 0
 
 
+class DailyLogStore:
+    """デイリーログ（行動ログ）の日別フォルダ管理。
+
+    フォルダ構造:
+        daily_logs/day_01/001_full.json    ← 1日の全行動ログ
+        daily_logs/day_01/002_summary.json ← 要約（~半分）
+        daily_logs/day_01/003_summary.json ← さらに要約
+
+    エージェントに渡す「短期記憶」= 各日の最新IDファイルを全て渡す。
+    """
+
+    def __init__(self, character_name: str):
+        safe_name = character_name.replace("/", "_").replace("\\", "_")
+        self.dir = AppConfig.STORAGE_DIR / safe_name / "daily_logs"
+        self.dir.mkdir(parents=True, exist_ok=True)
+
+    def _day_dir(self, day: int) -> Path:
+        d = self.dir / f"day_{day:02d}"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def save_full_log(self, day: int, content: str) -> Path:
+        """1日の全行動ログを保存（001_full.json）"""
+        entry = DailyLogEntry(
+            day=day, version=1, content=content,
+            char_count=len(content), is_summary=False, created_at_day=day,
+        )
+        path = self._day_dir(day) / "001_full.json"
+        path.write_text(
+            json.dumps(entry.model_dump(mode="json"), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        logger.info(f"[DailyLogStore] Day {day} full log saved ({len(content)} chars)")
+        return path
+
+    def save_summary(self, day: int, content: str, version: int, created_at_day: int) -> Path:
+        """要約版を保存（NNN_summary.json）"""
+        entry = DailyLogEntry(
+            day=day, version=version, content=content,
+            char_count=len(content), is_summary=True, created_at_day=created_at_day,
+        )
+        path = self._day_dir(day) / f"{version:03d}_summary.json"
+        path.write_text(
+            json.dumps(entry.model_dump(mode="json"), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        logger.info(f"[DailyLogStore] Day {day} summary v{version} saved ({len(content)} chars)")
+        return path
+
+    def get_latest(self, day: int) -> Optional[DailyLogEntry]:
+        """最新IDのファイルを読み込み（＝エージェントに渡す短期記憶）"""
+        day_dir = self.dir / f"day_{day:02d}"
+        if not day_dir.exists():
+            return None
+        files = sorted(day_dir.glob("*.json"))
+        if not files:
+            return None
+        try:
+            data = json.loads(files[-1].read_text(encoding="utf-8"))
+            return DailyLogEntry(**data)
+        except Exception as e:
+            logger.warning(f"[DailyLogStore] Failed to load latest for day {day}: {e}")
+            return None
+
+    def get_all_latest(self) -> list[DailyLogEntry]:
+        """全日の最新ログを取得（日付順）"""
+        entries = []
+        day_dirs = sorted(self.dir.glob("day_*"))
+        for day_dir in day_dirs:
+            if not day_dir.is_dir():
+                continue
+            files = sorted(day_dir.glob("*.json"))
+            if not files:
+                continue
+            try:
+                data = json.loads(files[-1].read_text(encoding="utf-8"))
+                entries.append(DailyLogEntry(**data))
+            except Exception as e:
+                logger.warning(f"[DailyLogStore] Failed to load {day_dir.name}: {e}")
+        return entries
+
+
 class DailyLoopOrchestrator:
     """Day 1-7 日次ループオーケストレータ（v10 §4 完全準拠）"""
-    
+
     def __init__(self, package: CharacterPackage, profile: EvaluationProfile, ws_manager=None):
         self.package = package
         self.profile = profile
         self.ws = ws_manager
-        
+
         # キャラ名解決（全Storeで共通使用）
         cname = ""
         if self.package.macro_profile and self.package.macro_profile.basic_info:
@@ -235,6 +319,7 @@ class DailyLoopOrchestrator:
         self.key_memory_store = KeyMemoryStore(self._cname)
         self.memory_store = ShortTermMemoryStore(self._cname)
         self.mood_store = MoodStateStore(self._cname)
+        self.daily_log_store = DailyLogStore(self._cname)
 
         # 状態: 既存スナップショットがあれば復元、なければ初期値
         restored_mood = self.mood_store.load_latest_carry_over()
@@ -325,14 +410,47 @@ class DailyLoopOrchestrator:
         return "[]"
     
     def _build_memory_context(self) -> str:
-        """短期記憶DB + key memory（別ファイル）のコンテキスト"""
+        """短期記憶（最重要）: デイリーログ最新版 + key memory を全日分個別に渡す"""
         parts = []
-        # key memoryは別ファイルから読み込み
-        for km in self.key_memory_store.load_all():
-            parts.append(f"[Day {km.day} key memory]: {km.content}")
-        for nm in self.memory_db.normal_area:
-            parts.append(f"[Day {nm.day} {nm.stage}]: {nm.summary[:200]}")
+        # key memory（日付順）
+        key_mems = {km.day: km for km in self.key_memory_store.load_all()}
+        # デイリーログ最新版（日付順）
+        daily_logs = {entry.day: entry for entry in self.daily_log_store.get_all_latest()}
+        # 全日分を統合（日付でソート）
+        all_days = sorted(set(list(key_mems.keys()) + list(daily_logs.keys())))
+        for d in all_days:
+            if d in key_mems:
+                parts.append(f"[Day {d} key memory]: {key_mems[d].content}")
+            if d in daily_logs:
+                entry = daily_logs[d]
+                label = "全文" if not entry.is_summary else f"要約v{entry.version}"
+                parts.append(f"[Day {d} デイリーログ（{label}）]: {entry.content}")
+        # フォールバック: DailyLogStore未使用時は旧normal_areaを使用
+        if not parts:
+            for km in self.key_memory_store.load_all():
+                parts.append(f"[Day {km.day} key memory]: {km.content}")
+            for nm in self.memory_db.normal_area:
+                parts.append(f"[Day {nm.day} {nm.stage}]: {nm.summary[:200]}")
         return "\n".join(parts) if parts else "(まだ記憶なし)"
+
+    def _build_past_diary_context(self) -> str:
+        """過去の日記を独立DBとして読み込み（参照用）"""
+        parts = []
+        # diaries/ フォルダから直接読み込み
+        diaries_dir = AppConfig.STORAGE_DIR / self._cname.replace("/", "_").replace("\\", "_") / "diaries"
+        if diaries_dir.exists():
+            for diary_file in sorted(diaries_dir.glob("day_*.md")):
+                try:
+                    content = diary_file.read_text(encoding="utf-8").strip()
+                    day_num = int(diary_file.stem.split("_")[1])
+                    parts.append(f"[Day {day_num}の日記]: {content}")
+                except Exception:
+                    pass
+        # フォールバック: diary_storeから
+        if not parts and self.memory_db.diary_store:
+            for i, diary_text in enumerate(self.memory_db.diary_store, 1):
+                parts.append(f"[Day {i}の日記]: {diary_text}")
+        return "\n".join(parts) if parts else ""
     
     def _build_action_buffer(self) -> str:
         """行動履歴バッファ"""
@@ -746,7 +864,7 @@ class DailyLoopOrchestrator:
 4. 結果と後日譚: 行動後に何が起こったか、小さな波紋を描く
 5. ストーリー統合: 上記全てを1つの物語セグメントとして統合
 
-【Higgins自己不一致理論】
+【Higgins自己不一致理論(事象に当てはまればこの理論も使ってみてください。)】
 - Ideal不一致（理想と現実のギャップ）→ 落胆・がっかり系の感情
 - Ought不一致（義務と現実のギャップ）→ 不安・罪悪感系の感情
 
@@ -1001,7 +1119,7 @@ class DailyLoopOrchestrator:
         return IntrospectionMemo(raw_text=raw_text)
     
     # ─── §4.8 日記生成 (Agentic Loop) ─────────────────────────
-    async def _generate_diary(self, day: int, events: list[EventPackage], introspection: IntrospectionMemo, checker_feedback: str = "") -> DiaryEntry:
+    async def _generate_diary(self, day: int, events: list[EventPackage], introspection: IntrospectionMemo, next_day_plans: list[dict] | None = None, checker_feedback: str = "") -> DiaryEntry:
         """日記生成（Tool-calling 自律ループ、v10 §4.8）"""
         from backend.tools.llm_api import AgentTool, call_llm_agentic
         
@@ -1161,8 +1279,10 @@ class DailyLoopOrchestrator:
 - 日々の経験や記憶、感情、認識の変化が反映されているとよい。
 - ただの、出来事の羅列ではなく、キャラクタ独自の経験や感性、記憶、キャラクター設定に基づき、深くキャラクターの内面を反映した文章にする必要がある。
 - 第3者が日記だけを見て、理解でき、納得でき、面白い日記である必要がある。
-- 与えられた、マクロプロフィール、世界設定、今日の出来事、内省メモ、現在のムード、記憶コンテキストを全て加味して、日記を作成してください。
-- 記憶コンテキスト内にあることはもっとも重要な要素です。
+- 与えられた、マクロプロフィール、世界設定、今日の出来事、内省メモ、現在のムード、短期記憶、過去の日記を全て加味して、日記を作成してください。
+- 「短期記憶（デイリーログ + key memory）」は最重要項目です。必ず保持し、日記の中に自然に反映してください。
+- 「過去の日記」は参照用です。言及すべき点があれば自然に触れてください。
+- 「明日の予定」がある場合、明日への意向・期待・不安などを日記の中で自然に触れてください。
 - 日記は必ず、400字以上500字以下で書くこと
 
 
@@ -1199,13 +1319,33 @@ class DailyLoopOrchestrator:
                 f"上記の不整合を解消した日記を書いてください。\n"
             )
 
+        # 翌日予定セクション（日記の前に計画済みの場合のみ）
+        next_day_section = ""
+        if next_day_plans:
+            plan_lines = []
+            for p in next_day_plans:
+                if isinstance(p, dict):
+                    plan_lines.append(f"- {p.get('action', '')}（{p.get('preferred_time', '')}頃、理由: {p.get('motivation', '')}）")
+            if plan_lines:
+                next_day_section = f"\n\n{wrap_context('明日の予定', '明日やりたいと考えていること:\n' + chr(10).join(plan_lines))}"
+
+        # 過去の日記セクション（独立DB、参照用）
+        past_diary_ctx = self._build_past_diary_context()
+        past_diary_section = ""
+        if past_diary_ctx:
+            past_diary_section = (
+                f"\n\n{wrap_context('過去の日記（参照用）', '以下は過去に書いた日記です。参照し、言及すべき点があれば自然に触れてください。\n' + past_diary_ctx, 'diary')}"
+            )
+
         user_message = (
             f"{wrap_context('マクロプロフィール', self._build_macro_context(), 'diary')}\n\n"
             f"{wrap_context('世界設定', self._build_world_context())}\n\n"
             f"{wrap_context('今日の出来事', f'Day {day}の出来事:\n{event_summaries}', 'diary')}\n\n"
             f"{wrap_context('内省メモ', introspection.raw_text, 'diary')}\n\n"
             f"{wrap_context('現在ムード', f'V={self.current_mood.valence:.1f} A={self.current_mood.arousal:.1f} D={self.current_mood.dominance:.1f}')}\n\n"
-            f"{wrap_context('記憶コンテキスト', self._build_memory_context(), 'diary')}"
+            f"{wrap_context('短期記憶（最重要 — デイリーログ + key memory）', self._build_memory_context(), 'diary')}"
+            f"{past_diary_section}"
+            f"{next_day_section}"
             f"{diary_feedback_section}"
         )
 
@@ -1275,44 +1415,91 @@ class DailyLoopOrchestrator:
             mood_at_extraction=self.current_mood.model_dump(),
         )
     
-    # ─── 記憶圧縮（§4.9.3.2）───────────────────────────────
-    async def _compress_memories(self, day: int, diary: DiaryEntry):
-        """段階圧縮方式（v10 §4.9.3.2）— LLMによる意味的要約"""
-        # 新しい日の記録を追加
-        self.memory_db.normal_area.append(ShortTermMemoryNormal(
-            day=day,
-            stage="current",
-            summary=diary.content,
-            char_count=len(diary.content),
-        ))
-        
-        # 段階をシフト + 圧縮
-        for mem in self.memory_db.normal_area:
-            if mem.day < day:
-                diff = day - mem.day
-                if diff == 1:
-                    mem.stage = "one_day_ago"
-                elif diff == 2:
-                    mem.stage = "two_days_ago"
-                    # LLMで2/3に圧縮
-                    if mem.char_count > 200:
-                        compressed = await call_llm(
-                            tier=self.profile.worker_tier,
-                            system_prompt="以下のテキストを、重要な出来事を保持しつつ元の2/3程度に圧縮してください。JSON: {\"compressed\": \"...\"}",
-                            user_message=mem.summary,
-                            json_mode=True,
-                        )
-                        d = compressed["content"] if isinstance(compressed["content"], dict) else {}
-                        mem.summary = d.get("compressed", mem.summary[:len(mem.summary) * 2 // 3])
-                        mem.char_count = len(mem.summary)
-                elif diff >= 3:
-                    mem.stage = "three_plus_days_ago"
-                    if mem.char_count > 200:
-                        mem.summary = mem.summary[:200]
-                        mem.char_count = 200
-        
-        # 日記をストアに追加
-        self.memory_db.diary_store.append(diary.content)
+    # ─── デイリーログ保存 & 要約（§4.9.3.2 置換）─────────────────
+    def _build_full_daily_log(self, events: list[EventPackage], introspection: IntrospectionMemo) -> str:
+        """1日の全行動ログをテキストとして構築する"""
+        parts = []
+        for ep in events:
+            action = ep.integration_output.final_action or "(行動なし)"
+            scene = ep.scene_narration.scene_description or ""
+            aftermath = ep.scene_narration.aftermath or ""
+            emotion = ep.integration_output.emotion_change or ""
+            line = f"[{ep.event_id}] {action}"
+            if scene:
+                line += f"\n  情景: {scene[:150]}"
+            if aftermath:
+                line += f"\n  後日譚: {aftermath[:100]}"
+            if emotion:
+                line += f"\n  感情変化: {emotion[:80]}"
+            parts.append(line)
+        log_text = "\n\n".join(parts)
+        if introspection and introspection.raw_text:
+            log_text += f"\n\n[内省]: {introspection.raw_text}"
+        return log_text
+
+    async def _llm_summarize(self, text: str, target_ratio: float = 0.5) -> str:
+        """LLMでテキストを要約する（target_ratio = 目標圧縮率）"""
+        target_chars = max(30, int(len(text) * target_ratio))
+        result = await call_llm(
+            tier="gemini",
+            system_prompt=(
+                f"以下のテキストを{target_chars}字程度に要約してください。"
+                "重要な出来事・感情・人間関係の変化を保持し、些末な描写は省いてください。"
+                '出力形式: JSON {{"summary": "要約テキスト"}}'
+            ),
+            user_message=text,
+            json_mode=True,
+        )
+        data = result["content"] if isinstance(result["content"], dict) else {}
+        return data.get("summary", text[:target_chars])
+
+    async def _create_daily_log_and_summarize(
+        self, day: int, events: list[EventPackage], introspection: IntrospectionMemo,
+    ):
+        """1日の行動ログを保存し、当日の要約 + 過去日の再要約を行う。
+
+        日記生成の後、1日の最後に実行される。
+        各日のフォルダに最新IDファイルとして蓄積していく。
+        """
+        # 1. 当日の全行動ログを作成（001_full.json）
+        full_log = self._build_full_daily_log(events, introspection)
+        self.daily_log_store.save_full_log(day, full_log)
+
+        # 2. 当日の要約を作成（002_summary.json）— 約半分に圧縮
+        summary = await self._llm_summarize(full_log, target_ratio=0.5)
+        self.daily_log_store.save_summary(day, summary, version=2, created_at_day=day)
+        await self._notify(f"Day {day}: デイリーログ要約完了（{len(full_log)}字→{len(summary)}字）")
+
+        # 3. 過去の日のさらなる要約（古い日ほどさらに圧縮していく忘却プロセス）
+        for past_day in range(1, day):
+            latest = self.daily_log_store.get_latest(past_day)
+            if not latest:
+                continue
+            age = day - past_day
+            # 3日以上前かつまだ圧縮余地がある場合、さらに半分に要約
+            if age >= 3 and latest.char_count > 80:
+                re_summary = await self._llm_summarize(latest.content, target_ratio=0.5)
+                self.daily_log_store.save_summary(
+                    past_day, re_summary,
+                    version=latest.version + 1, created_at_day=day,
+                )
+                logger.info(
+                    f"[DailyLogStore] Day {past_day} re-summarized: "
+                    f"v{latest.version}({latest.char_count}字)→v{latest.version+1}({len(re_summary)}字)"
+                )
+
+        # 4. normal_area を DailyLogStore の最新データで同期（互換性維持）
+        self.memory_db.normal_area.clear()
+        for entry in self.daily_log_store.get_all_latest():
+            stage = "current" if entry.day == day else (
+                "one_day_ago" if day - entry.day == 1 else (
+                    "two_days_ago" if day - entry.day == 2 else "three_plus_days_ago"
+                )
+            )
+            self.memory_db.normal_area.append(ShortTermMemoryNormal(
+                day=entry.day, stage=stage,
+                summary=entry.content, char_count=entry.char_count,
+            ))
     
     # ─── メインループ ──────────────────────────────────────────
     async def run(self, days: int = 7) -> list[DayProcessingState]:
@@ -1448,6 +1635,52 @@ class DailyLoopOrchestrator:
                 introspection = IntrospectionMemo(full_memo="（内省生成に失敗しました）")
             day_state.introspection = introspection
 
+            # §4.9.4 翌日予定追加（Day 7以外）★ 日記生成の前に実行
+            if day < days:
+                await self._notify(f"Day {day}: 翌日予定の計画")
+                try:
+                    plans = await self.next_day_agent.stage1_protagonist_plan(
+                        day=day,
+                        events=day_state.events_processed,
+                        introspection=introspection,
+                        current_mood=self.current_mood,
+                        macro_context=self._build_macro_context()[:500],
+                        voice_context=self._build_voice_context(),
+                    )
+
+                    if plans and self.package.weekly_events_store:
+                        new_event = await self.next_day_agent.stage2_consistency_check(
+                            plans=plans,
+                            next_day=day + 1,
+                            events_store=self.package.weekly_events_store,
+                        )
+                        # stage2がNoneの場合、plans[0]から直接フォールバックEvent生成
+                        if not new_event:
+                            logger.warning(f"[DailyLoop] Day {day}: stage2がNone → plans[0]からフォールバックEvent生成")
+                            valid_slots = {"morning", "late_morning", "noon", "afternoon", "evening", "night", "late_night"}
+                            preferred = plans[0].preferred_time if plans[0].preferred_time in valid_slots else "afternoon"
+                            plan_count = sum(1 for e in self.package.weekly_events_store.events if e.source == "protagonist_plan")
+                            new_event = Event(
+                                id=f"evt_plan_{plan_count + 1:03d}",
+                                day=day + 1,
+                                time_slot=preferred,
+                                known_to_protagonist=True,
+                                source="protagonist_plan",
+                                expectedness="high",
+                                content=plans[0].action,
+                                involved_characters=[],
+                                meaning_to_character=plans[0].motivation,
+                                narrative_arc_role="standalone_ripple",
+                                conflict_type=None,
+                                connected_episode_id=None,
+                                connected_values=[],
+                            )
+                            plans[0].inserted = True
+                        self.package.weekly_events_store.events.append(new_event)
+                        day_state.next_day_plans = [p.model_dump() for p in plans]
+                except Exception as e:
+                    logger.error(f"[DailyLoop] Day {day} 翌日予定計画エラー: {e}")
+
             # §4.8 日記生成 & §4.9.1 Self-Critic (Agentic統合済)
             # チェッカーフィードバック付き再生成ループ（最大2回再試行）
             await self._notify(f"Day {day}: 日記生成（自律チェック込み）")
@@ -1459,6 +1692,7 @@ class DailyLoopOrchestrator:
                 try:
                     diary = await self._generate_diary(
                         day, day_state.events_processed, introspection,
+                        next_day_plans=day_state.next_day_plans,
                         checker_feedback=checker_feedback_for_diary,
                     )
                 except Exception as e:
@@ -1513,59 +1747,15 @@ class DailyLoopOrchestrator:
             day_state.key_memory = key_mem
             self.key_memory_store.save(key_mem)
 
-            # §4.9.3.2 記憶圧縮
+            # §4.9.3.2 デイリーログ保存 & 要約（日記生成の後に実行）
             try:
-                await self._compress_memories(day, diary)
-                # 短期記憶スナップショットをファイルに永続化
-                self.memory_store.save(day, self.memory_db)
+                await self._create_daily_log_and_summarize(day, day_state.events_processed, introspection)
             except Exception as e:
-                logger.error(f"[DailyLoop] Day {day} 記憶圧縮エラー: {e}")
+                logger.error(f"[DailyLoop] Day {day} デイリーログ要約エラー: {e}")
 
-            # §4.9.4 翌日予定追加（Day 7以外）
-            if day < days:
-                await self._notify(f"Day {day}: 翌日予定の計画")
-                try:
-                    plans = await self.next_day_agent.stage1_protagonist_plan(
-                        day=day,
-                        diary=diary,
-                        introspection=introspection,
-                        current_mood=self.current_mood,
-                        macro_context=self._build_macro_context()[:500],
-                        voice_context=self._build_voice_context(),
-                    )
-
-                    if plans and self.package.weekly_events_store:
-                        new_event = await self.next_day_agent.stage2_consistency_check(
-                            plans=plans,
-                            next_day=day + 1,
-                            events_store=self.package.weekly_events_store,
-                        )
-                        # stage2がNoneの場合、plans[0]から直接フォールバックEvent生成
-                        if not new_event:
-                            logger.warning(f"[DailyLoop] Day {day}: stage2がNone → plans[0]からフォールバックEvent生成")
-                            valid_slots = {"morning", "late_morning", "noon", "afternoon", "evening", "night", "late_night"}
-                            preferred = plans[0].preferred_time if plans[0].preferred_time in valid_slots else "afternoon"
-                            plan_count = sum(1 for e in self.package.weekly_events_store.events if e.source == "protagonist_plan")
-                            new_event = Event(
-                                id=f"evt_plan_{plan_count + 1:03d}",
-                                day=day + 1,
-                                time_slot=preferred,
-                                known_to_protagonist=True,
-                                source="protagonist_plan",
-                                expectedness="high",
-                                content=plans[0].action,
-                                involved_characters=[],
-                                meaning_to_character=plans[0].motivation,
-                                narrative_arc_role="standalone_ripple",
-                                conflict_type=None,
-                                connected_episode_id=None,
-                                connected_values=[],
-                            )
-                            plans[0].inserted = True
-                        self.package.weekly_events_store.events.append(new_event)
-                        day_state.next_day_plans = [p.model_dump() for p in plans]
-                except Exception as e:
-                    logger.error(f"[DailyLoop] Day {day} 翌日予定計画エラー: {e}")
+            # diary_store にも追記（互換性維持）
+            self.memory_db.diary_store.append(diary.content)
+            self.memory_store.save(day, self.memory_db)
 
             # §4.9.5 ムードcarry-over
             daily_mood_snapshot = self.current_mood.model_copy()
@@ -1575,7 +1765,7 @@ class DailyLoopOrchestrator:
             self.mood_store.save(day, daily_mood_snapshot, self.current_mood.model_copy())
 
             self.day_results.append(day_state)
-            
+
             try:
                 from backend.storage.md_storage import save_daily_log
                 cname = self.package.macro_profile.basic_info.name if (self.package.macro_profile and self.package.macro_profile.basic_info) else "Unknown_Character"
@@ -1583,7 +1773,7 @@ class DailyLoopOrchestrator:
             except Exception as e:
                 import logging
                 logging.getLogger("daily_loop").error(f"MD保存エラー: {e}")
-                
+
             await self._notify(f"=== Day {day} 完了 ===", "complete")
         
         await self._notify(f"全{days}日分の日記生成完了！", "complete")

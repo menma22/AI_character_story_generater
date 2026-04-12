@@ -22,7 +22,7 @@ from typing import Optional
 from backend.models.character import Event, WeeklyEventsStore
 from backend.models.memory import (
     DiaryEntry, MoodState, NextDayPlan,
-    IntrospectionMemo, DayProcessingState,
+    IntrospectionMemo, DayProcessingState, EventPackage,
 )
 from backend.tools.llm_api import call_llm
 
@@ -43,7 +43,7 @@ class NextDayPlanningAgent:
     async def stage1_protagonist_plan(
         self,
         day: int,
-        diary: DiaryEntry,
+        events: list[EventPackage],
         introspection: IntrospectionMemo,
         current_mood: MoodState,
         macro_context: str,
@@ -51,16 +51,28 @@ class NextDayPlanningAgent:
     ) -> list[NextDayPlan]:
         """
         Stage 1: 主人公AIが「明日やりたいこと」を3つ出力
-        
+
+        日記生成の前に実行されるため、diary ではなく events を受け取る。
+
         Returns:
             list[NextDayPlan]（最大3つ）
         """
         await self._notify(f"Stage 1: Day {day}の主人公が明日の計画を考えています...")
-        
+
+        # イベント処理結果からサマリーを構築
+        event_summaries = "\n".join([
+            f"- [{ep.event_id}] {ep.integration_output.final_action[:120]} → {ep.scene_narration.aftermath[:80]}"
+            for ep in events
+        ]) if events else "(今日の出来事なし)"
+
         result = await call_llm(
             tier=self.tier,
-            system_prompt=f"""あなたはキャラクター本人として、今日の日記を書いた後に
+            system_prompt=f"""あなたはキャラクター本人として、今日1日を振り返り
 「明日やりたいこと」を考えるエージェントです。
+
+【コンテキスト説明】
+あなたはこのキャラクターとして毎日を過ごしており、今日の出来事と内省を踏まえて、
+明日の行動を主体的に計画します。この計画は後の日記にも反映されます。
 
 【ルール】
 1. 今日の出来事と内省を踏まえて、明日したいことを3つ出す
@@ -81,7 +93,7 @@ class NextDayPlanningAgent:
 }}""",
             user_message=(
                 f"【マクロプロフィール】\n{macro_context[:500]}\n\n"
-                f"【Day {day}の日記】\n{diary.content}\n\n"
+                f"【Day {day}の出来事】\n{event_summaries}\n\n"
                 f"【Day {day}の内省】\n{introspection.raw_text}\n\n"
                 f"【現在のムード】V={current_mood.valence:.1f} A={current_mood.arousal:.1f} D={current_mood.dominance:.1f}\n\n"
                 f"明日やりたいことを3つ考えてください。"
