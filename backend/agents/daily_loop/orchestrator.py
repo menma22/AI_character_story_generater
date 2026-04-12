@@ -1205,7 +1205,16 @@ class DailyLoopOrchestrator:
             f"- [{ep.event_id}] {ep.integration_output.final_action[:100]}... → {ep.scene_narration.aftermath[:60]}..."
             for ep in events
         ])
-        
+
+        # 規範層コンテキスト（_generate_diary 内で必要なため定義）
+        normative_context = ""
+        if self.package.micro_parameters:
+            normative_context = (
+                f"理想自己: {self.package.micro_parameters.ideal_self}\n"
+                f"義務自己: {self.package.micro_parameters.ought_self}"
+            )
+        protagonist_plan_note = ""
+
         final_diary_content = ""
         check_passed = False  # check_diary_rules がSUCCESSを返したかのフラグ
         last_checked_draft = ""  # チェック済みドラフトの内容
@@ -1408,8 +1417,7 @@ class DailyLoopOrchestrator:
 {voice}
 
 【日記のルール】
-- 一人称視点で、そのキャラクターらしい文体で書くこと
-- 避ける語彙は絶対に使わないこと（「成長」「気づき」「学び」等のAI臭い語彙）
+- 一人称視点で、そのキャラクターらしい文体で書くこと。キャラクターの特性が文学的な文章を書きそうじゃないのに、文学的な日記を書かせたりするのは絶対にダメ。日記のスタイルは完全にキャラ設定に合わせる。
 - 全ての出来事を書く必要はない。主観的に重要だと感じたことだけを書く。しかし、1日全体を見渡しての所感を書くのは推奨
 - 日々の経験や記憶、感情、認識の変化が反映されているとよい。昨日までの出来事が今日の日記の語り方に影響を及ぼし、時間が進むにつれて、キャラクターの輪郭が立ち上がっていくことを期待します。
 - ただの、出来事の羅列ではなく、キャラクタ独自の経験や感性、記憶、キャラクター設定に基づき、深くキャラクターの内面を反映した文章にする必要がある。
@@ -1475,6 +1483,7 @@ class DailyLoopOrchestrator:
 
         caps_ctx = self._build_capabilities_context()
         caps_section = f"\n\n{wrap_context('所持品・能力', caps_ctx, 'diary')}" if caps_ctx else ""
+        voice_section = f"\n\n{wrap_context('言語的表現方法（最重要 — 必ず守ること）', voice, 'diary')}" if voice else ""
         user_message = (
             f"{wrap_context('マクロプロフィール', self._build_macro_context(), 'diary')}\n\n"
             f"{wrap_context('世界設定', self._build_world_context())}\n\n"
@@ -1483,6 +1492,7 @@ class DailyLoopOrchestrator:
             f"{wrap_context('現在ムード', f'V={self.current_mood.valence:.1f} A={self.current_mood.arousal:.1f} D={self.current_mood.dominance:.1f}')}\n\n"
             f"{wrap_context('短期記憶（最重要 — デイリーログ + key memory）', self._build_memory_context(), 'diary')}"
             f"{wrap_context('規範層', f'{normative_context}{protagonist_plan_note}')}\n\n"
+            f"{voice_section}"
             f"{caps_section}"
             f"{past_diary_section}"
             f"{next_day_section}"
