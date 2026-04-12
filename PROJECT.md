@@ -591,6 +591,41 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
     - Day全体の合計行 (Day N 合計 | 合計入力 | 合計出力 | 合計コスト)
   - **設計原則**: 各生成物完成時に「これまでのコスト」がスナップショットで「これからのコスト」と分離でき、生成物→コストの対応関係を明確化
 
+### Stage 29: DailyLoopOrchestrator 重大破損の復元
+
+**(a) 破損前の設計**: `daily_loop/orchestrator.py` は1894行の完全なファイルで、以下を含んでいた:
+- 4つのインラインストレージクラス（KeyMemoryStore, ShortTermMemoryStore, MoodStateStore, DailyLogStore）
+- 65行の詳細な日記生成プロンプト（言語的指紋、日記ルール、エージェンティック行動指針6ステップ）
+- 日記ツール4種の完全なゲーティングロジック（check→validate→third_party→submit の順序強制、submit時の強制チェック）
+- Day 1特別指示（世界観・設定紹介セクション）
+- 内省プロンプトの各セクション詳細説明（自己推測3-4文、過去記録統合2-3文等）
+- `_build_full_daily_log()`, `_llm_summarize()` メソッド
+- `_create_daily_log_and_summarize()` の完全な忘却プロセス（3日以上前の再要約）
+- Geminiフォールバック（日記生成）
+- メインループのチェッカーフィードバック付き再生成ループ（統合出力・日記の両方）
+- 日記生成user_messageの15セクション（マクロプロフィール、世界設定、出来事、内省、ムード、短期記憶、規範層、過去の日記、明日の予定、チェッカーフィードバック）
+
+**(b) 破損と原因**: コミット `6eae012`（APIキー動的管理システム移行）でファイルが1894行→903行に激減。原因はファイル全体の書き換えにより以下が消失:
+- 日記生成プロンプト: 65行→1行（`f"""あなたはキャラクター本人として日記を書くエージェントです。\n{voice}"""`）
+- 日記user_message: 15セクション→2セクション（出来事とintrospectionのみ）
+- ツールゲーティングロジック: 全消失（check→validate→third_partyの順序強制なし）
+- submit_final_diary: 強制チェックロジック全消失
+- Day 1特別指示: 全消失
+- self.profile: 未定義のまま6箇所で参照（RuntimeError確定）
+- EmotionIntensityResult: import漏れ
+- 存在しないモジュールからのimport: `backend.models.story`, `backend.storage.memory_db` 等（ModuleNotFoundError確定）
+- _build_full_daily_log, _llm_summarize: 全消失
+- 忘却プロセス: 全消失
+- Geminiフォールバック（日記）: 消失
+- メインループのチェッカー再生成ループ: 消失
+- トークンコスト記録: 消失
+
+**(c) 復元方法**:
+- `git checkout 2caa6f8 -- backend/agents/daily_loop/orchestrator.py` で破損前の完全なファイルを復元
+- api_keys対応: `__init__`に`api_keys: Optional[dict] = None`パラメータ追加、全13箇所の`call_llm`/`call_llm_agentic`/`call_llm_agentic_gemini`呼び出しに`api_keys=self.api_keys`を追加
+- capabilities context: `_build_capabilities_context()`メソッド追加（Stage 27から移植）、統合エージェントのsystem_promptに所持品・能力参照指示追加、統合エージェント・日記のuser_messageに`wrap_context('所持品・能力', ...)`追加
+- **教訓**: ファイル全体の書き換え時は、行数差が大きい場合（特に半減以上）にdiffレビューを必須とすべき。APIキー追加のような横断的変更では、各メソッドへの引数追加にとどめ、既存ロジックを書き換えない
+
 ### Stage 28: Creative Director への CapabilitiesHints 追加
 
 **(a) 当初設計**: Stage 27 で CharacterCapabilities を Phase D で生成する際、方向性の起点は `concept_package` の JSON 全体とマクロプロフィールのみ。Creative Director は `psychological_hints`（気質・価値観の方向性）を出力していたが、「どんな所持品・能力が必要か」という capabilities の方向性ヒントは一切出力していなかった。Phase D の capabilities ワーカーは全コンテキストから暗黙的に推論するしかなく、Creative Director の意図が十分に反映されるかが不確実だった。
@@ -745,6 +780,7 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 | Stage 26: Phase A-2型ヒント欠落バグ修正 | ✅ 実装完了 | `backend/agents/phase_a2/orchestrator.py`で`Optional`型ヒントが使用されているのに`typing.Optional`がインポートされていなかった問題を修正。`from typing import Optional`追加。 |
 | Stage 27: CharacterCapabilities（所持品・能力・可能行動）追加 | ✅ 実装完了 | 4モデル新設（PossessedItem/CharacterAbility/AvailableAction/CharacterCapabilities）、Phase D に caps_task 並列追加、Master Orchestrator で package に格納、Daily Loop の統合・日記エージェントに投入、MD に 4.5 セクション追加 |
 | Stage 28: Creative Director への CapabilitiesHints 追加 | ✅ 実装完了 | `CapabilitiesHints`モデル新設・ConceptPackageに統合、Creative Director出力スキーマ/批評チェック更新、Phase Dの`_full_context()`でhints明示注入 |
+| Stage 29: DailyLoopOrchestrator重大破損復元 | ✅ 修正完了 | コミット6eae012で1000行以上消失していた問題を2caa6f8ベースで復元、api_keys+capabilities統合 |
 
 ### 次のアクション
 
