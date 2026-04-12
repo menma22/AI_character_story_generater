@@ -262,6 +262,38 @@ class AutobiographicalEpisodes(BaseModel):
 
 
 # ═══════════════════════════════════════════════════════════════
+# Phase D: 所持品・能力・可能行動
+# ═══════════════════════════════════════════════════════════════
+
+class PossessedItem(BaseModel):
+    """所持品"""
+    name: str = ""
+    description: str = Field("", description="アイテムの説明（見た目・用途）")
+    always_carried: bool = Field(False, description="常時持ち歩きか")
+    emotional_significance: str = Field("", description="キャラクターにとっての感情的意味")
+
+class CharacterAbility(BaseModel):
+    """能力・スキル"""
+    name: str = ""
+    description: str = Field("", description="能力の説明")
+    proficiency: str = Field("medium", description="novice/medium/expert")
+    origin: str = Field("", description="どこで身につけたか")
+
+class AvailableAction(BaseModel):
+    """能動的に取れるアクション"""
+    action: str = ""
+    context: str = Field("", description="どんな場面で使えるか")
+    prerequisites: str = Field("", description="前提条件")
+
+class CharacterCapabilities(BaseModel):
+    """所持品・能力・可能行動（Phase D生成、Creative Director方針準拠）"""
+    possessions: list[PossessedItem] = Field(default_factory=list)
+    abilities: list[CharacterAbility] = Field(default_factory=list)
+    available_actions: list[AvailableAction] = Field(default_factory=list)
+    raw_text: str = Field("", description="生成時の自然言語テキスト")
+
+
+# ═══════════════════════════════════════════════════════════════
 # Phase D: 週間イベントストア
 # ═══════════════════════════════════════════════════════════════
 
@@ -347,4 +379,5 @@ class CharacterPackage(BaseModel):
     micro_parameters: Optional[MicroParameters] = None
     autobiographical_episodes: Optional[AutobiographicalEpisodes] = None
     weekly_events_store: Optional[WeeklyEventsStore] = None
+    character_capabilities: Optional[CharacterCapabilities] = None
     audit_report: dict = Field(default_factory=dict)

@@ -26,6 +26,7 @@ class MasterOrchestrator:
         from datetime import datetime
         self.session_id = session_id or f"SID_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         self.api_keys = api_keys
+        self._last_orch = None  # Phase D の orch インスタンスを取り出すためのフック
     
     async def _notify(self, content: str, status: str = "thinking"):
         if self.ws:
@@ -96,6 +97,7 @@ class MasterOrchestrator:
                     full_kwargs = {**orch_kwargs, "api_keys": self.api_keys}
                     orch = orch_class(**full_kwargs)
                     result = await orch.run()
+                    self._last_orch = orch  # Phase D capabilities 取得用フック
                     
                     # Evaluator実行
                     evals = await eval_func(result)
@@ -230,9 +232,13 @@ class MasterOrchestrator:
                     lambda res: evaluator.evaluate_phase_d(res, episodes)
                 )
                 self.package.weekly_events_store = events_store
+                # Phase D Orchestrator インスタンスから capabilities を取得して保存
+                if self._last_orch is not None and hasattr(self._last_orch, "character_capabilities"):
+                    self.package.character_capabilities = self._last_orch.character_capabilities
                 await self._checkpoint()
                 await self._progress("phase_d", 1.0, "Phase D完了")
-                await self._notify(f"weekly_events_store確定: {len(events_store.events)}件のイベント")
+                caps_count = len(self.package.character_capabilities.possessions) if self.package.character_capabilities else 0
+                await self._notify(f"weekly_events_store確定: {len(events_store.events)}件のイベント (所持品{caps_count}個)")
             except Exception as e:
                 logger.error(f"Phase D failed: {e}", exc_info=True)
                 await self._notify(f"Phase Dエラー: {str(e)}", "error")
@@ -241,6 +247,8 @@ class MasterOrchestrator:
             await self._notify("Phase D: 既存のイベント列を読み込み完了 (Skip)")
             events_store = self.package.weekly_events_store
             await self._progress("phase_d", 1.0)
+            if not self.package.character_capabilities:
+                await self._notify("Phase D: character_capabilities が未生成です。必要であれば再生成してください。", "warning")
         
         # ─── Tier 3: 最終クロス構成チェック (Consistency / Interestingness) ──
         await self._notify("最終フェーズ横断Evaluatorを実行中...")

@@ -177,6 +177,42 @@ async def save_character_profile(character_name: str, package: CharacterPackage)
                 md_content += f"- **Connected to:** {', '.join(str(v) for v in ep.metadata.connected_to.values())}\n"
             md_content += "\n"
 
+    # 4.5. Character Capabilities (所持品・能力・可能行動)
+    if package.character_capabilities:
+        caps = package.character_capabilities
+        md_content += "## 4.5. 所持品・能力・可能行動\n\n"
+
+        md_content += "### 所持品\n\n"
+        if caps.possessions:
+            for item in caps.possessions:
+                carry = " ★常時携帯" if item.always_carried else ""
+                md_content += f"- **{item.name}**{carry}: {item.description}\n"
+                if item.emotional_significance:
+                    md_content += f"  - 感情的意味: {item.emotional_significance}\n"
+        else:
+            md_content += "（未設定）\n"
+        md_content += "\n"
+
+        md_content += "### 能力・スキル\n\n"
+        if caps.abilities:
+            for ability in caps.abilities:
+                md_content += f"- **{ability.name}** [{ability.proficiency}]: {ability.description}\n"
+                if ability.origin:
+                    md_content += f"  - 習得: {ability.origin}\n"
+        else:
+            md_content += "（未設定）\n"
+        md_content += "\n"
+
+        md_content += "### 取れる行動\n\n"
+        if caps.available_actions:
+            for act in caps.available_actions:
+                md_content += f"- **{act.action}**: {act.context}\n"
+                if act.prerequisites:
+                    md_content += f"  - 前提: {act.prerequisites}\n"
+        else:
+            md_content += "（未設定）\n"
+        md_content += "\n"
+
     # 5. Events Plan
     if package.weekly_events_store:
         md_content += "## 5. 7-Day Event Plan (Phase D)\n\n"

@@ -164,6 +164,33 @@ class DailyLoopOrchestrator:
             lines.append(f"- {ep.title}: {ep.content[:150]}")
         return "\n".join(lines)
 
+    def _build_capabilities_context(self) -> str:
+        """所持品・能力・可能行動のコンテキストを構築"""
+        caps = getattr(self.package, "character_capabilities", None)
+        if not caps:
+            return ""
+        lines = []
+        if caps.possessions:
+            lines.append("【所持品】")
+            for item in caps.possessions:
+                carry = "（常時携帯）" if item.always_carried else ""
+                lines.append(f"- {item.name}{carry}: {item.description}")
+                if item.emotional_significance:
+                    lines.append(f"  意味: {item.emotional_significance}")
+        if caps.abilities:
+            lines.append("\n【能力・スキル】")
+            for ability in caps.abilities:
+                lines.append(f"- {ability.name} [{ability.proficiency}]: {ability.description}")
+                if ability.origin:
+                    lines.append(f"  習得: {ability.origin}")
+        if caps.available_actions:
+            lines.append("\n【取れる行動】")
+            for act in caps.available_actions:
+                lines.append(f"- {act.action}: {act.context}")
+                if act.prerequisites:
+                    lines.append(f"  前提: {act.prerequisites}")
+        return "\n".join(lines)
+
     def _build_voice_context(self) -> str:
         if not self.package.linguistic_expression: return ""
         le = self.package.linguistic_expression
@@ -510,6 +537,7 @@ class DailyLoopOrchestrator:
                 f"上記の不整合を解消した出力を生成してください。\\n"
             )
 
+        caps_ctx = self._build_capabilities_context()
         user_message = (
             f"{wrap_context('マクロプロフィール', self._build_macro_context(), 'integration')}\\n\\n"
             f"{wrap_context('世界設定', self._build_world_context())}\\n\\n"
@@ -517,7 +545,8 @@ class DailyLoopOrchestrator:
             f"{wrap_context('規範層', f'{normative_context}{protagonist_plan_note}')}\\n\\n"
             f"{wrap_context('過去の記憶', self._build_memory_context())}\\n\\n"
             f"{wrap_context('自伝的エピソード', self._build_episodes_context()[:600])}\\n\\n"
-            f"{wrap_context('衝動ブランチの報告', impulsive_text)}\\n\\n"
+            + (f"{wrap_context('所持品・能力', caps_ctx, 'integration')}\\n\\n" if caps_ctx else "")
+            + f"{wrap_context('衝動ブランチの報告', impulsive_text)}\\n\\n"
             f"{wrap_context('理性ブランチの報告', reflective_text)}\\n\\n"
             f"{wrap_context('イベント', f'{event.content}\\n（時間帯: {event.time_slot} | {known_str} | 予想外度: {event.expectedness}）')}"
             f"{feedback_section}"
@@ -800,7 +829,9 @@ class DailyLoopOrchestrator:
         ]
         
         system_prompt = f\"\"\"あなたはキャラクター本人として日記を書くエージェントです。\\n{voice}\"\"\"
-        user_message = f\"今日の出来事:\\n{event_summaries}\\n\\n内省:\\n{introspection.raw_text}\"
+        caps_ctx = self._build_capabilities_context()
+        caps_section = f\"\\n\\n{wrap_context('所持品・能力', caps_ctx, 'diary')}\" if caps_ctx else \"\"
+        user_message = f\"今日の出来事:\\n{event_summaries}\\n\\n内省:\\n{introspection.raw_text}{caps_section}\"
 
         await self._notify(f"日記生成エージェントを自律モードで起動...")
         
