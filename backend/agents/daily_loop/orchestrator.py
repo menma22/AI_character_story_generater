@@ -44,7 +44,7 @@ from backend.models.memory import (
     DailyLogEntry,
 )
 from backend.tools.llm_api import call_llm, token_tracker
-from backend.config import EvaluationProfile, AppConfig
+from backend.config import EvaluationProfile, AppConfig, LLMModels
 from backend.agents.daily_loop.activation import DynamicActivationAgent
 from backend.agents.daily_loop.verification import OutputVerificationAgent
 from backend.agents.daily_loop.next_day_planning import NextDayPlanningAgent
@@ -978,7 +978,7 @@ class DailyLoopOrchestrator:
                     user_message=user_message,
                     tools=tools,
                     max_iterations=6,
-                api_keys=self.api_keys,
+                    api_keys=self.api_keys,
                 )
             except Exception as e:
                 logger.warning(f"[DailyLoop] Integration: Claude ({self.profile.worker_tier}) agentic failed: {e}. Falling back to Gemini.")
@@ -988,18 +988,20 @@ class DailyLoopOrchestrator:
                         user_message=user_message,
                         tools=tools,
                         max_iterations=6,
-                    api_keys=self.api_keys,
+                        api_keys=self.api_keys,
                     )
                 except Exception as e2:
                     logger.error(f"[DailyLoop] Integration: Gemini fallback also failed: {e2}. Using default decision.")
         else:
+            gemini_model = LLMModels.GEMINI_3_1_PRO if self.profile.worker_tier == "gemini_pro" else None
             try:
                 await call_llm_agentic_gemini(
                     system_prompt=system_prompt,
                     user_message=user_message,
                     tools=tools,
                     max_iterations=6,
-                api_keys=self.api_keys,
+                    api_keys=self.api_keys,
+                    model=gemini_model,
                 )
             except Exception as e:
                 logger.error(f"[DailyLoop] Integration: Gemini agentic failed: {e}. Using default decision.")
@@ -1527,7 +1529,7 @@ class DailyLoopOrchestrator:
                     user_message=user_message,
                     tools=tools,
                     max_iterations=10,
-                api_keys=self.api_keys,
+                    api_keys=self.api_keys,
                 )
             except Exception as e:
                 logger.warning(f"[DailyLoop] Diary: Claude ({self.profile.worker_tier}) agentic failed: {e}. Falling back to Gemini.")
@@ -1537,18 +1539,20 @@ class DailyLoopOrchestrator:
                         user_message=user_message,
                         tools=tools,
                         max_iterations=10,
-                    api_keys=self.api_keys,
+                        api_keys=self.api_keys,
                     )
                 except Exception as e2:
                     logger.error(f"[DailyLoop] Diary: Gemini fallback also failed: {e2}.")
         else:
+            gemini_model = LLMModels.GEMINI_3_1_PRO if self.profile.worker_tier == "gemini_pro" else None
             try:
                 await _diary_gemini_fallback(
                     system_prompt=system_prompt,
                     user_message=user_message,
                     tools=tools,
                     max_iterations=10,
-                api_keys=self.api_keys,
+                    api_keys=self.api_keys,
+                    model=gemini_model,
                 )
             except Exception as e:
                 logger.error(f"[DailyLoop] Diary: Gemini agentic failed: {e}.")
@@ -1831,6 +1835,7 @@ class DailyLoopOrchestrator:
                         current_mood=self.current_mood,
                         macro_context=self._build_macro_context()[:500],
                         voice_context=self._build_voice_context(),
+                        memory_context=self._build_memory_context(),
                     )
 
                     if plans and self.package.weekly_events_store:

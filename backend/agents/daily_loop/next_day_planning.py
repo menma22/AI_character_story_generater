@@ -24,6 +24,7 @@ from backend.models.memory import (
     DiaryEntry, MoodState, NextDayPlan,
     IntrospectionMemo, DayProcessingState, EventPackage,
 )
+from backend.agents.context_descriptions import wrap_context
 from backend.tools.llm_api import call_llm
 
 logger = logging.getLogger(__name__)
@@ -49,6 +50,7 @@ class NextDayPlanningAgent:
         current_mood: MoodState,
         macro_context: str,
         voice_context: str,
+        memory_context: str = "",
     ) -> list[NextDayPlan]:
         """
         Stage 1: 主人公AIが「明日やりたいこと」を3つ出力
@@ -97,7 +99,7 @@ class NextDayPlanningAgent:
                 f"【Day {day}の出来事】\n{event_summaries}\n\n"
                 f"【Day {day}の内省】\n{introspection.raw_text}\n\n"
                 f"【現在のムード】V={current_mood.valence:.1f} A={current_mood.arousal:.1f} D={current_mood.dominance:.1f}\n\n"
-                f"{wrap_context('短期記憶（最重要 — デイリーログ + key memory）', self._build_memory_context(), 'diary')}"
+                f"{wrap_context('短期記憶（最重要 — デイリーログ + key memory）', memory_context, 'diary')}"
                 f"明日やりたいことを3つ考えてください。"
             ),
             json_mode=True,
