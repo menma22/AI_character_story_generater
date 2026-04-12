@@ -80,23 +80,64 @@ async def get_cost():
 
 @app.get("/api/packages")
 async def list_packages():
-    """生成済み脚本パッケージ一覧"""
+    """生成済み脚本パッケージ一覧（完了・未完了の両方を含む）"""
     storage = AppConfig.STORAGE_DIR
     packages = []
     if storage.exists():
         for d in sorted(storage.iterdir(), reverse=True):
             if d.is_dir():
                 pkg_file = d / "package.json"
+                chk_file = d / "checkpoint.json"
+
+                # 完了パッケージ（package.json あり）
                 if pkg_file.exists():
                     try:
                         data = json.loads(pkg_file.read_text(encoding="utf-8"))
                         packages.append({
                             "name": d.name,
+                            "status": "complete",
+                            "checkpoint_phase": "complete",
                             "generated_at": data.get("metadata", {}).get("generated_at", ""),
                             "character_name": data.get("macro_profile", {}).get("basic_info", {}).get("name", "不明"),
                         })
                     except Exception:
-                        packages.append({"name": d.name, "error": "読み込みエラー"})
+                        packages.append({"name": d.name, "status": "complete", "error": "読み込みエラー"})
+
+                # 未完了パッケージ（checkpoint.json のみ）
+                elif chk_file.exists():
+                    try:
+                        chk_data = json.loads(chk_file.read_text(encoding="utf-8"))
+
+                        # チェックポイントフェーズを判定
+                        checkpoint_phase = "unknown"
+                        if chk_data.get("weekly_events_store"):
+                            checkpoint_phase = "phase_d"
+                        elif chk_data.get("autobiographical_episodes"):
+                            checkpoint_phase = "phase_a3"
+                        elif chk_data.get("micro_parameters"):
+                            checkpoint_phase = "phase_a2"
+                        elif chk_data.get("macro_profile"):
+                            checkpoint_phase = "phase_a1"
+                        elif chk_data.get("concept_package"):
+                            checkpoint_phase = "creative_director"
+
+                        # キャラクター名取得（未生成の場合は"未生成"）
+                        char_name = "未生成"
+                        if chk_data.get("macro_profile", {}).get("basic_info", {}).get("name"):
+                            char_name = chk_data["macro_profile"]["basic_info"]["name"]
+
+                        generated_at = chk_data.get("metadata", {}).get("generated_at", "")
+
+                        packages.append({
+                            "name": d.name,
+                            "status": "incomplete",
+                            "checkpoint_phase": checkpoint_phase,
+                            "generated_at": generated_at,
+                            "character_name": char_name,
+                        })
+                    except Exception:
+                        packages.append({"name": d.name, "status": "incomplete", "error": "チェックポイント読み込みエラー"})
+
     return {"packages": packages}
 
 

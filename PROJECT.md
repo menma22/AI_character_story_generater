@@ -208,6 +208,7 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 → ムードcarry-over(減衰+閾値リセット)
 
 ※ 全エージェントにマクロプロフィール・世界設定・周囲人物・経験DB・key memoryを同梱
+※ 統合エージェント・日記エージェントには所持品・能力・可能行動（CharacterCapabilities）も同梱（capabilities が存在する場合のみ）
 ※ エージェント出力はmarkdownパースせずraw textで次のエージェントへそのまま渡す
 ```
 
@@ -246,6 +247,7 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 | `MicroParameters` | 52パラメータ + 規範層 | A-2 | 15 Worker対応サブモデル(SchwartzValuesOutput等) |
 | `AutobiographicalEpisodes` | 自伝的エピソード（5-8個） | A-3 | McAdams 5カテゴリ + redemption bias対策 |
 | `WeeklyEventsStore` | 7日間イベント列（14-28件） | D | 2軸メタデータ(known/unknown x expectedness) |
+| `CharacterCapabilities` | 所持品・能力・可能行動（Phase D並列生成） | D | PossessedItem(name/description/always_carried/emotional_significance) × 5-10個、CharacterAbility(name/description/proficiency/origin) × 3-5個、AvailableAction(action/context/prerequisites) × 3-5個 |
 | `MoodState` | PAD 3次元ムード | 日次ループ | Peak-End Rule + carry-over |
 | `ShortTermMemoryDB` | 記憶（通常領域のみ、段階圧縮） | 日次ループ | LLM段階圧縮(400→200→80→20字) |
 | `KeyMemoryStore` | key memory（個別ファイル管理、7日間フル保持） | 日次ループ | `key_memories/day_01.json`形式で保存 |
@@ -588,6 +590,21 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
     - Day全体の合計行 (Day N 合計 | 合計入力 | 合計出力 | 合計コスト)
   - **設計原則**: 各生成物完成時に「これまでのコスト」がスナップショットで「これからのコスト」と分離でき、生成物→コストの対応関係を明確化
 
+### Stage 27: CharacterCapabilities（所持品・能力・可能行動）の追加
+
+**(a) 当初設計**: Phase D は WorldContext・SupportingCharacters の2タスクを並列生成するのみで、キャラクターが「実際に何を持っているか」「何ができるか」「何をとれるか」という具体的な情報を一切生成・保持していなかった。行動決定エージェント・日記生成エージェントは、マクロプロフィールや自伝的エピソードを参照して行動を決定していたが、所持品・道具・スキルへの参照は不可能だった。
+
+**(b) 変更・根拠**: 行動決定の具体性を高めるためには、キャラクターが実際に手元に持つ道具・身につけているスキル・取れる行動の選択肢をエージェントが参照できる必要があった。例えば「手帳を持ち歩く記者キャラ」が「その場でメモをとる」という具体的な行動を取るには、所持品・能力の参照が不可欠。また、情景描写でも所持品が自然に登場することで描写の密度が増す。
+
+**(c) 採用プラクティス**:
+- **4モデル追加** (`backend/models/character.py`): `PossessedItem`（所持品）、`CharacterAbility`（能力）、`AvailableAction`（可能行動）、`CharacterCapabilities`（3つを統合するコンテナ）。`CharacterPackage.character_capabilities: Optional[CharacterCapabilities]` として後方互換フィールドを追加。
+- **Phase D 並列生成追加** (`phase_d/orchestrator.py`): Step 1-2 の並列 gather に `caps_task`（`CHARACTER_CAPABILITIES_PROMPT`、json_mode=True）を3つ目として追加。結果を `PossessedItem/CharacterAbility/AvailableAction` へパースし `self.character_capabilities` に格納。`upstream_context`（WeeklyEventWriter へのコンテキスト）にも capabilities テキストを追加し、イベント生成時に所持品・能力を参照可能に。
+- **Master Orchestrator保存** (`master_orchestrator/orchestrator.py`): `_execute_phase_with_retry` 内で `self._last_orch = orch` を設定し、Phase D 完了後に `self.package.character_capabilities = self._last_orch.character_capabilities` でパッケージに格納。
+- **Daily Loop への投入** (`daily_loop/orchestrator.py`): `_build_capabilities_context()` メソッドを新設（所持品・能力・行動をテキスト化）。`_integration()` の user_message に `wrap_context('所持品・能力', ..., 'integration')` を追加、`_generate_diary()` の user_message にも `wrap_context('所持品・能力', ..., 'diary')` を追加（両方とも capabilities が存在しない場合はスキップ）。
+- **MD 出力** (`md_storage.py`): `save_character_profile()` に「## 4.5. 所持品・能力・可能行動」セクションを追加（Episodes と Events の間）。所持品・能力・行動の3サブセクションを個別に出力。
+- **コンテキスト説明追加** (`context_descriptions.py`): 「所持品・能力」キーに default/integration/diary の3ロール説明（what/why/how）を追加。
+- **後方互換**: `character_capabilities: Optional[CharacterCapabilities] = None` のため、既存チェックポイントをロードしても None で正常動作。
+
 ### Stage 24: Opusエージェントのフォールバック先をGemini 3.1 Proに更新
 
 **(a) 当初設計**: `_call_llm_once()` で `tier="opus"` または `tier="sonnet"` のどちらでも失敗時に同じ `_call_gemini_with_flash_fallback()` ヘルパーを呼び出す。このヘルパーは **常に** `LLMModels.GEMINI_2_5_PRO` でGeminiを試行していた。つまり、高品質な Opus エージェントが失敗した場合も、低コストな Sonnet エージェントが失敗した場合も、同じ Gemini 2.5 Pro へフォールバックしていた。
@@ -712,6 +729,7 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 | Stage 24: Opusエージェントのフォールバック先をGemini 3.1 Proに更新 | ✅ 実装完了 | `config.py`に`GEMINI_3_1_PRO`定数追加、`_call_gemini_with_flash_fallback()`に`gemini_model`パラメータ追加、Opus失敗時のみ`GEMINI_3_1_PRO`を指定、Sonnet/Gemini tierはGemini 2.5 Pro維持 |
 | Stage 25: APIキーの動的操作・伝播システム | ✅ 実装完了 | 全エージェント層（Master/DailyLoop/Workers/DailyAgents）への動的プロパゲーションとフロントエンドUIの統合を完了。 |
 | Stage 26: Phase A-2型ヒント欠落バグ修正 | ✅ 実装完了 | `backend/agents/phase_a2/orchestrator.py`で`Optional`型ヒントが使用されているのに`typing.Optional`がインポートされていなかった問題を修正。`from typing import Optional`追加。 |
+| Stage 27: CharacterCapabilities（所持品・能力・可能行動）追加 | ✅ 実装完了 | 4モデル新設（PossessedItem/CharacterAbility/AvailableAction/CharacterCapabilities）、Phase D に caps_task 並列追加、Master Orchestrator で package に格納、Daily Loop の統合・日記エージェントに投入、MD に 4.5 セクション追加 |
 
 ### 次のアクション
 

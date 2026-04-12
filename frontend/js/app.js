@@ -420,30 +420,76 @@ function switchTab(tabName) {
     document.getElementById(`tab-${tabName}`)?.classList.add('active');
 }
 
+// ─── チェックポイントフェーズのラベル ────────────
+
+const PHASE_LABELS = {
+    "creative_director": "コンセプト生成中",
+    "phase_a1": "マクロプロフィール生成中",
+    "phase_a2": "ミクロパラメータ生成中",
+    "phase_a3": "エピソード生成中",
+    "phase_d": "イベント列生成中",
+    "complete": "生成完了",
+    "unknown": "不明",
+};
+
 // ─── 履歴 ──────────────────────────────────────────────────
 
 async function loadHistory() {
     const list = document.getElementById('history-list');
     if (!list) return;
-    
+
     try {
         const res = await fetch('/api/packages');
         const data = await res.json();
-        
+
         if (data.packages?.length) {
-            list.innerHTML = data.packages.map(pkg => `
-                <div class="history-item" onclick="loadPackage('${pkg.name}')">
-                    <div>
-                        <strong>${pkg.character_name || pkg.name}</strong>
-                        <div style="font-size:0.8rem; color:var(--text-muted)">${pkg.generated_at || ''}</div>
+            // 完了と未完了を分離
+            const complete = data.packages.filter(p => p.status === 'complete');
+            const incomplete = data.packages.filter(p => p.status === 'incomplete');
+
+            let html = '';
+
+            // 未完了パッケージセクション
+            if (incomplete.length > 0) {
+                html += '<div style="margin-bottom: 30px;"><h3 style="margin-bottom: 15px; color: var(--text-muted); font-size: 0.9rem; text-transform: uppercase;">生成中/中断中</h3>';
+                html += incomplete.map(pkg => {
+                    const phaseLabel = PHASE_LABELS[pkg.checkpoint_phase] || pkg.checkpoint_phase;
+                    return `
+                        <div class="history-item history-item-incomplete" style="display: flex; justify-content: space-between; align-items: center;">
+                            <div style="flex: 1;">
+                                <strong>${pkg.character_name || pkg.name}</strong>
+                                <div style="font-size:0.8rem; color:var(--text-muted)">
+                                    ${pkg.generated_at || ''} — <span class="status-badge incomplete">${phaseLabel}</span>
+                                </div>
+                            </div>
+                            <button class="btn-resume" onclick="resumeFromCheckpoint('${pkg.name}', '${pkg.checkpoint_phase}')">再開</button>
+                        </div>
+                    `;
+                }).join('');
+                html += '</div>';
+            }
+
+            // 完了パッケージセクション
+            if (complete.length > 0) {
+                html += '<div><h3 style="margin-bottom: 15px; color: var(--text-muted); font-size: 0.9rem; text-transform: uppercase;">生成完了</h3>';
+                html += complete.map(pkg => `
+                    <div class="history-item" onclick="loadPackage('${pkg.name}')">
+                        <div>
+                            <strong>${pkg.character_name || pkg.name}</strong>
+                            <div style="font-size:0.8rem; color:var(--text-muted)">${pkg.generated_at || ''}</div>
+                        </div>
+                        <span style="color:var(--text-muted)">→</span>
                     </div>
-                    <span style="color:var(--text-muted)">→</span>
-                </div>
-            `).join('');
+                `).join('');
+                html += '</div>';
+            }
+
+            list.innerHTML = html;
         } else {
             list.innerHTML = '<p style="color:var(--text-muted); text-align:center; padding:40px">まだパッケージがありません</p>';
         }
     } catch (e) {
+        console.error('History load error:', e);
         list.innerHTML = '<p style="color:var(--accent-error); text-align:center">読み込みエラー</p>';
     }
 }
@@ -458,6 +504,24 @@ async function loadPackage(name) {
     } catch (e) {
         console.error('Package load error:', e);
     }
+}
+
+async function resumeFromCheckpoint(name, phase) {
+    // チェックポイントから再開
+    const apiKeys = getApiKeys();
+
+    // 生成画面へ移動
+    showScreen('generation-screen');
+    resetGenerationUI();
+
+    // WebSocket で resume_generation を送信
+    ws.send({
+        action: "resume_generation",
+        character_name: name,
+        profile: currentProfile || "draft",
+        evaluators_override: {},
+        api_keys: apiKeys
+    });
 }
 
 // ─── ダウンロード ────────────────────────────────────────

@@ -1197,3 +1197,68 @@ body {
     box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
     background: rgba(0, 0, 0, 0.3);
 }
+
+/* ─── チェックポイント再開機能 ────────────────────────────── */
+
+.status-badge {
+    display: inline-block;
+    padding: 0.3rem 0.8rem;
+    border-radius: 12px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+}
+
+.status-badge.incomplete {
+    background: linear-gradient(135deg, rgba(217, 119, 6, 0.15) 0%, rgba(249, 115, 22, 0.1) 100%);
+    color: #d97706;
+    border: 1px solid rgba(217, 119, 6, 0.3);
+}
+
+.status-badge.complete {
+    background: linear-gradient(135deg, rgba(34, 197, 94, 0.15) 0%, rgba(74, 222, 128, 0.1) 100%);
+    color: #22c55e;
+    border: 1px solid rgba(34, 197, 94, 0.3);
+}
+
+.history-item-incomplete {
+    border-left: 3px solid var(--accent-warning);
+}
+
+.btn-resume {
+    background: linear-gradient(135deg, var(--accent-warning), #f97316);
+    color: white;
+    border: none;
+    padding: 0.6rem 1.2rem;
+    border-radius: var(--radius-md);
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    white-space: nowrap;
+    margin-left: 10px;
+}
+
+.btn-resume:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 10px 20px rgba(217, 119, 6, 0.2);
+}
+
+.btn-resume:active {
+    transform: translateY(0);
+}
+
+@media (max-width: 640px) {
+    .history-item-incomplete {
+        flex-direction: column;
+        align-items: flex-start !important;
+    }
+
+    .btn-resume {
+        margin-left: 0;
+        margin-top: 10px;
+        width: 100%;
+    }
+}
