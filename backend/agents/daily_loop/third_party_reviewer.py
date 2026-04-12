@@ -30,10 +30,12 @@ class ThirdPartyReviewer:
         macro_profile: Optional[MacroProfile] = None,
         ws_manager=None,
         tier: str = "gemini",
+        api_keys: Optional[dict] = None,
     ):
         self.macro_profile = macro_profile
         self.ws = ws_manager
         self.tier = tier
+        self.api_keys = api_keys
 
     async def _notify(self, content: str, status: str = "thinking"):
         if self.ws:
@@ -140,6 +142,7 @@ class ThirdPartyReviewer:
 issuesには「何が問題で、どう直すべきか」を日記執筆者が即座に修正できるよう具体的に書いてください。""",
             user_message=user_message,
             json_mode=True,
+            api_keys=self.api_keys,
         )
 
         data = result["content"] if isinstance(result["content"], dict) else {}

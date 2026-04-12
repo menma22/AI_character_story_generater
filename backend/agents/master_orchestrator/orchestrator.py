@@ -19,12 +19,13 @@ logger = logging.getLogger(__name__)
 class MasterOrchestrator:
     """Tier 0: Master Orchestrator"""
     
-    def __init__(self, profile: EvaluationProfile, ws_manager=None, existing_package: Optional[CharacterPackage] = None, session_id: Optional[str] = None):
+    def __init__(self, profile: EvaluationProfile, ws_manager=None, existing_package: Optional[CharacterPackage] = None, session_id: Optional[str] = None, api_keys: Optional[dict] = None):
         self.profile = profile
         self.ws = ws_manager
         self.package = existing_package or CharacterPackage()
         from datetime import datetime
         self.session_id = session_id or f"SID_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        self.api_keys = api_keys
     
     async def _notify(self, content: str, status: str = "thinking"):
         if self.ws:
@@ -71,7 +72,7 @@ class MasterOrchestrator:
         await self._checkpoint()  # セッション開始時にディレクトリと基本パッケージを保存
         
         from backend.agents.evaluators.pipeline import EvaluatorPipeline
-        evaluator = EvaluatorPipeline(profile=self.profile, ws_manager=self.ws)
+        evaluator = EvaluatorPipeline(profile=self.profile, ws_manager=self.ws, api_keys=self.api_keys)
         
         # 評価結果の集計用
         all_eval_results = []
@@ -91,7 +92,9 @@ class MasterOrchestrator:
                         await self._notify(f"{phase_name}: 再生成ループ {iteration}/{max_iter} を開始", "warning")
                     
                     # Phase実行
-                    orch = orch_class(**orch_kwargs)
+                    # orch_kwargs に api_keys を注入
+                    full_kwargs = {**orch_kwargs, "api_keys": self.api_keys}
+                    orch = orch_class(**full_kwargs)
                     result = await orch.run()
                     
                     # Evaluator実行
@@ -128,7 +131,7 @@ class MasterOrchestrator:
         await self._checkpoint() # 直前に保存
         if not self.package.concept_package:
             await self._progress("creative_director", 0.0, "Creative Director起動中...")
-            director = CreativeDirector(profile=self.profile, ws_manager=self.ws)
+            director = CreativeDirector(profile=self.profile, ws_manager=self.ws, api_keys=self.api_keys)
             concept = await director.run(theme=theme)
             self.package.concept_package = concept
             await self._checkpoint()

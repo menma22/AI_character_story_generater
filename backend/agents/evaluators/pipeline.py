@@ -218,7 +218,7 @@ class ConsistencyChecker:
     
     @staticmethod
     async def check(concept: ConceptPackage, macro: MacroProfile, 
-                    micro: MicroParameters, ws_manager=None) -> ValidationResult:
+                    micro: MicroParameters, ws_manager=None, api_keys: Optional[dict] = None) -> ValidationResult:
         if ws_manager:
             await ws_manager.send_agent_thought("[ConsistencyChecker]", "整合性チェック中...", "thinking")
         
@@ -243,6 +243,7 @@ concept_package、macro_profile、micro_parametersの間に矛盾がないかチ
                 f"ideal_self: {micro.ideal_self}\nought_self: {micro.ought_self}"
             ),
             json_mode=True,
+            api_keys=api_keys,
         )
         
         data = result["content"] if isinstance(result["content"], dict) else {}
@@ -270,7 +271,7 @@ class BiasAuditor:
     """Redemption bias検出（LLM、Phase A-3向け）"""
     
     @staticmethod
-    async def audit(episodes: AutobiographicalEpisodes, ws_manager=None) -> ValidationResult:
+    async def audit(episodes: AutobiographicalEpisodes, ws_manager=None, api_keys: Optional[dict] = None) -> ValidationResult:
         if ws_manager:
             await ws_manager.send_agent_thought("[BiasAuditor]", "Redemption bias検出中...", "thinking")
         
@@ -298,6 +299,7 @@ class BiasAuditor:
 {"passed": true/false, "bias_issues": ["問題点1"], "category_distribution": {"redemption": 0, "contamination": 0, "ambivalent": 0, "other": 0}}""",
             user_message=f"エピソード群:\n{ep_summary}",
             json_mode=True,
+            api_keys=api_keys,
         )
         
         data = result["content"] if isinstance(result["content"], dict) else {}
@@ -368,7 +370,7 @@ class InterestingnessEvaluator:
     
     @staticmethod
     async def evaluate(concept: ConceptPackage, macro: MacroProfile,
-                       ws_manager=None) -> ValidationResult:
+                       ws_manager=None, api_keys: Optional[dict] = None) -> ValidationResult:
         if ws_manager:
             await ws_manager.send_agent_thought("[InterestingnessEvaluator]", "面白さ評価中...", "thinking")
         
@@ -392,6 +394,7 @@ class InterestingnessEvaluator:
                 f"occupation: {macro.basic_info.occupation}"
             ),
             json_mode=True,
+            api_keys=api_keys,
         )
         
         data = result["content"] if isinstance(result["content"], dict) else {}
@@ -467,9 +470,10 @@ class NarrativeConnectionAuditor:
 class EvaluatorPipeline:
     """プロファイルに基づいてEvaluatorを実行するパイプライン"""
     
-    def __init__(self, profile: EvaluationProfile, ws_manager=None):
+    def __init__(self, profile: EvaluationProfile, ws_manager=None, api_keys: Optional[dict] = None):
         self.profile = profile
         self.ws = ws_manager
+        self.api_keys = api_keys
     
     async def evaluate_phase_a1(self, result) -> list[ValidationResult]:
         results = []
@@ -494,7 +498,7 @@ class EvaluatorPipeline:
         
         # BiasAuditor（Fast以上）
         if self.profile.bias_auditor_enabled:
-            results.append(await BiasAuditor.audit(episodes, self.ws))
+            results.append(await BiasAuditor.audit(episodes, self.ws, api_keys=self.api_keys))
         
         return results
     
@@ -531,11 +535,11 @@ class EvaluatorPipeline:
         
         # ConsistencyChecker（Standard以上）
         if self.profile.consistency_checker_enabled:
-            all_results.append(await ConsistencyChecker.check(concept, macro, micro, self.ws))
+            all_results.append(await ConsistencyChecker.check(concept, macro, micro, self.ws, api_keys=self.api_keys))
         
         # InterestingnessEvaluator（High Quality）
         if self.profile.interestingness_evaluator_enabled:
-            all_results.append(await InterestingnessEvaluator.evaluate(concept, macro, self.ws))
+            all_results.append(await InterestingnessEvaluator.evaluate(concept, macro, self.ws, api_keys=self.api_keys))
         
         passed_count = sum(1 for r in all_results if r.passed)
         total = len(all_results)

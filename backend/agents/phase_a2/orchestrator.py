@@ -350,12 +350,14 @@ class PhaseA2Orchestrator:
         profile: EvaluationProfile,
         ws_manager=None,
         regeneration_context: str | None = None,
+        api_keys: Optional[dict] = None,
     ):
         self.concept = concept
         self.macro = macro_profile
         self.profile = profile
         self.ws = ws_manager
         self.regeneration_context = regeneration_context
+        self.api_keys = api_keys
 
     # ─── ユーティリティ ─────────────────────────────────────────
 
@@ -409,6 +411,7 @@ class PhaseA2Orchestrator:
             ParameterList,
             self.ws,
             tier=self.profile.worker_tier,
+            api_keys=self.api_keys,
         )
 
         await self._notify(f"{worker_name}: {label} 完了（{len(result.parameters)}個）", "complete")
@@ -430,6 +433,7 @@ class PhaseA2Orchestrator:
             SchwartzValuesOutput,
             self.ws,
             tier=self.profile.worker_tier,
+            api_keys=self.api_keys,
         )
 
         await self._notify("ValuesWorker: Schwartz 19価値 完了", "complete")
@@ -449,6 +453,7 @@ class PhaseA2Orchestrator:
             MoralFoundationsOutput,
             self.ws,
             tier=self.profile.worker_tier,
+            api_keys=self.api_keys,
         )
 
         await self._notify("MFTWorker: 道徳基盤 完了", "complete")
@@ -469,6 +474,7 @@ class PhaseA2Orchestrator:
             IdealOughtSelfOutput,
             self.ws,
             tier=self.profile.worker_tier,
+            api_keys=self.api_keys,
         )
 
         await self._notify("IdealOughtSelfWorker: 理想自己・義務自己 完了", "complete")
@@ -489,6 +495,7 @@ class PhaseA2Orchestrator:
             GoalsDreamsOutput,
             self.ws,
             tier=self.profile.worker_tier,
+            api_keys=self.api_keys,
         )
 
         await self._notify("GoalsDreamsWorker: 目標 完了", "complete")

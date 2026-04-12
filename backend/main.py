@@ -148,21 +148,24 @@ async def handle_ws_message(data: dict, websocket: WebSocket):
         profile_name = data.get("profile", AppConfig.DEFAULT_PROFILE)
         theme = data.get("theme", None)
         evaluators_override = data.get("evaluators_override", {})
-        asyncio.create_task(run_character_generation(profile_name, theme, evaluators_override))
+        api_keys = data.get("api_keys", {})
+        asyncio.create_task(run_character_generation(profile_name, theme, evaluators_override, api_keys))
     
     elif action == "resume_generation":
         # チェックポイントから再開
         character_name = data.get("character_name", "")
         profile_name = data.get("profile", AppConfig.DEFAULT_PROFILE)
         evaluators_override = data.get("evaluators_override", {})
-        asyncio.create_task(resume_character_generation(character_name, profile_name, evaluators_override))
+        api_keys = data.get("api_keys", {})
+        asyncio.create_task(resume_character_generation(character_name, profile_name, evaluators_override, api_keys))
     
     elif action == "generate_diary":
         # 日記生成開始
         package_name = data.get("package_name", "")
         days = data.get("days", 7)
         profile_name = data.get("profile", AppConfig.DEFAULT_PROFILE)
-        task = asyncio.create_task(run_diary_generation(package_name, days, profile_name))
+        api_keys = data.get("api_keys", {})
+        task = asyncio.create_task(run_diary_generation(package_name, days, profile_name, api_keys))
         ws_active_tasks[id(websocket)] = task
         
         # 完了時に辞書から削除
@@ -182,7 +185,8 @@ async def handle_ws_message(data: dict, websocket: WebSocket):
         instructions = data.get("instructions", "")
         cascade = data.get("cascade", False)
         profile_name = data.get("profile", AppConfig.DEFAULT_PROFILE)
-        asyncio.create_task(run_artifact_regeneration(package_name, artifact_name, instructions, cascade, profile_name))
+        api_keys = data.get("api_keys", {})
+        asyncio.create_task(run_artifact_regeneration(package_name, artifact_name, instructions, cascade, profile_name, api_keys))
 
     elif action == "save_artifact_edit":
         package_name = data.get("package_name", "")
@@ -203,7 +207,7 @@ async def handle_ws_message(data: dict, websocket: WebSocket):
         })
 
 
-async def run_character_generation(profile_name: str, theme: str = None, evaluators_override: dict = None):
+async def run_character_generation(profile_name: str, theme: str = None, evaluators_override: dict = None, api_keys: dict = None):
     """キャラクター生成パイプライン全体を実行"""
     from backend.agents.master_orchestrator.orchestrator import MasterOrchestrator
     import dataclasses
@@ -224,14 +228,14 @@ async def run_character_generation(profile_name: str, theme: str = None, evaluat
     await manager.send_agent_thought("System", f"Session ID: {session_id}", "info")
     
     try:
-        orchestrator = MasterOrchestrator(profile=target_profile, ws_manager=manager, session_id=session_id)
+        orchestrator = MasterOrchestrator(profile=target_profile, ws_manager=manager, session_id=session_id, api_keys=api_keys)
         package = await orchestrator.run(theme=theme)
         await _finalize_character_generation(package)
     except Exception as e:
         logger.error(f"Character generation failed: {e}", exc_info=True)
         await manager.send_error(f"キャラクター生成エラー: {str(e)}")
 
-async def resume_character_generation(character_name: str, profile_name: str, evaluators_override: dict = None):
+async def resume_character_generation(character_name: str, profile_name: str, evaluators_override: dict = None, api_keys: dict = None):
     """チェックポイントから再開"""
     from backend.agents.master_orchestrator.orchestrator import MasterOrchestrator
     from backend.storage.md_storage import load_checkpoint
@@ -252,7 +256,7 @@ async def resume_character_generation(character_name: str, profile_name: str, ev
             if hasattr(base_profile, k)
         })
         
-    orchestrator = MasterOrchestrator(profile=target_profile, ws_manager=manager, existing_package=package, session_id=character_name) # character_name が事実上のSession ID
+    orchestrator = MasterOrchestrator(profile=target_profile, ws_manager=manager, existing_package=package, session_id=character_name, api_keys=api_keys) # character_name が事実上のSession ID
     try:
         package = await orchestrator.run()
         await _finalize_character_generation(package)
@@ -286,7 +290,7 @@ async def _finalize_character_generation(package):
     })
 
 
-async def run_diary_generation(package_name: str, days: int = 7, profile_name: str = None):
+async def run_diary_generation(package_name: str, days: int = 7, profile_name: str = None, api_keys: dict = None):
     """日記生成パイプライン全体を実行"""
     from backend.agents.daily_loop.orchestrator import DailyLoopOrchestrator
     
@@ -303,7 +307,7 @@ async def run_diary_generation(package_name: str, days: int = 7, profile_name: s
         await manager.send_progress("diary_init", 0.0, "日記生成を開始します...")
         
         target_profile = PROFILES.get(profile_name, PROFILES["draft"])
-        orchestrator = DailyLoopOrchestrator(package=package, profile=target_profile, ws_manager=manager)
+        orchestrator = DailyLoopOrchestrator(package=package, profile=target_profile, ws_manager=manager, api_keys=api_keys)
         results = await orchestrator.run(days=days)
 
         # 日記を保存
@@ -331,7 +335,7 @@ async def run_diary_generation(package_name: str, days: int = 7, profile_name: s
 
 # ─── アーティファクト再生成・編集 ─────────────────────────────
 
-async def run_artifact_regeneration(package_name: str, artifact_name: str, instructions: str, cascade: bool, profile_name: str):
+async def run_artifact_regeneration(package_name: str, artifact_name: str, instructions: str, cascade: bool, profile_name: str, api_keys: dict = None):
     """特定アーティファクトを再生成する"""
     from backend.models.character import CharacterPackage
     from backend.regeneration import regenerate_artifact, get_downstream_artifacts, ARTIFACT_TO_PHASE, ARTIFACT_LABELS
@@ -356,7 +360,7 @@ async def run_artifact_regeneration(package_name: str, artifact_name: str, instr
         await manager.send_progress("regeneration", 0.0, f"「{label}」を再生成中...")
 
         # メインアーティファクトの再生成
-        package = await regenerate_artifact(package, artifact_name, instructions, base_profile, manager)
+        package = await regenerate_artifact(package, artifact_name, instructions, base_profile, manager, api_keys=api_keys)
 
         # カスケード再生成
         regenerated = [artifact_name]

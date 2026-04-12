@@ -28,11 +28,13 @@ class DiarySelfCritic:
         macro_profile: Optional[MacroProfile] = None,
         ws_manager=None,
         tier: str = "gemini",
+        api_keys: Optional[dict] = None,
     ):
         self.voice = voice_fingerprint
         self.macro_profile = macro_profile
         self.ws = ws_manager
         self.tier = tier
+        self.api_keys = api_keys
 
     async def _notify(self, content: str, status: str = "thinking"):
         if self.ws:
@@ -106,6 +108,7 @@ class DiarySelfCritic:
 issuesには「何が問題で、どう直すべきか」を主エージェントが即座に修正できるよう明確に書いてください。""",
             user_message=f"【日記ドラフト（Day {diary.day}）】\n{diary.content}",
             json_mode=True,
+            api_keys=self.api_keys,
         )
 
         # レスポンスのパース

@@ -6,6 +6,8 @@
 
 ## パート1: アプリシステム概要
 
+![システムアーキテクチャ図 - APIキー伝播と多層エージェント構造](file:///C:/Users/mahim/.gemini/antigravity/brain/dc6680ae-7ab0-4006-b618-70009f5296fb/system_architecture_diagram_v23_1775860000000_png_1775979031686.png)
+
 ### ディレクトリ・ファイル構成
 
 ```
@@ -705,9 +707,9 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 | Stage 20: セーブポイント二重保存・中断再開確実化 | ✅ 実装完了 | `_checkpoint()`をSID名+キャラ名の二重保存に変更、DailyLoopでの各Day完了後package.json更新、run_diary_generation完了後package.json最終保存 |
 | Stage 21: Gemini 2.5 Proクォータ超過時の2段階フォールバック | ✅ 実装完了 | `LLMModels.GEMINI_2_0_FLASH`追加、`_call_gemini_with_flash_fallback()`で2.5 Pro→2.0 Flash自動切り替え（クォータ超過時のみ）、Claude失敗時フォールバックにも適用 |
 | Stage 22: LinguisticExpression全フィールド活用・詳細バリデーション | ✅ 実装完了 | `_build_voice_context()`を完全拡張（二人称、絵文字、自問頻度、比喩頻度を追加）、`LinguisticExpressionValidator`新設、日記agenticループに`validate_linguistic_expression`ツール追加（check_diary_rules→validate_linguistic_expression→third_party_review の3段階ゲート化） |
-| Stage 23: APIキーの動的操作・伝播システム | ✅ 実装完了 | フロントエンドからのAPIキー(OpenAI, Anthropic, Google AI)入力・保存・送信、WebSocket経由の動的伝播、バックエンド全エージェントへの api_keys 注入、llm_api.py での動的キー優先ロジックの確立 |
 | Stage 23: 各ステップごとのトークン消費コスト記録システム | ✅ 実装完了 | `TokenTracker.snapshot()`と`cost_since()`メソッド追加、`DayProcessingState.cost_records`フィールド追加、DailyLoopOrchestratorで各ステップ前後のスナップショット取得、daily_logs末尾にコスト記録テーブル出力 |
 | Stage 24: Opusエージェントのフォールバック先をGemini 3.1 Proに更新 | ✅ 実装完了 | `config.py`に`GEMINI_3_1_PRO`定数追加、`_call_gemini_with_flash_fallback()`に`gemini_model`パラメータ追加、Opus失敗時のみ`GEMINI_3_1_PRO`を指定、Sonnet/Gemini tierはGemini 2.5 Pro維持 |
+| Stage 25: APIキーの動的操作・伝播システム | ✅ 実装完了 | フロントエンドからのAPIキー(OpenAI, Anthropic, Google AI)入力・保存・送信、WebSocket経由の動的伝播、バックエンド全エージェントへの api_keys 注入、llm_api.py での動的キー優先ロジックの確立 |
 
 ### 次のアクション
 

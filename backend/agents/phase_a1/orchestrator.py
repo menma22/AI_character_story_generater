@@ -38,6 +38,7 @@ async def run_worker(
     user_message: str,
     ws_manager=None,
     tier: str = "gemini",
+    api_keys: Optional[dict] = None,
 ) -> dict:
     """共通Worker呼び出し"""
     if ws_manager:
@@ -48,6 +49,7 @@ async def run_worker(
         system_prompt=system_prompt,
         user_message=user_message,
         json_mode=True,
+        api_keys=api_keys,
     )
     
     data = result["content"] if isinstance(result["content"], dict) else {}
@@ -266,11 +268,13 @@ class PhaseA1Orchestrator:
         profile: EvaluationProfile,
         ws_manager=None,
         regeneration_context: str | None = None,
+        api_keys: Optional[dict] = None,
     ):
         self.concept = concept
         self.profile = profile
         self.ws = ws_manager
         self.regeneration_context = regeneration_context
+        self.api_keys = api_keys
     
     async def _notify(self, content: str, status: str = "thinking"):
         if self.ws:
@@ -295,6 +299,7 @@ class PhaseA1Orchestrator:
             BasicInfo,
             self.ws,
             tier=self.profile.worker_tier,
+            api_keys=self.api_keys,
         )
 
         basic_json = json.dumps(basic_info.model_dump(mode="json"), ensure_ascii=False)
@@ -306,15 +311,15 @@ class PhaseA1Orchestrator:
 
         results = await asyncio.gather(
             run_worker_with_validation("SocialPositionWorker", SOCIAL_POSITION_PROMPT,
-                       step2_context, SocialPosition, self.ws, tier=self.profile.worker_tier),
+                       step2_context, SocialPosition, self.ws, tier=self.profile.worker_tier, api_keys=self.api_keys),
             run_worker_with_validation("FamilyWorker", FAMILY_PROMPT,
-                       step2_context, FamilyAndIntimacy, self.ws, tier=self.profile.worker_tier),
+                       step2_context, FamilyAndIntimacy, self.ws, tier=self.profile.worker_tier, api_keys=self.api_keys),
             run_worker_with_validation("LifestyleWorker", LIFESTYLE_PROMPT,
-                       step2_context, CurrentLifeOutline, self.ws, tier=self.profile.worker_tier),
+                       step2_context, CurrentLifeOutline, self.ws, tier=self.profile.worker_tier, api_keys=self.api_keys),
             run_worker_with_validation("DreamWorker", DREAM_PROMPT,
-                       step2_context, DreamTimeline, self.ws, tier=self.profile.worker_tier),
+                       step2_context, DreamTimeline, self.ws, tier=self.profile.worker_tier, api_keys=self.api_keys),
             run_worker_with_validation("ValuesCoreWorker", VALUES_CORE_PROMPT,
-                       step2_context, ValuesCore, self.ws, tier=self.profile.worker_tier),
+                       step2_context, ValuesCore, self.ws, tier=self.profile.worker_tier, api_keys=self.api_keys),
         )
 
         social_obj, family_obj, lifestyle_obj, dream_obj, values_obj = results
@@ -327,6 +332,7 @@ class PhaseA1Orchestrator:
             Secret,
             self.ws,
             tier=self.profile.worker_tier,
+            api_keys=self.api_keys,
         )
 
         # Step 4: RelationshipNetwork（Family依存）
@@ -337,6 +343,7 @@ class PhaseA1Orchestrator:
             RelationshipNetwork,
             self.ws,
             tier=self.profile.worker_tier,
+            api_keys=self.api_keys,
         )
 
         # Step 5: LinguisticExpression（全Worker結果を踏まえた言語的表現方法の生成）
@@ -359,6 +366,7 @@ class PhaseA1Orchestrator:
             LinguisticExpression,
             self.ws,
             tier=self.profile.worker_tier,
+            api_keys=self.api_keys,
         )
 
         # Step 6: 全情報を統合したMarkdownプロセの生成 (ハイブリッド化)
@@ -367,7 +375,8 @@ class PhaseA1Orchestrator:
             tier=self.profile.worker_tier,
             system_prompt=SUMMARY_PROMPT,
             user_message=f"これまでの生成結果:\n{json.dumps(basic_info.model_dump(), ensure_ascii=False)}\n{json.dumps(family_obj.model_dump(), ensure_ascii=False)}\n{json.dumps(lifestyle_obj.model_dump(), ensure_ascii=False)}\n{json.dumps(dream_obj.model_dump(), ensure_ascii=False)}\n{json.dumps(ling_expr.speech_characteristics.concrete_features.model_dump(), ensure_ascii=False)}\n{json.dumps(values_obj.model_dump(), ensure_ascii=False)}\n{json.dumps(secret_obj.model_dump(), ensure_ascii=False)}",
-            json_mode=False
+            json_mode=False,
+            api_keys=self.api_keys,
         )
 
         # MacroProfile構築（voice_fingerprintは後方互換のためconcrete_featuresからコピー）

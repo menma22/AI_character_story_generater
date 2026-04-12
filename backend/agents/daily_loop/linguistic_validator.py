@@ -15,8 +15,9 @@ logger = logging.getLogger(__name__)
 class LinguisticExpressionValidator:
     """言語表現の守られ具合を検証するAI"""
 
-    def __init__(self, linguistic_expression: LinguisticExpression):
+    def __init__(self, linguistic_expression: LinguisticExpression, api_keys: Optional[dict] = None):
         self.le = linguistic_expression
+        self.api_keys = api_keys
 
     async def validate(self, diary: DiaryEntry, mood: MoodState) -> dict:
         """
@@ -90,6 +91,7 @@ V={mood.valence:.1f} A={mood.arousal:.1f} D={mood.dominance:.1f}
             system_prompt=system_prompt,
             user_message=user_message,
             json_mode=True,
+            api_keys=self.api_keys,
         )
 
         data = result["content"] if isinstance(result["content"], dict) else {}

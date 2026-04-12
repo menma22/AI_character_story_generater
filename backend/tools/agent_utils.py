@@ -44,7 +44,8 @@ async def run_worker_with_validation(
     schema_model: Type[BaseModel],
     ws_manager=None,
     tier: str = "gemini",
-    max_retries: int = 3
+    max_retries: int = 3,
+    api_keys: Optional[dict] = None
 ) -> Any:
     """
     バリデーション付きWorker呼び出し。
@@ -67,6 +68,7 @@ async def run_worker_with_validation(
             user_message=current_user_message,
             max_tokens=8000,
             json_mode=True,
+            api_keys=api_keys
         )
         
         data = result["content"] if isinstance(result["content"], dict) else {}

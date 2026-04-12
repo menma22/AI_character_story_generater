@@ -20,10 +20,11 @@ logger = logging.getLogger(__name__)
 class BaseChecker:
     """チェッカー基底クラス"""
 
-    def __init__(self, checker_type: str, ws_manager=None, tier: str = "gemini"):
+    def __init__(self, checker_type: str, ws_manager=None, tier: str = "gemini", api_keys: Optional[dict] = None):
         self.checker_type = checker_type
         self.ws = ws_manager
         self.tier = tier
+        self.api_keys = api_keys
 
     async def _notify(self, content: str, status: str = "thinking"):
         if self.ws:
@@ -44,8 +45,8 @@ class ProfileChecker(BaseChecker):
     - 日常ルーティン、趣味、習慣
     """
 
-    def __init__(self, ws_manager=None, tier: str = "gemini"):
-        super().__init__("プロフィール", ws_manager, tier)
+    def __init__(self, ws_manager=None, tier: str = "gemini", api_keys: Optional[dict] = None):
+        super().__init__("プロフィール", ws_manager, tier, api_keys)
 
     async def check(self, output_text: str, macro_profile_json: str) -> CheckResult:
         await self._notify("プロフィール整合性をチェック中...")
@@ -73,6 +74,7 @@ class ProfileChecker(BaseChecker):
                 f"【チェック対象テキスト】\n{output_text[:2000]}"
             ),
             json_mode=True,
+            api_keys=self.api_keys,
         )
         data = result["content"] if isinstance(result["content"], dict) else {}
         check_result = CheckResult(
@@ -94,8 +96,8 @@ class TemperamentChecker(BaseChecker):
     裏方エージェントのため、パラメータ名・値に直接アクセス可能。
     """
 
-    def __init__(self, ws_manager=None, tier: str = "gemini"):
-        super().__init__("気質", ws_manager, tier)
+    def __init__(self, ws_manager=None, tier: str = "gemini", api_keys: Optional[dict] = None):
+        super().__init__("気質", ws_manager, tier, api_keys)
 
     async def check(self, output_text: str, activated_temperament_text: str) -> CheckResult:
         await self._notify("気質パラメータ整合性をチェック中...")
@@ -123,6 +125,7 @@ class TemperamentChecker(BaseChecker):
                 f"【チェック対象テキスト】\n{output_text[:2000]}"
             ),
             json_mode=True,
+            api_keys=self.api_keys,
         )
         data = result["content"] if isinstance(result["content"], dict) else {}
         check_result = CheckResult(
@@ -143,8 +146,8 @@ class PersonalityChecker(BaseChecker):
     出力がBig Five/HEXACOの性格パラメータ（#24-#50）に整合しているか検証。
     """
 
-    def __init__(self, ws_manager=None, tier: str = "gemini"):
-        super().__init__("性格", ws_manager, tier)
+    def __init__(self, ws_manager=None, tier: str = "gemini", api_keys: Optional[dict] = None):
+        super().__init__("性格", ws_manager, tier, api_keys)
 
     async def check(self, output_text: str, activated_personality_text: str) -> CheckResult:
         await self._notify("性格パラメータ整合性をチェック中...")
@@ -172,6 +175,7 @@ class PersonalityChecker(BaseChecker):
                 f"【チェック対象テキスト】\n{output_text[:2000]}"
             ),
             json_mode=True,
+            api_keys=self.api_keys,
         )
         data = result["content"] if isinstance(result["content"], dict) else {}
         check_result = CheckResult(
@@ -193,8 +197,8 @@ class ValuesChecker(BaseChecker):
     ※ 価値観違反チェック（§4.6c）とは別に、出力の全体的な価値観一貫性を検証する。
     """
 
-    def __init__(self, ws_manager=None, tier: str = "gemini"):
-        super().__init__("価値観", ws_manager, tier)
+    def __init__(self, ws_manager=None, tier: str = "gemini", api_keys: Optional[dict] = None):
+        super().__init__("価値観", ws_manager, tier, api_keys)
 
     async def check(self, output_text: str, values_context: str) -> CheckResult:
         await self._notify("価値観整合性をチェック中...")
@@ -222,6 +226,7 @@ class ValuesChecker(BaseChecker):
                 f"【チェック対象テキスト】\n{output_text[:2000]}"
             ),
             json_mode=True,
+            api_keys=self.api_keys,
         )
         data = result["content"] if isinstance(result["content"], dict) else {}
         check_result = CheckResult(

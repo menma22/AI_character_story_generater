@@ -74,6 +74,7 @@ async def regenerate_artifact(
     user_instructions: str,
     profile: EvaluationProfile,
     ws_manager=None,
+    api_keys: Optional[dict] = None,
 ) -> CharacterPackage:
     """
     指定されたアーティファクトを再生成し、パッケージを更新して返す。
@@ -114,7 +115,7 @@ async def regenerate_artifact(
     # ── フェーズ別再生成 ──
 
     if phase == "creative_director":
-        await _regenerate_concept(package, regen_context, profile, ws_manager)
+        await _regenerate_concept(package, regen_context, profile, ws_manager, api_keys)
 
     elif phase == "phase_a1":
         # macro_profile + linguistic_expression を同時再生成
@@ -124,16 +125,16 @@ async def regenerate_artifact(
             if mp and hasattr(mp, "model_dump"):
                 mp_json = json.dumps(mp.model_dump(mode="json"), ensure_ascii=False, indent=2)
                 regen_context += f"\n\n【参考: 現在のmacro_profile】\n{mp_json}"
-        await _regenerate_phase_a1(package, regen_context, profile, ws_manager)
+        await _regenerate_phase_a1(package, regen_context, profile, ws_manager, api_keys)
 
     elif phase == "phase_a2":
-        await _regenerate_phase_a2(package, regen_context, profile, ws_manager)
+        await _regenerate_phase_a2(package, regen_context, profile, ws_manager, api_keys)
 
     elif phase == "phase_a3":
-        await _regenerate_phase_a3(package, regen_context, profile, ws_manager)
+        await _regenerate_phase_a3(package, regen_context, profile, ws_manager, api_keys)
 
     elif phase == "phase_d":
-        await _regenerate_phase_d(package, regen_context, profile, ws_manager)
+        await _regenerate_phase_d(package, regen_context, profile, ws_manager, api_keys)
 
     if ws_manager:
         await ws_manager.send_agent_thought(
@@ -145,17 +146,17 @@ async def regenerate_artifact(
 
 # ─── フェーズ別再生成ヘルパー ──────────────────────────────────
 
-async def _regenerate_concept(package: CharacterPackage, regen_context: str, profile: EvaluationProfile, ws_manager):
+async def _regenerate_concept(package: CharacterPackage, regen_context: str, profile: EvaluationProfile, ws_manager, api_keys: Optional[dict]):
     """Creative Directorの再生成"""
     from backend.agents.creative_director.director import CreativeDirector
 
     package.concept_package = None
-    director = CreativeDirector(profile=profile, ws_manager=ws_manager, regeneration_context=regen_context)
+    director = CreativeDirector(profile=profile, ws_manager=ws_manager, regeneration_context=regen_context, api_keys=api_keys)
     concept = await director.run(theme=None)
     package.concept_package = concept
 
 
-async def _regenerate_phase_a1(package: CharacterPackage, regen_context: str, profile: EvaluationProfile, ws_manager):
+async def _regenerate_phase_a1(package: CharacterPackage, regen_context: str, profile: EvaluationProfile, ws_manager, api_keys: Optional[dict]):
     """Phase A-1（macro_profile + linguistic_expression）の再生成"""
     from backend.agents.phase_a1.orchestrator import PhaseA1Orchestrator
 
@@ -169,13 +170,14 @@ async def _regenerate_phase_a1(package: CharacterPackage, regen_context: str, pr
         profile=profile,
         ws_manager=ws_manager,
         regeneration_context=regen_context,
+        api_keys=api_keys,
     )
     result = await orch.run()
     package.macro_profile = result.macro_profile
     package.linguistic_expression = result.linguistic_expression
 
 
-async def _regenerate_phase_a2(package: CharacterPackage, regen_context: str, profile: EvaluationProfile, ws_manager):
+async def _regenerate_phase_a2(package: CharacterPackage, regen_context: str, profile: EvaluationProfile, ws_manager, api_keys: Optional[dict]):
     """Phase A-2（micro_parameters）の再生成"""
     from backend.agents.phase_a2.orchestrator import PhaseA2Orchestrator
 
@@ -189,12 +191,13 @@ async def _regenerate_phase_a2(package: CharacterPackage, regen_context: str, pr
         profile=profile,
         ws_manager=ws_manager,
         regeneration_context=regen_context,
+        api_keys=api_keys,
     )
     result = await orch.run()
     package.micro_parameters = result
 
 
-async def _regenerate_phase_a3(package: CharacterPackage, regen_context: str, profile: EvaluationProfile, ws_manager):
+async def _regenerate_phase_a3(package: CharacterPackage, regen_context: str, profile: EvaluationProfile, ws_manager, api_keys: Optional[dict]):
     """Phase A-3（autobiographical_episodes）の再生成"""
     from backend.agents.phase_a3.orchestrator import PhaseA3Orchestrator
 
@@ -209,12 +212,13 @@ async def _regenerate_phase_a3(package: CharacterPackage, regen_context: str, pr
         profile=profile,
         ws_manager=ws_manager,
         regeneration_context=regen_context,
+        api_keys=api_keys,
     )
     result = await orch.run()
     package.autobiographical_episodes = result
 
 
-async def _regenerate_phase_d(package: CharacterPackage, regen_context: str, profile: EvaluationProfile, ws_manager):
+async def _regenerate_phase_d(package: CharacterPackage, regen_context: str, profile: EvaluationProfile, ws_manager, api_keys: Optional[dict]):
     """Phase D（weekly_events_store）の再生成"""
     from backend.agents.phase_d.orchestrator import PhaseDOrchestrator
 
@@ -230,6 +234,7 @@ async def _regenerate_phase_d(package: CharacterPackage, regen_context: str, pro
         profile=profile,
         ws_manager=ws_manager,
         regeneration_context=regen_context,
+        api_keys=api_keys,
     )
     result = await orch.run()
     package.weekly_events_store = result

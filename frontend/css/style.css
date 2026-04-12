@@ -1123,3 +1123,77 @@ body {
         font-size: 0.75rem;
     }
 }
+
+/* ─── 設定ボタン & モーダル ─────────────────────────────────── */
+.btn-settings {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--border-subtle);
+    color: var(--text-muted);
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    font-size: 1.2rem;
+}
+
+.btn-settings:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--text-primary);
+    border-color: var(--accent-primary);
+    transform: rotate(45deg);
+    box-shadow: 0 0 15px rgba(99, 102, 241, 0.2);
+}
+
+.settings-group {
+    padding: var(--space-sm);
+}
+
+.settings-group h4 {
+    margin-top: 0;
+    margin-bottom: 0.5rem;
+    color: var(--accent-primary);
+    font-size: 1rem;
+    font-weight: 600;
+}
+
+.settings-hint {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    margin-bottom: 1.5rem;
+    line-height: 1.5;
+}
+
+.api-key-field {
+    margin-bottom: 1.2rem;
+}
+
+.api-key-field label {
+    display: block;
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+    margin-bottom: 0.5rem;
+    font-weight: 500;
+}
+
+.api-key-input {
+    width: 100%;
+    background: rgba(0, 0, 0, 0.2);
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    padding: 0.8rem 1rem;
+    color: white;
+    font-family: var(--font-primary);
+    font-size: 0.9rem;
+    transition: all 0.2s ease;
+}
+
+.api-key-input:focus {
+    outline: none;
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+    background: rgba(0, 0, 0, 0.3);
+}

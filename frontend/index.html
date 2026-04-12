@@ -25,6 +25,9 @@
             <div id="status-indicator" class="status-dot offline" title="未接続">
                 <span class="status-text">Offline</span>
             </div>
+            <button id="settings-trigger" class="btn-settings" title="APIキー設定" onclick="openSettingsModal()">
+                <span class="settings-icon">⚙</span>
+            </button>
         </div>
     </nav>
 
@@ -257,6 +260,42 @@
             <div class="modal-footer">
                 <button class="btn-primary" id="edit-save-btn" onclick="saveArtifactEdit()">保存</button>
                 <button class="btn-ghost" onclick="closeEditModal()">キャンセル</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 設定モーダル (APIキー管理) -->
+    <div id="settings-modal" class="modal hidden">
+        <div class="modal-overlay" onclick="closeSettingsModal()"></div>
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>システム設定</h3>
+                <button class="modal-close-btn" onclick="closeSettingsModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="settings-group">
+                    <h4>LLM API キー設定</h4>
+                    <p class="settings-hint">※ APIキーはブラウザの保存領域（localStorage）にのみ保存され、エージェント実行時にバックエンドへ送られます。直接 LLM プロバイダーとの通信に使用されます。</p>
+                    
+                    <div class="api-key-field">
+                        <label for="key-openai">OpenAI API Key (GPT-4o / o1)</label>
+                        <input type="password" id="key-openai" class="api-key-input" placeholder="sk-...">
+                    </div>
+                    
+                    <div class="api-key-field">
+                        <label for="key-anthropic">Anthropic API Key (Claude 3.5 Sonnet / Opus)</label>
+                        <input type="password" id="key-anthropic" class="api-key-input" placeholder="sk-ant-...">
+                    </div>
+                    
+                    <div class="api-key-field">
+                        <label for="key-google_ai">Google AI (Gemini 1.5 Pro / Flash)</label>
+                        <input type="password" id="key-google_ai" class="api-key-input" placeholder="AIza...">
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-primary" onclick="saveSettings()">設定を保存</button>
+                <button class="btn-ghost" onclick="closeSettingsModal()">キャンセル</button>
             </div>
         </div>
     </div>

@@ -32,9 +32,10 @@ logger = logging.getLogger(__name__)
 class NextDayPlanningAgent:
     """翌日予定追加エージェント（Stage 1 + Stage 2）"""
     
-    def __init__(self, ws_manager=None, tier: str = "gemini"):
+    def __init__(self, ws_manager=None, tier: str = "gemini", api_keys: Optional[dict] = None):
         self.ws = ws_manager
         self.tier = tier
+        self.api_keys = api_keys
     
     async def _notify(self, content: str, status: str = "thinking"):
         if self.ws:
@@ -100,6 +101,7 @@ class NextDayPlanningAgent:
                 f"明日やりたいことを3つ考えてください。"
             ),
             json_mode=True,
+            api_keys=self.api_keys,
         )
         
         data = result["content"] if isinstance(result["content"], dict) else {}
@@ -189,6 +191,7 @@ class NextDayPlanningAgent:
                 f"【主人公の計画】\n{plans_summary}\n\n"
             ),
             json_mode=True,
+            api_keys=self.api_keys,
         )
         
         data = result["content"] if isinstance(result["content"], dict) else {}

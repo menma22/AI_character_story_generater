@@ -40,9 +40,10 @@ LEAK_KEYWORDS = [
 class OutputVerificationAgent:
     """裏方出力検証エージェント"""
 
-    def __init__(self, ws_manager=None, tier: str = "gemini"):
+    def __init__(self, ws_manager=None, tier: str = "gemini", api_keys: Optional[dict] = None):
         self.ws = ws_manager
         self.tier = tier
+        self.api_keys = api_keys
 
     async def _notify(self, content: str, status: str = "thinking"):
         if self.ws:
@@ -100,6 +101,7 @@ class OutputVerificationAgent:
                 f"上記の出力を修正してください。"
             ),
             json_mode=False,
+            api_keys=self.api_keys,
         )
 
         corrected_text = result["content"] if isinstance(result["content"], str) else str(result["content"])

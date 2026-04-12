@@ -14,6 +14,7 @@ let recentThoughts = new Set(); // 重複排除用
 document.addEventListener('DOMContentLoaded', () => {
     wsManager.connect();
     setupWSHandlers();
+    loadSettings(); // APIキーの読み込み
 });
 
 function setupWSHandlers() {
@@ -144,10 +145,20 @@ function startGeneration(mode) {
 
     if (mode === 'theme') {
         const theme = document.getElementById('theme-input').value.trim();
-        wsManager.send('generate_character', { profile, theme: theme || null, evaluators_override: evaluators });
+        wsManager.send('generate_character', { 
+            profile, 
+            theme: theme || null, 
+            evaluators_override: evaluators,
+            api_keys: getApiKeys()
+        });
         addThought('System', `テーマ指定モードで生成開始 (${profile})`, 'thinking');
     } else {
-        wsManager.send('generate_character', { profile, theme: null, evaluators_override: evaluators });
+        wsManager.send('generate_character', { 
+            profile, 
+            theme: null, 
+            evaluators_override: evaluators,
+            api_keys: getApiKeys()
+        });
         addThought('System', `フルオート生成開始 (${profile})`, 'thinking');
     }
 }
@@ -195,7 +206,8 @@ function resumeGeneration() {
     wsManager.send('resume_generation', {
         character_name: currentSessionId,
         profile: profile,
-        evaluators_override: evaluators
+        evaluators_override: evaluators,
+        api_keys: getApiKeys()
     });
     
     addThought('System', 'チェックポイントから再開中...', 'thinking');
@@ -255,7 +267,11 @@ function generateDiary() {
     document.getElementById('diary-content').innerHTML = '';
     
     const pkgName = currentPackage._package_name || 'unknown';
-    wsManager.send('generate_diary', { package_name: pkgName, days: 7 });
+    wsManager.send('generate_diary', { 
+        package_name: pkgName, 
+        days: 7,
+        api_keys: getApiKeys()
+    });
     
     addThought('System', '7日分の日記生成を開始', 'thinking');
 }
@@ -544,6 +560,7 @@ function executeRegeneration() {
         instructions: instructions,
         cascade: cascade,
         profile: document.getElementById('profile-select')?.value || 'draft',
+        api_keys: getApiKeys(),
     });
 
     addThought('System', `「${ARTIFACT_LABELS[currentRegenArtifact]}」の再生成を開始しました`, 'thinking');
@@ -638,4 +655,49 @@ function saveArtifactEdit() {
 
     // モーダルを閉じる
     closeEditModal();
+}
+// ─── システム設定 (APIキー) ──────────────────────────────
+
+function openSettingsModal() {
+    document.getElementById('settings-modal').classList.remove('hidden');
+}
+
+function closeSettingsModal() {
+    document.getElementById('settings-modal').classList.add('hidden');
+}
+
+function saveSettings() {
+    const keys = {
+        openai: document.getElementById('key-openai').value.trim(),
+        anthropic: document.getElementById('key-anthropic').value.trim(),
+        google_ai: document.getElementById('key-google_ai').value.trim(),
+    };
+    
+    localStorage.setItem('script_ai_api_keys', JSON.stringify(keys));
+    addThought('System', 'APIキー設定を保存しました', 'complete');
+    closeSettingsModal();
+}
+
+function loadSettings() {
+    const saved = localStorage.getItem('script_ai_api_keys');
+    if (saved) {
+        try {
+            const keys = JSON.parse(saved);
+            document.getElementById('key-openai').value = keys.openai || '';
+            document.getElementById('key-anthropic').value = keys.anthropic || '';
+            document.getElementById('key-google_ai').value = keys.google_ai || '';
+        } catch (e) {
+            console.error('Settings load error:', e);
+        }
+    }
+}
+
+function getApiKeys() {
+    const saved = localStorage.getItem('script_ai_api_keys');
+    if (!saved) return {};
+    try {
+        return JSON.parse(saved);
+    } catch (e) {
+        return {};
+    }
 }
