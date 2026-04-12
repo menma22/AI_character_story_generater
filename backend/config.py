@@ -21,6 +21,7 @@ class LLMModels:
     SONNET = "claude-sonnet-4-6"
     
     # Google AI Studio
+    GEMINI_3_1_PRO = "models/gemini-3.1-pro"
     GEMINI_2_5_PRO = "models/gemini-2.5-pro"
     GEMINI_2_0_FLASH = "models/gemini-2.0-flash"
 
@@ -28,6 +29,12 @@ class LLMModels:
 # ─── API キー ────────────────────────────────────────────────
 
 class APIKeys:
+    """
+    APIキー管理。
+    現在はフロントエンドからリクエスト単位で `api_keys` が渡されるため、
+    ここでの設定はローカル開発・テスト用のデフォルト値としての位置付けとなる。
+    """
+    OPENAI = os.getenv("OPENAI_API_KEY", "")
     ANTHROPIC = os.getenv("ANTHROPIC_API_KEY", "")
     GOOGLE_AI = os.getenv("GOOGLE_AI_API_KEY", "")
 
