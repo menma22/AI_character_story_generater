@@ -203,9 +203,10 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 → 【4つの個別チェックAI】Profile/Temperament/Personality/Values並列チェック
 → 価値観違反チェック
 → 内省(Self-Perception + 過去統合 + 再解釈, raw text出力)
+→ 翌日予定追加(必須イベント化) ← Stage 19変更: 日記生成の前に実行
 → 日記生成: Agentic日記執筆(言語的表現方法[LinguisticExpression]全情報注入・check_diary_rules必須ゲート付き・submit時強制チェック)
 → 【4つの個別チェックAI】日記出力チェック
-→ ムード更新(Peak-End Rule) → key memory抽出(個別ファイル保存) + 記憶圧縮 + 翌日予定追加(必須イベント化)
+→ ムード更新(Peak-End Rule) → key memory抽出(個別ファイル保存) + 記憶圧縮
 → ムードcarry-over(減衰+閾値リセット)
 
 ※ 全エージェントにマクロプロフィール・世界設定・周囲人物・経験DB・key memoryを同梱

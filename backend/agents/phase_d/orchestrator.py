@@ -301,7 +301,34 @@ class PhaseDOrchestrator:
         chars_text = chars_result["content"] if isinstance(chars_result["content"], str) else json.dumps(chars_result["content"], ensure_ascii=False)
 
         world_context = WorldContext(description=world_text)
+
+        # chars_text（自然言語）から SupportingCharacter オブジェクトをパース
         supporting_chars = []
+        try:
+            parse_result = await call_llm(
+                tier=self.profile.worker_tier,
+                system_prompt=(
+                    "以下の人物設計テキストをJSONに変換してください。\n"
+                    "出力形式: {\"characters\": [{\"name\": \"...\", \"role\": \"...\", "
+                    "\"relationship_to_protagonist\": \"...\", \"brief_profile\": \"...\", "
+                    "\"own_small_want\": \"...\"}]}\n"
+                    "テキストに含まれる全人物を漏れなく含めること。"
+                ),
+                user_message=chars_text,
+                json_mode=True,
+                api_keys=self.api_keys,
+            )
+            parse_data = parse_result["content"] if isinstance(parse_result["content"], dict) else {}
+            for c in parse_data.get("characters", []):
+                supporting_chars.append(SupportingCharacter(
+                    name=c.get("name", ""),
+                    role=c.get("role", ""),
+                    relationship_to_protagonist=c.get("relationship_to_protagonist", ""),
+                    brief_profile=c.get("brief_profile", ""),
+                    own_small_want=c.get("own_small_want", ""),
+                ))
+        except Exception as e:
+            logger.warning(f"[Phase D] SupportingCharacter パース失敗（空リストで続行）: {e}")
 
         if self.ws:
             await self.ws.send_agent_thought("[Phase D] WorldContext", "世界設定生成完了", "complete")

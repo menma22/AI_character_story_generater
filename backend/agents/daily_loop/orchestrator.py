@@ -1034,8 +1034,13 @@ class DailyLoopOrchestrator:
     async def _values_violation(self, integration: IntegrationOutput) -> ValuesViolationResult:
         """価値観違反チェック（v10 §4.6c）"""
         values_context = ""
+        normative_context = ""
         if self.package.micro_parameters:
             values_context = json.dumps(self.package.micro_parameters.schwartz_values, ensure_ascii=False)
+            normative_context = (
+                f"理想自己: {self.package.micro_parameters.ideal_self}\n"
+                f"義務自己: {self.package.micro_parameters.ought_self}"
+            )
         
         result = await call_llm(
             tier="gemini",
@@ -1140,6 +1145,13 @@ class DailyLoopOrchestrator:
     async def _introspection(self, day: int, events_processed: list[EventPackage]) -> IntrospectionMemo:
         """内省フェーズ: 3工程（v10 §4.7）"""
         action_summary = "\n".join([f"- {ep.integration_output.final_action[:80]}..." for ep in events_processed])
+        normative_context = ""
+        protagonist_plan_note = ""
+        if self.package.micro_parameters:
+            normative_context = (
+                f"理想自己: {self.package.micro_parameters.ideal_self}\n"
+                f"義務自己: {self.package.micro_parameters.ought_self}"
+            )
         
         # 活性化ログの要約（内省で参照可能）
         activation_summary = ""
@@ -1183,10 +1195,11 @@ class DailyLoopOrchestrator:
             user_message=(
                 f"{wrap_context('マクロプロフィール', self._build_macro_context(), 'introspection')}\n\n"
                 f"{wrap_context('世界設定', self._build_world_context())}\n\n"
+                f"{wrap_context('周囲の人物', self._build_supporting_characters_context())}\n\n"
                 f"{wrap_context('今日の行動履歴', f'Day {day}の行動まとめ:\n{action_summary}')}\n\n"
                 f"{wrap_context('現在ムード', f'V={self.current_mood.valence:.1f} A={self.current_mood.arousal:.1f} D={self.current_mood.dominance:.1f}')}\n\n"
                 f"{wrap_context('過去の記憶', self._build_memory_context())}\n\n"
-                f"{wrap_context('自伝的エピソード', self._build_episodes_context()[:600])}"
+                f"{wrap_context('自伝的エピソード', self._build_episodes_context()[:600])}\n\n"
                 f"{wrap_context('規範層', f'{normative_context}{protagonist_plan_note}')}\n\n"
             ),
             json_mode=False,
@@ -1487,10 +1500,12 @@ class DailyLoopOrchestrator:
         user_message = (
             f"{wrap_context('マクロプロフィール', self._build_macro_context(), 'diary')}\n\n"
             f"{wrap_context('世界設定', self._build_world_context())}\n\n"
+            f"{wrap_context('周囲の人物', self._build_supporting_characters_context())}\n\n"
+            f"{wrap_context('自伝的エピソード', self._build_episodes_context()[:600])}\n\n"
             f"{wrap_context('今日の出来事', f'Day {day}の出来事:\n{event_summaries}', 'diary')}\n\n"
             f"{wrap_context('内省メモ', introspection.raw_text, 'diary')}\n\n"
             f"{wrap_context('現在ムード', f'V={self.current_mood.valence:.1f} A={self.current_mood.arousal:.1f} D={self.current_mood.dominance:.1f}')}\n\n"
-            f"{wrap_context('短期記憶（最重要 — デイリーログ + key memory）', self._build_memory_context(), 'diary')}"
+            f"{wrap_context('短期記憶（最重要 — デイリーログ + key memory）', self._build_memory_context(), 'diary')}\n\n"
             f"{wrap_context('規範層', f'{normative_context}{protagonist_plan_note}')}\n\n"
             f"{voice_section}"
             f"{caps_section}"
@@ -1549,8 +1564,13 @@ class DailyLoopOrchestrator:
         )
     
     # ─── key memory抽出（§4.9.3.1）────────────────────────────
-    async def _extract_key_memory(self, day: int, diary: DiaryEntry) -> KeyMemory:
+    async def _extract_key_memory(self, day: int, diary: DiaryEntry, events_processed: list | None = None) -> KeyMemory:
         """key memory抽出（v10 §4.9.3.1）"""
+        action_summary = ""
+        if events_processed:
+            action_summary = "\n".join([
+                f"- {ep.integration_output.final_action[:80]}..." for ep in events_processed
+            ])
         result = await call_llm(
             tier="gemini",
             system_prompt="""あなたはkey memory抽出エージェントです。
@@ -1910,7 +1930,7 @@ class DailyLoopOrchestrator:
             # §4.9.3.1 key memory抽出
             snap_key_memory = token_tracker.snapshot()
             try:
-                key_mem = await self._extract_key_memory(day, diary)
+                key_mem = await self._extract_key_memory(day, diary, day_state.events_processed)
             except Exception as e:
                 logger.error(f"[DailyLoop] Day {day} key memory抽出エラー: {e}")
                 key_mem = KeyMemory(day=day, content=diary.content[:300], mood_at_extraction=self.current_mood.model_dump())
