@@ -224,7 +224,12 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 | high_quality | opus | sonnet | 全7種ON | 4 | 本番提出用 |
 | standard | sonnet | sonnet | 5種ON | 3 | 推奨バランス |
 | fast | sonnet | gemini | 3種ON | 2 | 素早い確認 |
-| draft | sonnet | gemini | 2種ON | 2 | 最小コスト（最低ティア=Gemini 2.5 Pro） |
+| draft | sonnet | gemini | 2種ON | 2 | 最小コスト（最低ティア=Gemini 2.5 Pro → 2.0 Flash自動フォールバック） |
+
+**Gemini 2段階フォールバック（`tier="gemini"`）:**
+- 第1試行: Gemini 2.5 Pro（高品質、1000リクエスト/日の無料枠）
+- 第2試行: クォータ超過（429 / ResourceExhausted）時 → Gemini 2.0 Flash（1500リクエスト/日の無料枠）
+- Claude（opus/sonnet）からGeminiへのフォールバック時も同様の2段階フォールバックを適用
 
 #### データモデル（v2 §6.3.4準拠拡張済）
 
@@ -540,6 +545,21 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
   - **コンテキスト意図明示**: エージェントに渡す全てのコンテキストに「何のデータか」「なぜ渡すか」「どう使うか」を明記する。これによりエージェントの判断精度が向上し、コンテキストの誤用を防ぐ
   - **ロール別説明**: 同じデータ（例: マクロプロフィール）でも、衝動系・理性系・日記生成系で使い方が異なるため、ロール別に説明を分岐
 
+### Stage 21: Gemini 2.5 Proクォータ超過時の2段階フォールバック
+
+**(a) 当初設計**: `tier="gemini"` は常に `Gemini 2.5 Pro` (`models/gemini-2.5-pro`) を呼び出す単一パス。Claude (opus/sonnet) が失敗した場合も `Gemini 2.5 Pro` への単層フォールバックのみ。フォールバック先が同じ Gemini 2.5 Pro のため、クォータが枯渇するとシステム全体が `ResourceExhausted (429)` で停止していた。
+
+**(b) 変更・根拠**: Gemini 2.5 Pro の無料枠上限は 1000 リクエスト/日。複数キャラの生成実験や長時間のデイリーループでこの上限に達すると、フォールバック先が存在せず全エージェントがクラッシュしていた。Gemini 2.0 Flash は別クォータ（1500 リクエスト/日）を持ち、2.5 Pro と同じ `call_google_ai()` で呼び出せるため、自動切り替えが容易。
+
+**(c) 採用プラクティス**:
+- `LLMModels` に `GEMINI_2_0_FLASH = "models/gemini-2.0-flash"` を追加
+- `_call_llm_once()` 内に `_call_gemini_with_flash_fallback()` ヘルパーを定義:
+  - 第1試行: Gemini 2.5 Pro
+  - `ResourceExhausted` / `429` / "quota" エラーを検出した場合のみ Gemini 2.0 Flash へ切り替え
+  - その他のエラーはそのまま re-raise（無条件のフォールバックによる誤魔化しを防止）
+- `tier="gemini"` の直接呼び出しと、Claude 失敗後のフォールバックの両方にこのヘルパーを適用
+- **設計原則**: フォールバックチェーンはエラー種別を見て判断する。クォータエラーはフォールバック対象、APIエラーや内部エラーはそのまま伝播させる
+
 ### Stage 20: セーブポイント二重保存・中断再開の確実化
 
 - **対象/機能**: キャラクター生成チェックポイントのロールバック問題修正、日記ループのpackage.json永続化
@@ -611,6 +631,7 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 | Stage 18: 第三者検証AI + コンテキスト説明付与 | ✅ 実装完了 | ThirdPartyReviewer新設（読者視点5観点チェック）、日記agenticループにthird_party_reviewツール追加（3段階ゲート化）、全エージェントにwrap_contextによるコンテキスト説明付与（what/why/how 3点説明） |
 | Stage 19: デイリーログ要約・記憶システム再設計 | ✅ 実装完了 | 翌日予定AIを日記生成の前に移動（日記に明日への意向を反映可能に）、DailyLogStore新設（日別フォルダ管理・段階的LLM要約による忘却プロセス）、日記を独立DBとして分離（参照用）、short_term_memoryのソースをdiary→行動ログに変更、_compress_memoriesを_create_daily_log_and_summarizeに置換 |
 | Stage 20: セーブポイント二重保存・中断再開確実化 | ✅ 実装完了 | `_checkpoint()`をSID名+キャラ名の二重保存に変更、DailyLoopでの各Day完了後package.json更新、run_diary_generation完了後package.json最終保存 |
+| Stage 21: Gemini 2.5 Proクォータ超過時の2段階フォールバック | ✅ 実装完了 | `LLMModels.GEMINI_2_0_FLASH`追加、`_call_gemini_with_flash_fallback()`で2.5 Pro→2.0 Flash自動切り替え（クォータ超過時のみ）、Claude失敗時フォールバックにも適用 |
 
 ### 次のアクション
 
@@ -621,6 +642,7 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 
 > [!WARNING]
 > - Anthropic APIのクレジット残高不足により全Claude呼び出しがGemini 2.5 Proへフォールバック中。本稼働時は有償Tierキーが必要。
+> - Gemini 2.5 Proの1日1000リクエスト無料枠超過時は、Gemini 2.0 Flash（1500リクエスト/日）への自動フォールバックを実装済み（Stage 21）。
 > - Gemini 2.5 Proの思考トークン問題は修正済み。JSON依存排除・リトライ機構追加も完了。
 > - Gemma 4を完全廃止し、最低ティアをGemini 2.5 Proに統一済み。`call_gemma()`→`call_google_ai()`にリネーム。
 > - 全Agenticエージェント（Director, Integration, Diary）でClaude→Gemini→デフォルト値の3層フォールバック実装済み。
