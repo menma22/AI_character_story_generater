@@ -34,6 +34,12 @@ class PsychologicalHints(BaseModel):
     ghost_wound_hint: str = Field("", description="過去の傷の方向性")
     lie_hint: str = Field("", description="誤った信念の方向性")
 
+class CapabilitiesHints(BaseModel):
+    """所持品・能力の方向性ヒント（Creative Director が設計、Phase D capabilities生成で参照）"""
+    key_possessions_hint: str = Field("", description="キャラクターが持ち歩くべき重要なアイテムの方向性（1-3文）")
+    core_abilities_hint: str = Field("", description="物語に重要な能力・スキルの方向性（1-3文）")
+    signature_actions_hint: str = Field("", description="このキャラクターならではの行動パターンの方向性（1-3文）")
+
 class ConceptPackage(BaseModel):
     """Creative Director の出力パッケージ（v2 §4.7 完全準拠）"""
     character_concept: str = Field("", description="キャラクター設定の大まかな概要（500-1000字の濃密な概念記述）")
@@ -45,6 +51,7 @@ class ConceptPackage(BaseModel):
     reference_stories: list[ReferenceStory] = Field(default_factory=list, description="参考となる既存物語")
     critical_design_notes: list[str] = Field(default_factory=list, description="下流への設計上の指示")
     psychological_hints: PsychologicalHints = Field(default_factory=PsychologicalHints)
+    capabilities_hints: CapabilitiesHints = Field(default_factory=CapabilitiesHints)
     iteration_count: int = Field(0, description="Self-Critique反復回数")
     self_critique_history: list[dict] = Field(default_factory=list)
     verdict: str = Field("pass", description="最終判定")

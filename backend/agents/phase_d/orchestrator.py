@@ -96,6 +96,9 @@ CHARACTER_CAPABILITIES_PROMPT = """あなたはキャラクターの所持品・
 Creative Directorの意向（concept_package）とキャラクターのマクロプロフィールに基づき、
 キャラクターが実際に持っているもの、できること、とれる行動を詳細に記述してください。
 
+【最重要】concept_package の capabilities_hints（key_possessions_hint / core_abilities_hint / signature_actions_hint）が存在する場合、
+それを具体化の起点・方向性として必ず反映してください。hintsが示した方向性に沿って、各アイテム・能力・行動を具体化すること。
+
 【出力形式】JSON
 {
   "possessions": [
@@ -288,11 +291,22 @@ class PhaseDOrchestrator:
             f"  理想自己: {self.micro.ideal_self}\n"
             f"  義務自己: {self.micro.ought_self}"
         )
+        # capabilities_hints が存在する場合は明示的にコンテキストに追加
+        caps_hints = self.concept.capabilities_hints
+        caps_hints_text = ""
+        if caps_hints and (caps_hints.key_possessions_hint or caps_hints.core_abilities_hint or caps_hints.signature_actions_hint):
+            caps_hints_text = (
+                f"\n\n【Creative Director capabilities_hints (capabilities生成の方向性指示)】\n"
+                f"- key_possessions_hint: {caps_hints.key_possessions_hint}\n"
+                f"- core_abilities_hint: {caps_hints.core_abilities_hint}\n"
+                f"- signature_actions_hint: {caps_hints.signature_actions_hint}"
+            )
         ctx = (
             f"{wrap_context('concept_package', json.dumps(self.concept.model_dump(mode='json'), ensure_ascii=False, indent=2))}\n\n"
             f"{wrap_context('macro_profile', json.dumps(self.macro.model_dump(mode='json'), ensure_ascii=False, indent=2), 'event')}\n\n"
             f"{wrap_context('micro_parameters', micro_summary)}\n\n"
             f"{wrap_context('autobiographical_episodes', json.dumps([e.model_dump(mode='json') for e in self.episodes.episodes], ensure_ascii=False, indent=2))}"
+            f"{caps_hints_text}"
         )
         if self.regeneration_context:
             ctx += f"\n\n{self.regeneration_context}"
