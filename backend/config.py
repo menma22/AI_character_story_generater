@@ -22,6 +22,7 @@ class LLMModels:
     
     # Google AI Studio
     GEMINI_2_5_PRO = "models/gemini-2.5-pro"
+    GEMINI_2_0_FLASH = "models/gemini-2.0-flash"
 
 
 # ─── API キー ────────────────────────────────────────────────

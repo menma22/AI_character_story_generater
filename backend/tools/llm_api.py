@@ -369,6 +369,42 @@ async def _call_llm_once(
     cache_context: Optional[str],
 ) -> dict:
     """単一LLM呼び出し（フォールバック付き）"""
+    def _is_quota_error(e: Exception) -> bool:
+        return (
+            "ResourceExhausted" in type(e).__name__
+            or "429" in str(e)
+            or "quota" in str(e).lower()
+        )
+
+    async def _call_gemini_with_flash_fallback(
+        system_prompt: str,
+        user_message: str,
+        max_tokens: int,
+        temperature: float,
+        json_mode: bool,
+    ) -> dict:
+        try:
+            return await call_google_ai(
+                system_prompt=system_prompt,
+                user_message=user_message,
+                model=LLMModels.GEMINI_2_5_PRO,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                json_mode=json_mode,
+            )
+        except Exception as e:
+            if _is_quota_error(e):
+                logger.warning(f"[call_llm] Gemini 2.5 Pro quota exceeded. Falling back to Gemini 2.0 Flash.")
+                return await call_google_ai(
+                    system_prompt=system_prompt,
+                    user_message=user_message,
+                    model=LLMModels.GEMINI_2_0_FLASH,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    json_mode=json_mode,
+                )
+            raise
+
     if tier in ("opus", "sonnet"):
         model_name = LLMModels.OPUS if tier == "opus" else LLMModels.SONNET
         try:
@@ -383,21 +419,19 @@ async def _call_llm_once(
                 json_mode=json_mode,
             )
         except Exception as e:
-            logger.warning(f"[call_llm] Claude ({tier}) failed: {e}. Falling back to Gemini 2.5 Pro.")
-            return await call_google_ai(
+            logger.warning(f"[call_llm] Claude ({tier}) failed: {e}. Falling back to Gemini.")
+            return await _call_gemini_with_flash_fallback(
                 system_prompt=system_prompt,
                 user_message=user_message,
-                model=LLMModels.GEMINI_2_5_PRO,
                 max_tokens=max_tokens,
                 temperature=temperature,
                 json_mode=json_mode,
             )
 
     if tier == "gemini":
-        return await call_google_ai(
+        return await _call_gemini_with_flash_fallback(
             system_prompt=system_prompt,
             user_message=user_message,
-            model=LLMModels.GEMINI_2_5_PRO,
             max_tokens=max_tokens,
             temperature=temperature,
             json_mode=json_mode,
