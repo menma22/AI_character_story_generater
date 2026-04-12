@@ -540,6 +540,25 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
   - **コンテキスト意図明示**: エージェントに渡す全てのコンテキストに「何のデータか」「なぜ渡すか」「どう使うか」を明記する。これによりエージェントの判断精度が向上し、コンテキストの誤用を防ぐ
   - **ロール別説明**: 同じデータ（例: マクロプロフィール）でも、衝動系・理性系・日記生成系で使い方が異なるため、ロール別に説明を分岐
 
+### Stage 20: セーブポイント二重保存・中断再開の確実化
+
+- **対象/機能**: キャラクター生成チェックポイントのロールバック問題修正、日記ループのpackage.json永続化
+
+- **(a) 元の設計**:
+  - `MasterOrchestrator._checkpoint()`は保存先名を1つだけ選択: Phase A-1完了前はSID名（例: `SID_20260412_023236`）、A-1完了後はキャラ名（例: `唐繰 ポポ`）。SIDフォルダのチェックポイントはA-1以降で二度と更新されなかった
+  - 日記ループ（DailyLoopOrchestrator）では各Day完了後に `short_term_memory/`, `mood_states/`, `key_memories/` は保存されていたが、`package.json` は更新されなかった
+  - `protagonist_plan`として翌日に追加されたイベント（`weekly_events_store.events`への`append`）はメモリ上だけに存在し、中断後の再開時に消滅していた
+
+- **(b) 変更と理由**:
+  - **ロールバック発生メカニズム**: ユーザーがSID名（セッション開始時にUIに表示される名前）でレジュームすると、SIDフォルダのチェックポイント（A-1完了前の初期状態）が読み込まれ、Phase A-1から再生成が始まる。「ミクロプロフィールやイベントの途中まで生成できていたとしても最初のマクロプロフィール生成まで戻る」という現象の根本原因
+  - **日記ループの再開不整合**: `package.json`未更新により、再開時には翌日予定イベントが消えたオリジナルのイベントリストが読み込まれ、以降のDay処理でイベント不足が生じる
+
+- **(c) 採用したベストプラクティス**:
+  - **`_checkpoint()` 二重保存**: SID名フォルダに**常に保存**（どのフェーズでも）し、キャラ名が判明している場合はキャラ名フォルダにも**追加保存**。SID・キャラ名どちらでレジュームしても常に最新状態を取得可能に
+  - **DailyLoopOrchestrator 各Day完了後にpackage.json更新**: `run()`の各Dayループ末尾で `package.json` を書き出し。protagonist_planイベントを含む最新状態を即時永続化
+  - **run_diary_generation 完了後にpackage.json保存**: ループ完了後にも最終状態を `package.json` に書き出し、完全性を保証
+  - **設計原則**: チェックポイントは「どの名前でアクセスされても最新状態が得られる」ことを保証する。保存コストは2倍だが、レジューム失敗のコスト（全再生成）と比較すれば圧倒的に有利
+
 ### Stage 19: デイリーログ要約・記憶システム再設計
 
 - **対象/機能**: 短期記憶データベースの再設計、翌日予定AIの実行順序変更、日記の独立DB化
@@ -591,6 +610,7 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 | Stage 17: diary_critic LLMベース簡素化 | ✅ 実装完了 | ルールベースチェック全廃止→LLM一括検証、corrected_diary廃止→issues指摘のみ、MacroProfile注入 |
 | Stage 18: 第三者検証AI + コンテキスト説明付与 | ✅ 実装完了 | ThirdPartyReviewer新設（読者視点5観点チェック）、日記agenticループにthird_party_reviewツール追加（3段階ゲート化）、全エージェントにwrap_contextによるコンテキスト説明付与（what/why/how 3点説明） |
 | Stage 19: デイリーログ要約・記憶システム再設計 | ✅ 実装完了 | 翌日予定AIを日記生成の前に移動（日記に明日への意向を反映可能に）、DailyLogStore新設（日別フォルダ管理・段階的LLM要約による忘却プロセス）、日記を独立DBとして分離（参照用）、short_term_memoryのソースをdiary→行動ログに変更、_compress_memoriesを_create_daily_log_and_summarizeに置換 |
+| Stage 20: セーブポイント二重保存・中断再開確実化 | ✅ 実装完了 | `_checkpoint()`をSID名+キャラ名の二重保存に変更、DailyLoopでの各Day完了後package.json更新、run_diary_generation完了後package.json最終保存 |
 
 ### 次のアクション
 
