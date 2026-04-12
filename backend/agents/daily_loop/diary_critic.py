@@ -60,21 +60,10 @@ class DiarySelfCritic:
         if self.voice.metaphor_irony_frequency:
             sections.append(f"- 比喩・反語: {self.voice.metaphor_irony_frequency}")
 
-        # マクロプロフィール（キャラクター整合性の参照情報）
+        # マクロプロフィール���キャラクター整合性の��照情報 — 全体）
         if self.macro_profile:
-            sections.append("\n## キャラクター情報（整合性チェック用）")
-            bi = self.macro_profile.basic_info
-            if bi.name:
-                sections.append(f"- 名前: {bi.name}")
-            if bi.age:
-                sections.append(f"- 年齢: {bi.age}")
-            if bi.occupation:
-                sections.append(f"- 職業: {bi.occupation}")
-            cl = self.macro_profile.current_life_outline
-            if cl.hobbies_leisure:
-                sections.append(f"- 趣味: {', '.join(cl.hobbies_leisure)}")
-            if cl.daily_routine:
-                sections.append(f"- 日常: {cl.daily_routine}")
+            sections.append("\n## キャラクター情報（整��性チェック用 — フルプロフィール）")
+            sections.append(json.dumps(self.macro_profile.model_dump(mode="json"), ensure_ascii=False, indent=2))
 
         return "\n".join(sections)
 
@@ -103,7 +92,7 @@ class DiarySelfCritic:
 1. 言語的指紋の遵守: 一人称、口癖、文末表現、漢字/ひらがな傾向が指定通りか
 2. 避ける語彙の不使用: 避ける語彙リストに該当する語が含まれていないか
 3. AI臭さの排除: 「成長」「気づき」「学び」「前向き」など、AIが書いた感じのする安直で綺麗事な語彙が使われていないか
-4. 文量の適切さ: 200〜500字程度が目安（厳密でなくてよい）
+4. 文量の適切さ: 400字以上、500字以下になっているかを厳密に確認
 5. ムードとの整合性: PAD値が示す感情状態と日記のトーンが矛盾していないか
 6. キャラクター整合性: 年齢・職業・日常と矛盾する内容がないか
 

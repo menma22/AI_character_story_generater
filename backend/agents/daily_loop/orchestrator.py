@@ -43,7 +43,7 @@ from backend.models.memory import (
     DiaryEntry, ActivationLog, EmotionIntensityResult,
     DailyLogEntry,
 )
-from backend.tools.llm_api import call_llm
+from backend.tools.llm_api import call_llm, token_tracker
 from backend.config import EvaluationProfile, AppConfig
 from backend.agents.daily_loop.activation import DynamicActivationAgent
 from backend.agents.daily_loop.verification import OutputVerificationAgent
@@ -1712,16 +1712,19 @@ class DailyLoopOrchestrator:
 
             # §4.7 内省フェーズ
             await self._notify(f"Day {day}: 内省フェーズ")
+            snap_introspection = token_tracker.snapshot()
             try:
                 introspection = await self._introspection(day, day_state.events_processed)
             except Exception as e:
                 logger.error(f"[DailyLoop] Day {day} 内省フェーズエラー: {e}")
                 introspection = IntrospectionMemo(full_memo="（内省生成に失敗しました）")
             day_state.introspection = introspection
+            day_state.cost_records.append(token_tracker.cost_since(snap_introspection, "内省フェーズ"))
 
             # §4.9.4 翌日予定追加（Day 7以外）★ 日記生成の前に実行
             if day < days:
                 await self._notify(f"Day {day}: 翌日予定の計画")
+                snap_next_day = token_tracker.snapshot()
                 try:
                     plans = await self.next_day_agent.stage1_protagonist_plan(
                         day=day,
@@ -1762,12 +1765,15 @@ class DailyLoopOrchestrator:
                             plans[0].inserted = True
                         self.package.weekly_events_store.events.append(new_event)
                         day_state.next_day_plans = [p.model_dump() for p in plans]
+                    day_state.cost_records.append(token_tracker.cost_since(snap_next_day, "翌日予定"))
                 except Exception as e:
                     logger.error(f"[DailyLoop] Day {day} 翌日予定計画エラー: {e}")
+                    day_state.cost_records.append(token_tracker.cost_since(snap_next_day, "翌日予定（失敗）"))
 
             # §4.8 日記生成 & §4.9.1 Self-Critic (Agentic統合済)
             # チェッカーフィードバック付き再生成ループ（最大2回再試行）
             await self._notify(f"Day {day}: 日記生成（自律チェック込み）")
+            snap_diary = token_tracker.snapshot()
             max_diary_retries = 2
             checker_feedback_for_diary = ""
             last_activation = day_state.events_processed[-1].activation_log if day_state.events_processed else ActivationLog()
@@ -1814,6 +1820,7 @@ class DailyLoopOrchestrator:
                 logger.warning(f"[日記チェッカー] Day {day}: 最大再試行回数超過。現在の日記をそのまま使用。")
 
             day_state.diary = diary
+            day_state.cost_records.append(token_tracker.cost_since(snap_diary, "日記生成"))
 
             # 日記をストリーミング
             if self.ws:
@@ -1823,19 +1830,23 @@ class DailyLoopOrchestrator:
             self._update_mood_daily(day_state)
 
             # §4.9.3.1 key memory抽出
+            snap_key_memory = token_tracker.snapshot()
             try:
                 key_mem = await self._extract_key_memory(day, diary)
             except Exception as e:
                 logger.error(f"[DailyLoop] Day {day} key memory抽出エラー: {e}")
                 key_mem = KeyMemory(day=day, content=diary.content[:300], mood_at_extraction=self.current_mood.model_dump())
             day_state.key_memory = key_mem
+            day_state.cost_records.append(token_tracker.cost_since(snap_key_memory, "key memory抽出"))
             self.key_memory_store.save(key_mem)
 
             # §4.9.3.2 デイリーログ保存 & 要約（日記生成の後に実行）
+            snap_daily_log = token_tracker.snapshot()
             try:
                 await self._create_daily_log_and_summarize(day, day_state.events_processed, introspection)
             except Exception as e:
                 logger.error(f"[DailyLoop] Day {day} デイリーログ要約エラー: {e}")
+            day_state.cost_records.append(token_tracker.cost_since(snap_daily_log, "デイリーログ要約"))
 
             # diary_store にも追記（互換性維持）
             self.memory_db.diary_store.append(diary.content)
@@ -1872,6 +1883,10 @@ class DailyLoopOrchestrator:
                 logger.info(f"[DailyLoop] Day {day} 完了: package.json を更新しました")
             except Exception as e:
                 logger.warning(f"[DailyLoop] Day {day} package.json保存エラー: {e}")
+
+            # WebSocket でコスト更新を配信
+            if self.ws:
+                await self.ws.send_cost_update(token_tracker.summary())
 
             await self._notify(f"=== Day {day} 完了 ===", "complete")
         

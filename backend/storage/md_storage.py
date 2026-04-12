@@ -290,6 +290,25 @@ async def save_daily_log(character_name: str, day: int, day_state):
             md_content += f"- [{inserted}] {action}（{time}）— {motivation}\n"
         md_content += "\n"
 
+    # ── 6. コスト記録 ──
+    if day_state.cost_records:
+        md_content += "## 6. コスト記録\n\n"
+        md_content += "| ステップ | 入力トークン | 出力トークン | 推定コスト |\n"
+        md_content += "|---------|------------|------------|----------|\n"
+        total_cost = 0
+        total_input = 0
+        total_output = 0
+        for rec in day_state.cost_records:
+            label = rec.get("label", "不明")
+            inp = rec.get("input_tokens", 0)
+            out = rec.get("output_tokens", 0)
+            cost = rec.get("cost_usd", 0)
+            md_content += f"| {label} | {inp:,} | {out:,} | ${cost:.4f} |\n"
+            total_cost += cost
+            total_input += inp
+            total_output += out
+        md_content += f"| **Day {day} 合計** | **{total_input:,}** | **{total_output:,}** | **${total_cost:.4f}** |\n\n"
+
     file_path = logs_dir / f"Day_{day}.md"
     file_path.write_text(md_content, encoding="utf-8")
     return file_path

@@ -166,3 +166,4 @@ class DayProcessingState(BaseModel):
     daily_mood: MoodState = Field(default_factory=MoodState, description="日次集約ムード（Peak-End Rule）")
     key_memory: Optional[KeyMemory] = None
     next_day_plans: list[dict] = Field(default_factory=list)
+    cost_records: list[dict] = Field(default_factory=list, description="各ステップのトークンコスト記録")

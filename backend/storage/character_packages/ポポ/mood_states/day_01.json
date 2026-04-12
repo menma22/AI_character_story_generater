@@ -1,0 +1,13 @@
+{
+  "day": 1,
+  "daily_mood": {
+    "valence": -3.4958897600000003,
+    "arousal": 0.0,
+    "dominance": -1.8727244628125002
+  },
+  "carry_over_mood": {
+    "valence": -2.8666296032000003,
+    "arousal": 0.0,
+    "dominance": -1.6011794157046877
+  }
+}

@@ -80,6 +80,63 @@ class TokenTracker:
             "estimated_cost_usd": round(self.estimated_cost_usd(), 4),
         }
 
+    def snapshot(self) -> dict:
+        """現在の累計値のコピーを返す（スナップショット用）"""
+        return {
+            "opus_input": self.opus_input,
+            "opus_output": self.opus_output,
+            "opus_cache_write": self.opus_cache_write,
+            "opus_cache_read": self.opus_cache_read,
+            "sonnet_input": self.sonnet_input,
+            "sonnet_output": self.sonnet_output,
+            "sonnet_cache_write": self.sonnet_cache_write,
+            "sonnet_cache_read": self.sonnet_cache_read,
+            "gemini_input": self.gemini_input,
+            "gemini_output": self.gemini_output,
+            "total_calls": self.total_calls,
+        }
+
+    def cost_since(self, snap: dict, label: str) -> dict:
+        """スナップショット以降の差分コストを計算して返す
+
+        Args:
+            snap: snapshot() で取得した辞書
+            label: このコスト記録のラベル（"日記生成"など）
+
+        Returns:
+            {
+                "label": str,
+                "input_tokens": int,
+                "output_tokens": int,
+                "cost_usd": float,
+                "detail": {モデル別詳細}
+            }
+        """
+        di = self.opus_input - snap.get("opus_input", 0)
+        do = self.opus_output - snap.get("opus_output", 0)
+        si = self.sonnet_input - snap.get("sonnet_input", 0)
+        so = self.sonnet_output - snap.get("sonnet_output", 0)
+        gi = self.gemini_input - snap.get("gemini_input", 0)
+        go = self.gemini_output - snap.get("gemini_output", 0)
+
+        # 推定コスト計算（プライシングに合わせる）
+        opus_cost = (di * 15 + do * 75) / 1_000_000
+        sonnet_cost = (si * 3 + so * 15) / 1_000_000
+        gemini_cost = (gi * 1.25 + go * 3.75) / 1_000_000
+        total_cost = opus_cost + sonnet_cost + gemini_cost
+
+        return {
+            "label": label,
+            "input_tokens": di + si + gi,
+            "output_tokens": do + so + go,
+            "cost_usd": round(total_cost, 6),
+            "detail": {
+                "opus": {"input": di, "output": do},
+                "sonnet": {"input": si, "output": so},
+                "gemini": {"input": gi, "output": go},
+            },
+        }
+
 
 # グローバルトラッカー
 token_tracker = TokenTracker()

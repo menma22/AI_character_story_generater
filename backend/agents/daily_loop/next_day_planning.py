@@ -75,8 +75,8 @@ class NextDayPlanningAgent:
 明日の行動を主体的に計画します。この計画は後の日記にも反映されます。
 
 【ルール】
-1. 今日の出来事と内省を踏まえて、明日したいことを3つ出す
-2. 大きな計画ではなく、小さくて具体的な行動を出す
+1. 今日の出来事と内省を踏まえて、明日したいことを1つ出す
+2. 明日行う予定の具体的な行動を出す
 3. キャラクターの性格・価値観に基づいた自然な欲求であること
 4. すべてが前向きである必要はない（回避行動でもよい）
 5. {voice_context}
@@ -96,6 +96,7 @@ class NextDayPlanningAgent:
                 f"【Day {day}の出来事】\n{event_summaries}\n\n"
                 f"【Day {day}の内省】\n{introspection.raw_text}\n\n"
                 f"【現在のムード】V={current_mood.valence:.1f} A={current_mood.arousal:.1f} D={current_mood.dominance:.1f}\n\n"
+                f"{wrap_context('短期記憶（最重要 — デイリーログ + key memory）', self._build_memory_context(), 'diary')}"
                 f"明日やりたいことを3つ考えてください。"
             ),
             json_mode=True,
@@ -154,13 +155,12 @@ class NextDayPlanningAgent:
 （裏方、主人公からは見えない）。
 
 【タスク】
-主人公が「明日やりたい」と言った3つの計画のうち、
-翌日の既存イベント列と衝突しない1つを選んで、イベントとして挿入してください。
+主人公が「明日やりたい」と言った計画を
+翌日の既存イベントと整合性を保った上で、イベントとして挿入してください。
 
 【ルール】
 1. 既存イベントの時間帯と重複しない時間を選ぶ
-2. 物語の流れに自然に組み込めるものを優先
-3. 全てが不整合な場合、最も影響が少ないものを選ぶ
+2. 物語の流れに自然に組み込む
 4. source は必ず "protagonist_plan" にすること
 5. known_to_protagonist は true にすること
 
@@ -186,8 +186,7 @@ class NextDayPlanningAgent:
 }""",
             user_message=(
                 f"【Day {next_day}の既存イベント】\n{existing_summary}\n\n"
-                f"【主人公の計画（3つ）】\n{plans_summary}\n\n"
-                f"1つを選んでイベントとして挿入してください。"
+                f"【主人公の計画】\n{plans_summary}\n\n"
             ),
             json_mode=True,
         )
