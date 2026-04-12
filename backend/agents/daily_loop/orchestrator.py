@@ -54,6 +54,7 @@ from backend.agents.context_descriptions import wrap_context
 from backend.agents.daily_loop.checkers import (
     ProfileChecker, TemperamentChecker, PersonalityChecker, ValuesChecker,
 )
+from backend.agents.daily_loop.linguistic_validator import LinguisticExpressionValidator
 
 logger = logging.getLogger(__name__)
 
@@ -485,17 +486,37 @@ class DailyLoopOrchestrator:
         return "(周囲人物情報なし)"
 
     def _build_voice_context(self) -> str:
-        """言語的表現方法のコンテキスト（日記生成プロンプトに注入）"""
+        """言語的表現方法のコンテキスト（日記生成プロンプトに注入、すべてのフィールドを網羅）"""
         le = self.package.linguistic_expression
         if le:
             vf = le.speech_characteristics.concrete_features
             parts = [
                 f"一人称: {vf.first_person}",
+            ]
+
+            # 二人称の使い分け（context-dependent）
+            if vf.second_person_by_context:
+                spc = vf.second_person_by_context
+                second_person_parts = []
+                if spc.to_intimate:
+                    second_person_parts.append(f"親しい人への二人称: {spc.to_intimate}")
+                if spc.to_superior:
+                    second_person_parts.append(f"目上への二人称: {spc.to_superior}")
+                if spc.to_stranger:
+                    second_person_parts.append(f"知らない人への二人称: {spc.to_stranger}")
+                if second_person_parts:
+                    parts.append("二人称の使い分け:\n  " + "\n  ".join(second_person_parts))
+
+            parts.extend([
                 f"口癖: {', '.join(vf.speech_patterns)}",
                 f"文末表現: {', '.join(vf.sentence_endings)}",
                 f"漢字/ひらがな: {vf.kanji_hiragana_tendency}",
+                f"絵文字・記号の使用: {vf.emoji_usage}",
+                f"自問形式の頻度: {vf.self_questioning_frequency}",
+                f"比喩・反語の頻度: {vf.metaphor_irony_frequency}",
                 f"避ける語彙: {', '.join(vf.avoided_words)}",
-            ]
+            ])
+
             # 抽象的な喋り方の雰囲気
             if le.speech_characteristics.abstract_feel:
                 parts.append(f"喋り方の雰囲気: {le.speech_characteristics.abstract_feel}")
@@ -503,6 +524,7 @@ class DailyLoopOrchestrator:
                 parts.append(f"会話スタイル: {le.speech_characteristics.conversation_style}")
             if le.speech_characteristics.emotional_expression_tendency:
                 parts.append(f"感情表現の傾向: {le.speech_characteristics.emotional_expression_tendency}")
+
             # 日記の書き方の雰囲気
             da = le.diary_writing_atmosphere
             if da.tone:
@@ -517,7 +539,9 @@ class DailyLoopOrchestrator:
                 parts.append(f"省略する傾向: {da.what_gets_omitted}")
             if da.raw_atmosphere_description:
                 parts.append(f"日記の空気感: {da.raw_atmosphere_description}")
+
             return "\n".join(parts)
+
         # フォールバック: 旧形式（linguistic_expressionがない場合）
         if self.package.macro_profile and self.package.macro_profile.voice_fingerprint:
             vf = self.package.macro_profile.voice_fingerprint
@@ -1173,13 +1197,46 @@ class DailyLoopOrchestrator:
                 issues = "\n- ".join(result["issues"])
                 return {"status": "FAILED", "issues_found": result["issues"], "advice": f"以下の問題を修正して再度ドラフトを作成してください:\n- {issues}"}
 
+        async def validate_linguistic_expression(draft_diary_text: str = None) -> dict:
+            """言語表現バリデーター：LinguisticExpressionのすべての要素が守られているかを詳細に検証"""
+            nonlocal check_passed
+            if not draft_diary_text:
+                return {"status": "FAILED", "message": "ERROR: draft_diary_text引数が欠落しています。"}
+            if not check_passed or last_checked_draft != draft_diary_text:
+                return {"status": "BLOCKED", "message": "先にcheck_diary_rulesでSUCCESSを得てください。"}
+
+            await self._notify("言語表現の詳細バリデーション中...")
+
+            if not self.package.linguistic_expression:
+                return {"status": "SUCCESS", "message": "言語表現定義が未設定のため、スキップします。"}
+
+            validator = LinguisticExpressionValidator(self.package.linguistic_expression)
+            temp_diary = DiaryEntry(day=day, content=draft_diary_text, mood_at_writing=self.current_mood)
+            result = await validator.validate(temp_diary, self.current_mood)
+
+            if result["passed"]:
+                passed_count = len(result["passed_items"])
+                return {
+                    "status": "SUCCESS",
+                    "message": f"言語表現バリデーション合格。{passed_count}項目の言語特性が適切に表現されています。",
+                    "score": result["score"],
+                }
+            else:
+                issues = "\n- ".join(result["issues"])
+                return {
+                    "status": "FAILED",
+                    "score": result["score"],
+                    "issues_found": result["issues"],
+                    "advice": f"以下の言語表現の問題を修正してください：\n- {issues}\n\n修正アドバイス：{result['feedback']}",
+                }
+
         async def third_party_review(draft_diary_text: str = None) -> dict:
             """第三者（読者）の視点で日記の品質をチェックする"""
             nonlocal third_party_passed, last_third_party_draft, check_passed
             if not draft_diary_text:
                 return {"status": "FAILED", "message": "ERROR: draft_diary_text引数が欠落しています。"}
             if not check_passed or last_checked_draft != draft_diary_text:
-                return {"status": "BLOCKED", "message": "先にcheck_diary_rulesでSUCCESSを得てください。言語チェック通過後のドラフトをそのまま渡してください。"}
+                return {"status": "BLOCKED", "message": "先に check_diary_rules → validate_linguistic_expression でSUCCESSを得てください。"}
 
             await self._notify("第三者視点での日記レビュー中...")
 
@@ -1215,12 +1272,16 @@ class DailyLoopOrchestrator:
             nonlocal check_passed, last_checked_draft, final_diary_content, third_party_passed, last_third_party_draft
             if not final_diary_text:
                 return {"status": "FAILED", "message": "ERROR: final_diary_text引数が欠落しています。"}
-            # check_diary_rules と third_party_review の両方を経由していない場合は強制チェック
+            # check_diary_rules, validate_linguistic_expression, third_party_review の全てを経由していない場合は強制チェック
             if not check_passed or last_checked_draft != final_diary_text:
                 await self._notify("提出前の強制チェック（言語ルール）を実行中...")
                 check_result = await check_diary_rules(final_diary_text)
                 if check_result["status"] != "SUCCESS":
                     return {"status": "FAILED", "message": f"提出拒否: check_diary_rules を先に通過させてください。{check_result.get('advice', '')}"}
+                await self._notify("提出前の強制チェック（言語表現）を実行中...")
+                validate_result = await validate_linguistic_expression(final_diary_text)
+                if validate_result["status"] != "SUCCESS":
+                    return {"status": "FAILED", "message": f"提出拒否: validate_linguistic_expression を先に通過させてください。{validate_result.get('advice', '')}"}
             if not third_party_passed or last_third_party_draft != final_diary_text:
                 await self._notify("提出前の強制チェック（第三者レビュー）を実行中...")
                 review_result = await third_party_review(final_diary_text)
@@ -1244,12 +1305,24 @@ class DailyLoopOrchestrator:
                 handler=check_diary_rules
             ),
             AgentTool(
-                name="third_party_review",
-                description="check_diary_rulesでSUCCESS後に呼び出してください。第三者（読者）の視点で日記を評価します。理解しやすいか、面白いか、矛盾がないか、自然な日記として成立しているかを検証します。SUCCESSが返るまで修正・再チェックを繰り返してください。",
+                name="validate_linguistic_expression",
+                description="check_diary_rulesでSUCCESS後に呼び出してください。キャラクターの言語表現方法（一人称、口癖、文末表現、絵文字使用、自問頻度、比喩頻度、日記のトーン等）がすべて正しく守られているかを詳細に検証します。SUCCESSが返るまで修正・再チェックを繰り返してください。",
                 input_schema={
                     "type": "object",
                     "properties": {
                         "draft_diary_text": {"type": "string", "description": "check_diary_rulesでSUCCESS済みの日記ドラフト全文"}
+                    },
+                    "required": ["draft_diary_text"]
+                },
+                handler=validate_linguistic_expression
+            ),
+            AgentTool(
+                name="third_party_review",
+                description="check_diary_rules と validate_linguistic_expression でSUCCESS後に呼び出してください。第三者（読者）の視点で日記を評価します。理解しやすいか、面白いか、矛盾がないか、自然な日記として成立しているかを検証します。SUCCESSが返るまで修正・再チェックを繰り返してください。",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "draft_diary_text": {"type": "string", "description": "check_diary_rules と validate_linguistic_expression でSUCCESS済みの日記ドラフト全文"}
                     },
                     "required": ["draft_diary_text"]
                 },
@@ -1278,7 +1351,7 @@ class DailyLoopOrchestrator:
 - 一人称視点で、そのキャラクターらしい文体で書くこと
 - 避ける語彙は絶対に使わないこと（「成長」「気づき」「学び」等のAI臭い語彙）
 - 全ての出来事を書く必要はない。主観的に重要だと感じたことだけを書く。しかし、1日全体を見渡しての所感を書くのは推奨
-- 日々の経験や記憶、感情、認識の変化が反映されているとよい。
+- 日々の経験や記憶、感情、認識の変化が反映されているとよい。昨日までの出来事が今日の日記の語り方に影響を及ぼし、時間が進むにつれて、キャラクターの輪郭が立ち上がっていくことを期待します。
 - ただの、出来事の羅列ではなく、キャラクタ独自の経験や感性、記憶、キャラクター設定に基づき、深くキャラクターの内面を反映した文章にする必要がある。
 - 第3者が日記だけを見て、理解でき、納得でき、面白い日記である必要がある。
 - 与えられた、マクロプロフィール、世界設定、今日の出来事、内省メモ、現在のムード、短期記憶、規範層、過去の日記を全て加味して、日記を作成してください。
@@ -1291,9 +1364,10 @@ class DailyLoopOrchestrator:
 【エージェンティック行動指針】
 1. まず日記のドラフトをPlanを立て計画的に執筆し、`check_diary_rules` ツールを使って自身の口癖や禁止語彙に反していないか自発的にテストしてください。
 2. もし不合格（FAILED）が返ってきたら、指摘された点に基づいて自ら文章を書き直し、再度ツールでチェックしてください。
-3. `check_diary_rules` で合格（SUCCESS）が返ってきたら、同じドラフトを `third_party_review` ツールに渡して第三者視点のチェックを受けてください。
-4. `third_party_review` で問題が指摘されたら、修正して再度 `check_diary_rules` → `third_party_review` の順で通してください。
-5. 両方のチェックで合格（SUCCESS）が返ってきたら、`submit_final_diary` ツールで提出して任務を完了してください。"""
+3. `check_diary_rules` で合格（SUCCESS）が返ってきたら、同じドラフトを `validate_linguistic_expression` ツールに渡して言語表現がすべて守られているか検証してください。
+4. `validate_linguistic_expression` で合格（SUCCESS）が返ってきたら、同じドラフトを `third_party_review` ツールに渡して第三者視点のチェックを受けてください。
+5. いずれかのツールで不合格（FAILED）が返ってきたら、指摘に基づいて修正し、再度 `check_diary_rules` → `validate_linguistic_expression` → `third_party_review` の順で通してください。
+6. 3つすべてのチェックで合格（SUCCESS）が返ってきたら、`submit_final_diary` ツールで提出して任務を完了してください。"""
 
         # Day1特別処理: 世界観・設定紹介セクション
         if day == 1:
@@ -1410,12 +1484,12 @@ class DailyLoopOrchestrator:
 
 出力形式: JSON
 {"key_memory": "300字以内の要約"}""",
-            user_message=f"Day {day}の日記:\n{diary.content}",
+            user_message=(f"Day {day}の日記:\n{diary.content}\n\n"
                          f"{wrap_context('マクロプロフィール', self._build_macro_context(), 'introspection')}\n\n"
                          f"{wrap_context('世界設定', self._build_world_context())}\n\n"
                          f"{wrap_context('今日の行動履歴', f'Day {day}の行動まとめ:\n{action_summary}')}\n\n"
                          f"{wrap_context('過去の記憶', self._build_memory_context())}\n\n"
-                         f"{wrap_context('自伝的エピソード', self._build_episodes_context()[:600])}"                         
+                         f"{wrap_context('自伝的エピソード', self._build_episodes_context()[:600])}"),
             json_mode=True,
         )
         data = result["content"] if isinstance(result["content"], dict) else {}
