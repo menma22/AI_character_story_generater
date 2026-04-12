@@ -585,6 +585,28 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
     - Day全体の合計行 (Day N 合計 | 合計入力 | 合計出力 | 合計コスト)
   - **設計原則**: 各生成物完成時に「これまでのコスト」がスナップショットで「これからのコスト」と分離でき、生成物→コストの対応関係を明確化
 
+### Stage 24: Opusエージェントのフォールバック先をGemini 3.1 Proに更新
+
+**(a) 当初設計**: `_call_llm_once()` で `tier="opus"` または `tier="sonnet"` のどちらでも失敗時に同じ `_call_gemini_with_flash_fallback()` ヘルパーを呼び出す。このヘルパーは **常に** `LLMModels.GEMINI_2_5_PRO` でGeminiを試行していた。つまり、高品質な Opus エージェントが失敗した場合も、低コストな Sonnet エージェントが失敗した場合も、同じ Gemini 2.5 Pro へフォールバックしていた。
+
+**(b) 変更・根拠**: Gemini 2.5 Pro から Gemini 3.1 Pro がリリースされ、より高性能・高品質となった。Opus エージェント（高品質ティア）が Claude で失敗した場合、フォールバック先も高性能な Gemini 3.1 Pro にすることで、品質損失を最小化できると判断。一方、Sonnet エージェント（低コストティア）のフォールバックは既に Gemini 2.5 Pro で十分な性能をもつため、コスト・パフォーマンスのバランスから変更不要。また `tier="gemini"` の直接呼び出し（最低コストティア）も Gemini 2.5 Pro のまま維持。
+
+**(c) 採用プラクティス**:
+- `LLMModels` に新定数 `GEMINI_3_1_PRO = "models/gemini-3.1-pro"` を追加
+- `_call_gemini_with_flash_fallback()` 関数シグネチャに `gemini_model: Optional[str] = None` パラメータを追加
+  - デフォルトは `LLMModels.GEMINI_2_5_PRO`（Sonnet/Gemini tier用）
+  - 関数内で `if gemini_model is None: gemini_model = LLMModels.GEMINI_2_5_PRO`
+- Opus 失敗時のフォールバック呼び出し（行 431-440）で `gemini_model=LLMModels.GEMINI_3_1_PRO` を指定
+  - ```python
+    gemini_model = LLMModels.GEMINI_3_1_PRO if tier == "opus" else None
+    return await _call_gemini_with_flash_fallback(
+        ...,
+        gemini_model=gemini_model,
+    )
+    ```
+- ログメッセージも動的化：`f"[call_llm] {gemini_model} quota exceeded. Falling back to Gemini 2.0 Flash."` で実際のモデル名を出力
+- **設計原則**: フォールバック先をティア別に差別化し、各ティアの品質要求に応じた最適なモデルを割り当てる。コスト・品質のバランスを階層化する
+
 ### Stage 20: セーブポイント二重保存・中断再開の確実化
 
 - **対象/機能**: キャラクター生成チェックポイントのロールバック問題修正、日記ループのpackage.json永続化
@@ -640,6 +662,19 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
   - **3段階ゲート化**: 日記提出フロー を「check_diary_rules（基本的な言語ルール） → validate_linguistic_expression（詳細な言語表現） → third_party_review（読み物としての品質）」の3段階に。第2段階で細かい言語特性の遵守を厳密に検証し、修正アドバイスを返す
   - **スコアリング**: バリデーター は「0.0～1.0の品質スコア」と「どの項目が守られていたか/守られていなかったか」を明示する。これにより品質の可視化と段階的改善が可能
 
+### 23. APIキーの動的操作・伝播システム（デカップリング）
+
+**(a) 当初設計**: APIキーはバックエンドの `.env` ファイルにハードコードされ、環境変数としてのみ管理されていた。ユーザーが自身のキーを使用する手段がなく、サーバー側のリソースに依存していた。
+
+**(b) 変更・根拠**: ユーザーが独自の API キー（OpenAI, Anthropic, Google AI）をフロントエンドから入力・管理できるようにし、サーバー側のキーに依存せず柔軟な運用を可能にするため。セキュリティ面でも、コード内や環境変数への固定を避け、リクエスト単位での動的提供が望ましい。
+
+**(c) 採用プラクティス**:
+- **フロントエンドの永続化**: `localStorage` を使用してブラウザ側に暗号化（または難読化）して保存。
+- **WebSocket 経由の伝播**: キャラクター生成、再生成、日記生成の各リクエストに `api_keys` ペイロードを同梱。
+- **バックエンドの網羅的伝播**: WebSocket ハンドラから `MasterOrchestrator`、`DailyLoopOrchestrator`、`regenerate_artifact` を経て、全ての Worker (Phase A-1, A-2, A-3, Phase D) およびサブエージェント（Impulsive, Reflective 等）の `call_llm` 呼び出しまで `api_keys` 引数を通貫。
+- **動的キー優先ロジック**: `llm_api.py` の `call_llm` において、引数として渡された `api_keys` が存在する場合は環境変数よりも優先して使用する。
+- **設定 UI**: モダンなモーダル UI を実装し、各プロバイダごとのキー設定を容易に。
+
 ---
 
 ## パート3: プロジェクト管理
@@ -670,6 +705,9 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 | Stage 20: セーブポイント二重保存・中断再開確実化 | ✅ 実装完了 | `_checkpoint()`をSID名+キャラ名の二重保存に変更、DailyLoopでの各Day完了後package.json更新、run_diary_generation完了後package.json最終保存 |
 | Stage 21: Gemini 2.5 Proクォータ超過時の2段階フォールバック | ✅ 実装完了 | `LLMModels.GEMINI_2_0_FLASH`追加、`_call_gemini_with_flash_fallback()`で2.5 Pro→2.0 Flash自動切り替え（クォータ超過時のみ）、Claude失敗時フォールバックにも適用 |
 | Stage 22: LinguisticExpression全フィールド活用・詳細バリデーション | ✅ 実装完了 | `_build_voice_context()`を完全拡張（二人称、絵文字、自問頻度、比喩頻度を追加）、`LinguisticExpressionValidator`新設、日記agenticループに`validate_linguistic_expression`ツール追加（check_diary_rules→validate_linguistic_expression→third_party_review の3段階ゲート化） |
+| Stage 23: APIキーの動的操作・伝播システム | ✅ 実装完了 | フロントエンドからのAPIキー(OpenAI, Anthropic, Google AI)入力・保存・送信、WebSocket経由の動的伝播、バックエンド全エージェントへの api_keys 注入、llm_api.py での動的キー優先ロジックの確立 |
+| Stage 23: 各ステップごとのトークン消費コスト記録システム | ✅ 実装完了 | `TokenTracker.snapshot()`と`cost_since()`メソッド追加、`DayProcessingState.cost_records`フィールド追加、DailyLoopOrchestratorで各ステップ前後のスナップショット取得、daily_logs末尾にコスト記録テーブル出力 |
+| Stage 24: Opusエージェントのフォールバック先をGemini 3.1 Proに更新 | ✅ 実装完了 | `config.py`に`GEMINI_3_1_PRO`定数追加、`_call_gemini_with_flash_fallback()`に`gemini_model`パラメータ追加、Opus失敗時のみ`GEMINI_3_1_PRO`を指定、Sonnet/Gemini tierはGemini 2.5 Pro維持 |
 
 ### 次のアクション
 
