@@ -6,15 +6,16 @@ v10 §2.5 / v2 §6.6 準拠。
 責務:
 - WorldContextWorker: 世界設定
 - SupportingCharactersWorker: 周囲の人物
+- CharacterCapabilitiesAgent: 所持品・能力・可能行動（エージェンティック化、Web検索2回以上+批評+内省）
 - NarrativeArcDesigner: 物語アーク + Day5山場設計
 - ConflictIntensityDesigner: 葛藤強度アーク
 - WeeklyEventWriter: 14-28件のイベント一括生成（エージェンティック化）
 
 設計方針:
-- Step 1-4はプロンプトコンテキストとしてのみ使用されるため、
-  JSON出力を強制せず自然言語テキストで受け渡す。
+- Step 1-2（WorldContext, SupportingCharacters）は自然言語テキストで受け渡す。
+- Step 2.5（CharacterCapabilities）はエージェンティックループ（search×2+ → draft → critique → self_reflect → submit）で品質を担保。
 - Step 5（イベント生成）はエージェンティックループ（draft → critique → self_reflect → submit）で品質を担保。
-- フォールバック: agenticループ失敗時は従来のone-shot JSON出力に切り替え。
+- フォールバック: agenticループ失敗時は従来のone-shot出力に切り替え。
 """
 
 import json
@@ -28,7 +29,7 @@ from backend.models.character import (
     AutobiographicalEpisodes, WeeklyEventsStore,
     WorldContext, SupportingCharacter, NarrativeArc,
     ConflictIntensityArc, Event,
-    CharacterCapabilities, PossessedItem, CharacterAbility, AvailableAction,
+    CharacterCapabilities,
 )
 from backend.tools.llm_api import call_llm
 from backend.agents.context_descriptions import wrap_context
@@ -92,45 +93,8 @@ CONFLICT_INTENSITY_PROMPT = """あなたは7日間の葛藤強度アークを設
 
 自然な文章で回答してください。"""
 
-CHARACTER_CAPABILITIES_PROMPT = """あなたはキャラクターの所持品・能力・可能行動を具体化するWorkerです。
-Creative Directorの意向（concept_package）とキャラクターのマクロプロフィールに基づき、
-キャラクターが実際に持っているもの、できること、とれる行動を詳細に記述してください。
-
-【最重要】concept_package の capabilities_hints（key_possessions_hint / core_abilities_hint / signature_actions_hint）が存在する場合、
-それを具体化の起点・方向性として必ず反映してください。hintsが示した方向性に沿って、各アイテム・能力・行動を具体化すること。
-
-【出力形式】JSON
-{
-  "possessions": [
-    {
-      "name": "アイテム名",
-      "description": "見た目・用途の説明",
-      "always_carried": true/false,
-      "emotional_significance": "このキャラクターにとっての感情的意味"
-    }
-  ],
-  "abilities": [
-    {
-      "name": "能力名",
-      "description": "能力の説明",
-      "proficiency": "novice/medium/expert",
-      "origin": "どこで身につけたか"
-    }
-  ],
-  "available_actions": [
-    {
-      "action": "行動名",
-      "context": "どんな場面で使えるか",
-      "prerequisites": "前提条件"
-    }
-  ]
-}
-
-【制約】
-- possessions: 5-10個（常時携帯品を含む）
-- abilities: 3-5個（職業・背景から自然に導かれるもの）
-- available_actions: 3-5個（イベント対応で実際に使えるもの）
-- 全てキャラクターの背景・職業・価値観と整合すること"""
+# CHARACTER_CAPABILITIES_PROMPT は capabilities_agent.py の CharacterCapabilitiesAgent に移行。
+# このファイルでは参照しない。
 
 # ── Step 5: イベント生成（エージェンティック化） ──
 
@@ -332,14 +296,8 @@ class PhaseDOrchestrator:
             user_message=f"{context}\n\n周囲の人物を設計してください。",
             api_keys=self.api_keys,
         )
-        caps_task = call_llm(
-            tier=self.profile.worker_tier, system_prompt=CHARACTER_CAPABILITIES_PROMPT,
-            user_message=f"{context}\n\n所持品・能力・可能行動を生成してください。",
-            json_mode=True,
-            api_keys=self.api_keys,
-        )
 
-        world_result, chars_result, caps_result = await asyncio.gather(world_task, chars_task, caps_task)
+        world_result, chars_result = await asyncio.gather(world_task, chars_task)
 
         world_text = world_result["content"] if isinstance(world_result["content"], str) else json.dumps(world_result["content"], ensure_ascii=False)
         chars_text = chars_result["content"] if isinstance(chars_result["content"], str) else json.dumps(chars_result["content"], ensure_ascii=False)
@@ -347,24 +305,23 @@ class PhaseDOrchestrator:
         world_context = WorldContext(description=world_text)
         supporting_chars = []
 
-        # caps_result をパースして CharacterCapabilities に変換
-        caps_raw = caps_result["content"] if isinstance(caps_result["content"], dict) else {}
-        caps_text = json.dumps(caps_raw, ensure_ascii=False) if caps_raw else ""
-        try:
-            self.character_capabilities = CharacterCapabilities(
-                possessions=[PossessedItem(**p) for p in caps_raw.get("possessions", []) if isinstance(p, dict)],
-                abilities=[CharacterAbility(**a) for a in caps_raw.get("abilities", []) if isinstance(a, dict)],
-                available_actions=[AvailableAction(**act) for act in caps_raw.get("available_actions", []) if isinstance(act, dict)],
-                raw_text=caps_text,
-            )
-        except Exception as e:
-            logger.warning(f"[Phase D] CharacterCapabilities parse error: {e}")
-            self.character_capabilities = CharacterCapabilities(raw_text=caps_text)
-
         if self.ws:
             await self.ws.send_agent_thought("[Phase D] WorldContext", "世界設定生成完了", "complete")
             await self.ws.send_agent_thought("[Phase D] SupportingCharacters", "周囲人物設計完了", "complete")
-            await self.ws.send_agent_thought("[Phase D] CharacterCapabilities", f"所持品{len(self.character_capabilities.possessions)}個・能力{len(self.character_capabilities.abilities)}個・行動{len(self.character_capabilities.available_actions)}個生成完了", "complete")
+
+        # ── Step 2.5: CharacterCapabilitiesAgent（エージェンティックループ） ──
+        await self._notify("Step 2.5: CharacterCapabilitiesAgent 起動（所持品・能力・行動をエージェントで設計）...")
+        from backend.agents.phase_d.capabilities_agent import CharacterCapabilitiesAgent
+        caps_agent = CharacterCapabilitiesAgent(
+            concept=self.concept,
+            macro_profile=self.macro,
+            context=context,
+            profile=self.profile,
+            ws_manager=self.ws,
+            api_keys=self.api_keys,
+        )
+        self.character_capabilities = await caps_agent.run()
+        caps_text = self.character_capabilities.raw_text
 
         # ── Step 3-4: NarrativeArcDesigner + ConflictIntensityDesigner (並列、自然言語) ──
         await self._notify("Step 3-4: 物語アーク + 葛藤強度設計")
