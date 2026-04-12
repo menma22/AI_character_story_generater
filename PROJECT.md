@@ -711,6 +711,7 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 | Stage 23: 各ステップごとのトークン消費コスト記録システム | ✅ 実装完了 | `TokenTracker.snapshot()`と`cost_since()`メソッド追加、`DayProcessingState.cost_records`フィールド追加、DailyLoopOrchestratorで各ステップ前後のスナップショット取得、daily_logs末尾にコスト記録テーブル出力 |
 | Stage 24: Opusエージェントのフォールバック先をGemini 3.1 Proに更新 | ✅ 実装完了 | `config.py`に`GEMINI_3_1_PRO`定数追加、`_call_gemini_with_flash_fallback()`に`gemini_model`パラメータ追加、Opus失敗時のみ`GEMINI_3_1_PRO`を指定、Sonnet/Gemini tierはGemini 2.5 Pro維持 |
 | Stage 25: APIキーの動的操作・伝播システム | ✅ 実装完了 | 全エージェント層（Master/DailyLoop/Workers/DailyAgents）への動的プロパゲーションとフロントエンドUIの統合を完了。 |
+| Stage 26: Phase A-2型ヒント欠落バグ修正 | ✅ 実装完了 | `backend/agents/phase_a2/orchestrator.py`で`Optional`型ヒントが使用されているのに`typing.Optional`がインポートされていなかった問題を修正。`from typing import Optional`追加。 |
 
 ### 次のアクション
 
