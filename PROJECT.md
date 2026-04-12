@@ -28,7 +28,8 @@ AI_character_story_generater/
 │   │   ├── phase_a3/
 │   │   │   └── orchestrator.py                # Phase A-3: 自伝的エピソード (エージェンティック, 2層自己批判)
 │   │   ├── phase_d/
-│   │   │   └── orchestrator.py                # Phase D: 7日間イベント列 (Step5エージェンティック, 2層自己批判)
+│   │   │   ├── orchestrator.py                # Phase D: 7日間イベント列 (Step5エージェンティック, 2層自己批判)
+│   │   │   └── capabilities_agent.py          # CharacterCapabilitiesAgent (Web検索2回以上+批評+内省, エージェンティック化)
 │   │   ├── daily_loop/
 │   │   │   ├── orchestrator.py                # Day 1-7 日次ループ (RIM + 感情強度判定 + 内省 + 日記)
 │   │   │   ├── activation.py                  # パラメータ動的活性化 (5-10個選択, v10 §3.5)
@@ -247,7 +248,7 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 | `MicroParameters` | 52パラメータ + 規範層 | A-2 | 15 Worker対応サブモデル(SchwartzValuesOutput等) |
 | `AutobiographicalEpisodes` | 自伝的エピソード（5-8個） | A-3 | McAdams 5カテゴリ + redemption bias対策 |
 | `WeeklyEventsStore` | 7日間イベント列（14-28件） | D | 2軸メタデータ(known/unknown x expectedness) |
-| `CharacterCapabilities` | 所持品・能力・可能行動（Phase D並列生成） | D | PossessedItem(name/description/always_carried/emotional_significance) × 5-10個、CharacterAbility(name/description/proficiency/origin) × 3-5個、AvailableAction(action/context/prerequisites) × 3-5個 |
+| `CharacterCapabilities` | 所持品・能力・可能行動（Phase D エージェンティック生成） | D | PossessedItem(name/description/always_carried/emotional_significance) × 5-10個、CharacterAbility(name/description/proficiency/origin) × 3-5個、AvailableAction(action/context/prerequisites) × 3-5個 |
 | `CapabilitiesHints` | 所持品・能力の方向性ヒント（Creative Director設計） | Tier -1 | key_possessions_hint / core_abilities_hint / signature_actions_hint の3フィールド。ConceptPackageに内包。Phase D capabilities生成の起点として参照 |
 | `MoodState` | PAD 3次元ムード | 日次ループ | Peak-End Rule + carry-over |
 | `ShortTermMemoryDB` | 記憶（通常領域のみ、段階圧縮） | 日次ループ | LLM段階圧縮(400→200→80→20字) |
@@ -626,6 +627,29 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 - capabilities context: `_build_capabilities_context()`メソッド追加（Stage 27から移植）、統合エージェントのsystem_promptに所持品・能力参照指示追加、統合エージェント・日記のuser_messageに`wrap_context('所持品・能力', ...)`追加
 - **教訓**: ファイル全体の書き換え時は、行数差が大きい場合（特に半減以上）にdiffレビューを必須とすべき。APIキー追加のような横断的変更では、各メソッドへの引数追加にとどめ、既存ロジックを書き換えない
 
+### Stage 31: CharacterCapabilitiesWorker をエージェントに昇格
+
+**(a) 当初設計（Stage 27/28時点）**: `CHARACTER_CAPABILITIES_PROMPT` は Phase D Step 1-2 の並列 gather の中で WorldContext・SupportingCharacters と同時に呼ばれる単純な one-shot Worker だった。プロンプトを渡して JSON を返させるだけであり、設計品質の自律的な検証・改善のメカニズムは存在しなかった。
+
+**(b) 変更・根拠**: 所持品・能力設計は「このキャラクター以外には持てないもの」を作るべき高品質タスクであり、one-shot JSON 生成では設計の濃密さが保証できない。特に
+- 汎用アイテム（スマートフォン等）に感情的意味が付与されない
+- 能力の origin がキャラクターの人生史と接続されない
+- Creative Director の capabilities_hints がキャラクターの職業/世界観の文脈から具体化されない
+という問題が構造的に内在していた。Creative Director や Phase A-3 と同様に、Web 検索による事前調査と多層の品質ゲートが必要と判断。
+
+**(c) 採用プラクティス**:
+- **`CharacterCapabilitiesAgent` クラスを新設** (`backend/agents/phase_d/capabilities_agent.py`)
+- **5ツール構成**:
+  1. `search_web` — キャラクターの職業・背景・世界観に関する Web 検索（最低2回必須、ブロックガード付き）
+  2. `draft_capabilities` — 所持品・能力・可能行動のドラフト提出（search 2回未満はブロック、構造バリデーション内蔵）
+  3. `request_critique` — 別 LLM（sonnet）による品質批評（5観点: 所持品密度/能力整合/行動有用性/キャラ固有性/具体性）
+  4. `self_reflect` — 「感情的深み・固有性・行動の実用性」を自問する内省（critique pass 後のみ）
+  5. `submit_final_capabilities` — critique + self_reflect 両方 pass 後のみ提出可
+- **エージェンティック行動指針**: リサーチ(search_web ×2回以上) → ドラフト → 批評 → 内省 → 提出 の5フェーズ厳守
+- **Phase D 統合**: Step 1-2 の gather から `caps_task` を除去し、Step 2.5 として `CharacterCapabilitiesAgent.run()` を独立実行
+- **フォールバック**: エージェンティックループ失敗時は one-shot JSON 生成に切り替え（後方互換維持）
+- **設計原則**: 「高品質タスクはエージェント化し、Web 検索による事前調査と多層品質ゲートで設計の密度を保証する」パターンを CharacterCapabilities にも適用。
+
 ### Stage 28: Creative Director への CapabilitiesHints 追加
 
 **(a) 当初設計**: Stage 27 で CharacterCapabilities を Phase D で生成する際、方向性の起点は `concept_package` の JSON 全体とマクロプロフィールのみ。Creative Director は `psychological_hints`（気質・価値観の方向性）を出力していたが、「どんな所持品・能力が必要か」という capabilities の方向性ヒントは一切出力していなかった。Phase D の capabilities ワーカーは全コンテキストから暗黙的に推論するしかなく、Creative Director の意図が十分に反映されるかが不確実だった。
@@ -781,6 +805,8 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 | Stage 27: CharacterCapabilities（所持品・能力・可能行動）追加 | ✅ 実装完了 | 4モデル新設（PossessedItem/CharacterAbility/AvailableAction/CharacterCapabilities）、Phase D に caps_task 並列追加、Master Orchestrator で package に格納、Daily Loop の統合・日記エージェントに投入、MD に 4.5 セクション追加 |
 | Stage 28: Creative Director への CapabilitiesHints 追加 | ✅ 実装完了 | `CapabilitiesHints`モデル新設・ConceptPackageに統合、Creative Director出力スキーマ/批評チェック更新、Phase Dの`_full_context()`でhints明示注入 |
 | Stage 29: DailyLoopOrchestrator重大破損復元 | ✅ 修正完了 | コミット6eae012で1000行以上消失していた問題を2caa6f8ベースで復元、api_keys+capabilities統合 |
+| Stage 30: 性格・気質パラメータ隠蔽 + 短期記憶優先チェッカー設計 | ✅ 実装完了 | パラメータ #1-#52 の設計記録 |
+| Stage 31: CharacterCapabilitiesWorker をエージェントに昇格 | ✅ 実装完了 | `capabilities_agent.py` 新設、search_web 2回以上必須+批評+内省の5フェーズエージェント化、Phase D Step 2.5 として独立実行 |
 
 ### 次のアクション
 
