@@ -37,18 +37,23 @@ class MasterOrchestrator:
     async def _checkpoint(self):
         try:
             from backend.storage.md_storage import save_checkpoint, save_character_profile, save_logs
-            # 名前が未定義の場合はSession IDを使用
-            cname = self.session_id
+            char_name = None
             if self.package.macro_profile and self.package.macro_profile.basic_info:
                 if self.package.macro_profile.basic_info.name:
-                    cname = self.package.macro_profile.basic_info.name
-            
-            await save_checkpoint(cname, self.package)
-            await save_character_profile(cname, self.package)
-            
+                    char_name = self.package.macro_profile.basic_info.name
+
+            # セッションIDで必ず保存（再開時にSID名を使えるようにするため）
+            await save_checkpoint(self.session_id, self.package)
+            await save_character_profile(self.session_id, self.package)
+
+            # キャラ名が判明している場合はキャラ名フォルダにも保存
+            if char_name and char_name != self.session_id:
+                await save_checkpoint(char_name, self.package)
+                await save_character_profile(char_name, self.package)
+
             # 思考ログの保存
             if self.ws and hasattr(self.ws, "thought_history"):
-                await save_logs(cname, self.ws.thought_history)
+                await save_logs(self.session_id, self.ws.thought_history)
         except Exception as e:
             logger.warning(f"Checkpoint save failed: {e}")
     

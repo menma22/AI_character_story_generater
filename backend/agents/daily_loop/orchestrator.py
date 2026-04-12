@@ -869,8 +869,7 @@ class DailyLoopOrchestrator:
 - Ought不一致（義務と現実のギャップ）→ 不安・罪悪感系の感情
 
 【エージェンティック行動指針】
-1. まず行動アイデアを `simulate_action_consequences` でテストしてください。
-2. 最もキャラクターらしく物語として面白い行動案を確定したら、
+1. 主人公AIに対して起こった出来事に対する主人公の反応や選択、行動を生成し、それに伴って生じた出来事などの周辺情報を提供されたマクロプロフィールなどのコンテキスト全てを加味して生成してください。エージェンティックに分析し、計画的に生成してください。
    行動決定 + 周辺情報 + 情景描写 + 後日譚 + 主人公の動き + 統合ストーリーを
    全て含む完全なパッケージを `submit_final_decision` で提出してください。{bypass_note}"""
 
@@ -983,7 +982,7 @@ class DailyLoopOrchestrator:
   "brief_reflection": "簡易内省メモ（違反時のみ、1-2文）"
 }""",
             user_message=(
-                f"【価値観】\n{values_context}\n\n"
+                f"{wrap_context('規範層', normative_context, 'reflective')}\n\n"
                 f"【行動決定】{integration.final_action}\n\n"
                 f"【Higgins Ideal gap】{integration.higgins_ideal_gap}\n"
                 f"【Higgins Ought gap】{integration.higgins_ought_gap}"
@@ -1112,6 +1111,7 @@ class DailyLoopOrchestrator:
                 f"{wrap_context('現在ムード', f'V={self.current_mood.valence:.1f} A={self.current_mood.arousal:.1f} D={self.current_mood.dominance:.1f}')}\n\n"
                 f"{wrap_context('過去の記憶', self._build_memory_context())}\n\n"
                 f"{wrap_context('自伝的エピソード', self._build_episodes_context()[:600])}"
+                f"{wrap_context('規範層', f'{normative_context}{protagonist_plan_note}')}\n\n"
             ),
             json_mode=False,
         )
@@ -1189,8 +1189,10 @@ class DailyLoopOrchestrator:
             ])
 
             temp_diary = DiaryEntry(day=day, content=draft_diary_text, mood_at_writing=self.current_mood)
+            past_diary_ctx = self._build_past_diary_context()
             result = await self.third_party_reviewer.review(
-                temp_diary, self.current_mood, event_summaries_for_review
+                temp_diary, self.current_mood, event_summaries_for_review,
+                past_diaries=past_diary_ctx,
             )
 
             if result["passed"]:
@@ -1279,7 +1281,7 @@ class DailyLoopOrchestrator:
 - 日々の経験や記憶、感情、認識の変化が反映されているとよい。
 - ただの、出来事の羅列ではなく、キャラクタ独自の経験や感性、記憶、キャラクター設定に基づき、深くキャラクターの内面を反映した文章にする必要がある。
 - 第3者が日記だけを見て、理解でき、納得でき、面白い日記である必要がある。
-- 与えられた、マクロプロフィール、世界設定、今日の出来事、内省メモ、現在のムード、短期記憶、過去の日記を全て加味して、日記を作成してください。
+- 与えられた、マクロプロフィール、世界設定、今日の出来事、内省メモ、現在のムード、短期記憶、規範層、過去の日記を全て加味して、日記を作成してください。
 - 「短期記憶（デイリーログ + key memory）」は最重要項目です。必ず保持し、日記の中に自然に反映してください。
 - 「過去の日記」は参照用です。言及すべき点があれば自然に触れてください。
 - 「明日の予定」がある場合、明日への意向・期待・不安などを日記の中で自然に触れてください。
@@ -1287,7 +1289,7 @@ class DailyLoopOrchestrator:
 
 
 【エージェンティック行動指針】
-1. まず日記のドラフトを頭の中で執筆し、`check_diary_rules` ツールを使って自身の口癖や禁止語彙に反していないか自発的にテストしてください。
+1. まず日記のドラフトをPlanを立て計画的に執筆し、`check_diary_rules` ツールを使って自身の口癖や禁止語彙に反していないか自発的にテストしてください。
 2. もし不合格（FAILED）が返ってきたら、指摘された点に基づいて自ら文章を書き直し、再度ツールでチェックしてください。
 3. `check_diary_rules` で合格（SUCCESS）が返ってきたら、同じドラフトを `third_party_review` ツールに渡して第三者視点のチェックを受けてください。
 4. `third_party_review` で問題が指摘されたら、修正して再度 `check_diary_rules` → `third_party_review` の順で通してください。
@@ -1344,6 +1346,7 @@ class DailyLoopOrchestrator:
             f"{wrap_context('内省メモ', introspection.raw_text, 'diary')}\n\n"
             f"{wrap_context('現在ムード', f'V={self.current_mood.valence:.1f} A={self.current_mood.arousal:.1f} D={self.current_mood.dominance:.1f}')}\n\n"
             f"{wrap_context('短期記憶（最重要 — デイリーログ + key memory）', self._build_memory_context(), 'diary')}"
+            f"{wrap_context('規範層', f'{normative_context}{protagonist_plan_note}')}\n\n"
             f"{past_diary_section}"
             f"{next_day_section}"
             f"{diary_feedback_section}"
@@ -1402,10 +1405,17 @@ class DailyLoopOrchestrator:
             tier="gemini",
             system_prompt="""あなたはkey memory抽出エージェントです。
 日記から「本当に重要だった瞬間」を1つだけ抽出し、300字以内で要約してください。
+このキャラクターにとって重要な経験や事柄を記録してください。
+価値観が変わるような経験、強い感情を感じた経験とその内省、キャラクターが大事にしたいと考えたこと、キャラクターがポジティブな気持ちを得たこと、楽しいと思ったこと、失敗したことは必ずこのキーメモリに含めてください。
 
 出力形式: JSON
 {"key_memory": "300字以内の要約"}""",
             user_message=f"Day {day}の日記:\n{diary.content}",
+                         f"{wrap_context('マクロプロフィール', self._build_macro_context(), 'introspection')}\n\n"
+                         f"{wrap_context('世界設定', self._build_world_context())}\n\n"
+                         f"{wrap_context('今日の行動履歴', f'Day {day}の行動まとめ:\n{action_summary}')}\n\n"
+                         f"{wrap_context('過去の記憶', self._build_memory_context())}\n\n"
+                         f"{wrap_context('自伝的エピソード', self._build_episodes_context()[:600])}"                         
             json_mode=True,
         )
         data = result["content"] if isinstance(result["content"], dict) else {}
@@ -1773,6 +1783,21 @@ class DailyLoopOrchestrator:
             except Exception as e:
                 import logging
                 logging.getLogger("daily_loop").error(f"MD保存エラー: {e}")
+
+            # protagonist_planイベントを含む最新パッケージをpackage.jsonに保存
+            # （中断時にも翌日予定が失われないよう、各Day完了後に必ず永続化）
+            try:
+                from backend.storage.md_storage import safe_name as _safe_name
+                pkg_dir = AppConfig.STORAGE_DIR / _safe_name(self._cname)
+                pkg_dir.mkdir(parents=True, exist_ok=True)
+                pkg_path = pkg_dir / "package.json"
+                pkg_path.write_text(
+                    json.dumps(self.package.model_dump(mode="json"), ensure_ascii=False, indent=2),
+                    encoding="utf-8"
+                )
+                logger.info(f"[DailyLoop] Day {day} 完了: package.json を更新しました")
+            except Exception as e:
+                logger.warning(f"[DailyLoop] Day {day} package.json保存エラー: {e}")
 
             await self._notify(f"=== Day {day} 完了 ===", "complete")
         

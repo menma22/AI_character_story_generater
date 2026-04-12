@@ -305,16 +305,23 @@ async def run_diary_generation(package_name: str, days: int = 7, profile_name: s
         target_profile = PROFILES.get(profile_name, PROFILES["draft"])
         orchestrator = DailyLoopOrchestrator(package=package, profile=target_profile, ws_manager=manager)
         results = await orchestrator.run(days=days)
-        
+
         # 日記を保存
         save_dir = AppConfig.STORAGE_DIR / package_name / "diaries"
         save_dir.mkdir(parents=True, exist_ok=True)
-        
+
         for day_state in results:
             if day_state.diary:
                 diary_path = save_dir / f"day_{day_state.day:02d}.md"
                 diary_path.write_text(day_state.diary.content, encoding="utf-8")
-        
+
+        # protagonist_planイベントを含む最新パッケージをpackage.jsonに保存
+        # （ループ内でも保存しているが、完了後に確実に最終状態を反映）
+        pkg_path.write_text(
+            json.dumps(package.model_dump(mode="json"), ensure_ascii=False, indent=2),
+            encoding="utf-8"
+        )
+
         await manager.send_progress("diary_complete", 1.0, f"{len(results)}日分の日記生成が完了しました")
         
     except Exception as e:
