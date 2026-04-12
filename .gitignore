@@ -1,10 +1,47 @@
+# Python
 __pycache__/
 *.pyc
-.env
+*.pyo
 *.egg-info/
 dist/
 build/
 .venv/
 venv/
-API
+
+# Environment
+.env
+
+# Logs
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test / Cache
+.pytest_cache/
+.mypy_cache/
+
+# Screenshots (development artifacts)
+*.png
+!docs/*.png
+
+# Development artifacts
 test.py
+API
+tasks/
+knowledge/
+メモ
+サードインテリジェンスインターン選考説明会文字起こし.md
+e2e_final.log
+PROMPTS_REPORT.md
+PROJECT.md
+
+# Storage data (generated at runtime)
+backend/storage/character_packages/
