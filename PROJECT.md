@@ -33,6 +33,7 @@ AI_character_story_generater/
 │   │   │   ├── verification.py                # 裏方出力検証 (#1-#52漏洩チェック, v10 §4.6b)
 │   │   │   ├── checkers.py                    # 4つの個別チェックAI (Profile/Temperament/Personality/Values)
 │   │   │   ├── diary_critic.py                # 日記Self-Critic (LLMベースのシンプルな品質チェック)
+│   │   │   ├── linguistic_validator.py        # 言語表現バリデーター (LinguisticExpression全フィールド検証, Stage 22)
 │   │   │   ├── third_party_reviewer.py        # 第三者視点の日記検証AI (読者体験品質チェック)
 │   │   │   └── next_day_planning.py           # 翌日予定追加 (Stage1+2, protagonist_plan)
 │   │   ├── context_descriptions.py            # コンテキスト説明付与ヘルパー (wrap_context, 全エージェント共通)
@@ -119,6 +120,7 @@ graph TB
         DLO --> ACT["activation.py"]
         DLO --> VER["verification.py"]
         DLO --> CRITIC["diary_critic.py"]
+        DLO --> VALIDATOR["linguistic_validator.py"]
         DLO --> NEXT["next_day_planning.py"]
         
         CD --> Models["models/character.py"]
@@ -603,6 +605,18 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
   - **翌日予定の先行生成**: 計画→日記の順にすることで、日記が「振り返り + 明日への展望」という自然な構造になる
   - **フォルダ内バージョン管理**: 各日のフォルダに001, 002, 003...とバージョンを蓄積し、最新IDファイルが常にエージェントに渡される短期記憶。過去のバージョンも保持されるため追跡可能
 
+### 22. 言語表現の完全活用と詳細バリデーション
+
+- **(a) 当初設計**: Phase A-1の LinguisticExpressionWorker で「一人称」「口癖」「文末表現」「漢字ひらがな傾向」「避ける語彙」「喋り方の雰囲気」「会話スタイル」「感情表現傾向」「日記のトーン」「日記の構成傾向」「内省の深さ」「書く/省略する内容」「日記の空気感」といった13個の詳細な言語表現情報を生成していた。ただしこれらの全てが日記生成時に活用されていなかった。
+
+- **(b) 変更・根拠**: LinguisticExpression の構造定義には「二人称の使い分け（親しい人/目上/知らない人）」「絵文字・記号の使用傾向」「自問形式の頻度」「比喩・反語の頻度」という4つのフィールドが存在したにもかかわらず、`_build_voice_context()`メソッドでは前者の9項目だけを構築していた。つまり生成された言語表現設定の70%しか日記プロンプトに渡されておらず、キャラクターの言語特性が十分に反映されていなかった。また、日記ドラフト提出時に「言語ルール（check_diary_rules）→ 第三者視点（third_party_review）」の2段階ゲートだけで、LinguisticExpression の細かい要素（絵文字使用傾向、自問頻度など）までは検証されていなかった。
+
+- **(c) 採用したベストプラクティス**:
+  - **完全な言語表現伝播**: `_build_voice_context()`を拡張し、二人称・絵文字・自問頻度・比喩頻度を含む全13項目をテキスト形式で構造化して日記システムプロンプトに注入。これにより LinguisticExpression 情報が100%活用される
+  - **言語表現バリデーション層の追加**: `LinguisticExpressionValidator`クラスを新設。日記テキストが以下を守っているか詳細に検証: 一人称の統一、避ける語彙の有無、口癖の自然な出現、文末表現のバリエーション、漢字ひらがな傾向、絵文字使用傾向、自問形式の頻度、比喩・反語の頻度、日記のトーン、内省の深さ
+  - **3段階ゲート化**: 日記提出フロー を「check_diary_rules（基本的な言語ルール） → validate_linguistic_expression（詳細な言語表現） → third_party_review（読み物としての品質）」の3段階に。第2段階で細かい言語特性の遵守を厳密に検証し、修正アドバイスを返す
+  - **スコアリング**: バリデーター は「0.0～1.0の品質スコア」と「どの項目が守られていたか/守られていなかったか」を明示する。これにより品質の可視化と段階的改善が可能
+
 ---
 
 ## パート3: プロジェクト管理
@@ -632,6 +646,7 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 | Stage 19: デイリーログ要約・記憶システム再設計 | ✅ 実装完了 | 翌日予定AIを日記生成の前に移動（日記に明日への意向を反映可能に）、DailyLogStore新設（日別フォルダ管理・段階的LLM要約による忘却プロセス）、日記を独立DBとして分離（参照用）、short_term_memoryのソースをdiary→行動ログに変更、_compress_memoriesを_create_daily_log_and_summarizeに置換 |
 | Stage 20: セーブポイント二重保存・中断再開確実化 | ✅ 実装完了 | `_checkpoint()`をSID名+キャラ名の二重保存に変更、DailyLoopでの各Day完了後package.json更新、run_diary_generation完了後package.json最終保存 |
 | Stage 21: Gemini 2.5 Proクォータ超過時の2段階フォールバック | ✅ 実装完了 | `LLMModels.GEMINI_2_0_FLASH`追加、`_call_gemini_with_flash_fallback()`で2.5 Pro→2.0 Flash自動切り替え（クォータ超過時のみ）、Claude失敗時フォールバックにも適用 |
+| Stage 22: LinguisticExpression全フィールド活用・詳細バリデーション | ✅ 実装完了 | `_build_voice_context()`を完全拡張（二人称、絵文字、自問頻度、比喩頻度を追加）、`LinguisticExpressionValidator`新設、日記agenticループに`validate_linguistic_expression`ツール追加（check_diary_rules→validate_linguistic_expression→third_party_review の3段階ゲート化） |
 
 ### 次のアクション
 
