@@ -7,6 +7,7 @@ v2 §6.4.2 / v10 §3.3 準拠: 15 Worker構成（10 Parameter + 4 Normative + 1 
 import json
 import asyncio
 import logging
+from typing import Optional
 
 from pydantic import BaseModel, Field
 
