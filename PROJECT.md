@@ -822,12 +822,16 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 | Stage 30: 性格・気質パラメータ隠蔽 + 短期記憶優先チェッカー設計 | ✅ 実装完了 | パラメータ #1-#52 の設計記録 |
 | Stage 32: `_generate_diary` NameError修正 + linguistic_expression の user_message 明示注入 | ✅ 修正完了 | normative_context/protagonist_plan_note 未定義バグ解消、言語的表現データを user_message にも明示追加 |
 | Stage 31: CharacterCapabilitiesWorker をエージェントに昇格 | ✅ 実装完了 | `capabilities_agent.py` 新設、search_web 2回以上必須+批評+内省の5フェーズエージェント化、Phase D Step 2.5 として独立実行 |
+| Stage 33: 仕様書 vs 実装コード差分分析・加筆計画策定 | ✅ 分析完了 | v10/v2仕様書と実装コードの体系的差分分析完了。4カテゴリ（A:意図的変更8件、B:追加機能11件、C:未実装5件、D:数値相違6件）に分類。仕様書加筆計画（v10: 12項目、v2: 15項目）策定済。詳細レポート: `tasks/spec_vs_implementation_report.md` |
+| Stage 34: クリティカルバグ修正（NameError 3件 + データ欠損 + コンテキスト欠落） | ✅ 修正完了 | 検証レポート由来の致命・高優先度バグ7件を全修正。①`_values_violation()` normative_context NameError、②`_introspection()` normative_context/protagonist_plan_note NameError、③`_extract_key_memory()` action_summary NameError（events_processed 引数追加・呼び出し側更新）、④Phase D supporting_chars 未パース問題（LLM JSON変換ステップ追加）、⑤`_introspection()` 周囲人物コンテキスト欠落、⑥`_generate_diary()` 周囲人物・自伝的エピソード欠落、⑦PROJECT.md冒頭フロー記述の翌日予定位置修正 |
 
 ### 次のアクション
 
-1. **E2Eテスト実行（Day0→日記シミュレーション通し）** → draftプロファイルでキャラクター生成→日記生成までを連続実行し、全フローの動作を確認する
-2. **提出用キャラクター生成** → High Qualityプロファイルで全EvaluatorをONにし、MDデータベース出力まで通して実行する
-3. **アプリの稼働確認** → 全Pythonプロセスをクリーンアップ後、ポート8001番のみでの正常起動とWebSocket接続を確認（2026-04-12 21:21 再起動完了）
+1. **【最優先】仕様書加筆の設計判断** → 感情強度バイパス方式（v10原則「重み低下」vs 実装「完全スキップ」）、イベント数（2-4件/日 vs 仕様4-6件/日）、Phase B実装有無の3点を決定
+2. **仕様書v10への加筆（Phase 1, 12項目）** → Perceiver統合、LinguisticExpression、CharacterCapabilities、3段階日記ゲート、4並列チェッカー、実行順序変更、イベント数修正等
+3. **仕様書v2への加筆（Phase 2, 15項目）** → 技術スタック全面改訂（Gemma4→Gemini）、Phase A-3/Dエージェンティック化、Regenerationモジュール、チェックポイント、フォールバック等
+4. **E2Eテスト実行（Day0→日記シミュレーション通し）** → draftプロファイルでキャラクター生成→日記生成までを連続実行し、全フローの動作を確認する
+5. **提出用キャラクター生成** → High Qualityプロファイルで全EvaluatorをONにし、MDデータベース出力まで通して実行する
 
 
 
