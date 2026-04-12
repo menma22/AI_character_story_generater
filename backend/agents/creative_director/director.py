@@ -17,7 +17,7 @@ from typing import Optional, Any
 
 from backend.tools.llm_api import call_llm
 from backend.models.character import ConceptPackage
-from backend.config import EvaluationProfile
+from backend.config import EvaluationProfile, LLMModels
 
 logger = logging.getLogger(__name__)
 
@@ -426,14 +426,16 @@ class CreativeDirector:
                     max_iterations=max(10, self.max_iterations * 3),
                     api_keys=self.api_keys,
                 )
-        elif self.profile.director_tier == "gemini":
+        elif self.profile.director_tier in ("gemini", "gemini_pro"):
             from backend.tools.llm_api import call_llm_agentic_gemini
+            gemini_model = LLMModels.GEMINI_3_1_PRO if self.profile.director_tier == "gemini_pro" else None
             await call_llm_agentic_gemini(
                 system_prompt=agentic_sys_prompt,
                 user_message=user_msg,
                 tools=tools,
                 max_iterations=max(10, self.max_iterations * 3),
                 api_keys=self.api_keys,
+                model=gemini_model,
             )
         else:
             raise ValueError(f"Unsupported director tier: {self.profile.director_tier}")

@@ -440,6 +440,17 @@ async def _call_llm_once(
                 gemini_model=gemini_model,
             )
 
+    if tier == "gemini_pro":
+        return await _call_gemini_with_flash_fallback(
+            system_prompt=system_prompt,
+            user_message=user_message,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            json_mode=json_mode,
+            api_key=api_keys.get("google_ai") if api_keys else None,
+            gemini_model=LLMModels.GEMINI_3_1_PRO,
+        )
+
     if tier == "gemini":
         return await _call_gemini_with_flash_fallback(
             system_prompt=system_prompt,
@@ -601,10 +612,11 @@ async def call_llm_agentic_gemini(
     max_tokens: int = 4096,
     temperature: float = 0.7,
     api_keys: Optional[dict] = None,
+    model: Optional[str] = None,
 ) -> Any:
     """ Google Geminiを用いた自立ループの実装 """
     configure_google_ai(api_key=api_keys.get("google_ai") if api_keys else None)
-    model_name = LLMModels.GEMINI_2_5_PRO
+    model_name = model or LLMModels.GEMINI_2_5_PRO
     
     def _jsonschema_to_gemini_schema(schema: dict) -> dict:
         TYPE_MAP = {
@@ -663,11 +675,12 @@ async def call_llm_agentic_gemini(
     chat = gmodel.start_chat(history=[])
     current_message = user_message
     
+    logger.info(f"[call_llm_agentic_gemini] Using model: {model_name}")
     for i in range(max_iterations):
-        step_info = f"[Step {i+1}/{max_iterations}] リサーチと推論を行っています..."
+        step_info = f"[Step {i+1}/{max_iterations}] ({model_name}) リサーチと推論を行っています..."
         logger.info(f"[call_llm_agentic_gemini] {step_info}")
         if manager:
-            await manager.send_agent_thought("Creative Director (Gemini)", step_info, "thinking")
+            await manager.send_agent_thought(f"Agentic Loop ({model_name})", step_info, "thinking")
         
         try:
             response = await asyncio.wait_for(

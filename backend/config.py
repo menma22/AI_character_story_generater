@@ -56,8 +56,8 @@ class EvaluationProfile:
     narrative_connection_auditor_enabled: bool = False
     worker_regeneration_max_iterations: int = 1
     min_research_searches: int = 3                 # Creative Directorが批評前に必須の検索回数
-    director_tier: str = "opus"                    # "opus" | "sonnet" | "gemini"
-    worker_tier: str = "sonnet"                    # "opus" | "sonnet" | "gemini"
+    director_tier: str = "gemini_pro"               # "opus" | "sonnet" | "gemini" | "gemini_pro"
+    worker_tier: str = "gemini"                    # "opus" | "sonnet" | "gemini" | "gemini_pro"
 
 
 PROFILES = {
@@ -72,6 +72,8 @@ PROFILES = {
         narrative_connection_auditor_enabled=True,
         worker_regeneration_max_iterations=4,
         min_research_searches=5,
+        director_tier="gemini_pro",
+        worker_tier="gemini",
     ),
     "standard": EvaluationProfile(
         name="standard",
@@ -83,8 +85,8 @@ PROFILES = {
         event_metadata_auditor_enabled=True,
         narrative_connection_auditor_enabled=True,
         worker_regeneration_max_iterations=3,
-        director_tier="sonnet",
-        worker_tier="sonnet",
+        director_tier="gemini_pro",
+        worker_tier="gemini",
     ),
     "fast": EvaluationProfile(
         name="fast",
@@ -97,7 +99,7 @@ PROFILES = {
         narrative_connection_auditor_enabled=False,
         worker_regeneration_max_iterations=2,
         min_research_searches=2,
-        director_tier="sonnet",
+        director_tier="gemini_pro",
         worker_tier="gemini",
     ),
     "draft": EvaluationProfile(
@@ -111,7 +113,7 @@ PROFILES = {
         narrative_connection_auditor_enabled=False,
         worker_regeneration_max_iterations=2,
         min_research_searches=1,
-        director_tier="sonnet",
+        director_tier="gemini_pro",
         worker_tier="gemini",
     ),
 }

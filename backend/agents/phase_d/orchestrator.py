@@ -23,7 +23,7 @@ import asyncio
 import logging
 from typing import Optional
 
-from backend.config import EvaluationProfile
+from backend.config import EvaluationProfile, LLMModels
 from backend.models.character import (
     ConceptPackage, MacroProfile, MicroParameters,
     AutobiographicalEpisodes, WeeklyEventsStore,
@@ -450,9 +450,10 @@ class PhaseDOrchestrator:
                 logger.warning(f"Claude agentic failed: {e}. Falling back.")
                 from backend.tools.llm_api import call_llm_agentic_gemini
                 await call_llm_agentic_gemini(system_prompt=agentic_sys_prompt, user_message=event_user_msg, tools=tools, max_iterations=max_iter, api_keys=self.api_keys)
-        elif self.profile.director_tier == "gemini":
+        elif self.profile.director_tier in ("gemini", "gemini_pro"):
             from backend.tools.llm_api import call_llm_agentic_gemini
-            await call_llm_agentic_gemini(system_prompt=agentic_sys_prompt, user_message=event_user_msg, tools=tools, max_iterations=max_iter, api_keys=self.api_keys)
+            gemini_model = LLMModels.GEMINI_3_1_PRO if self.profile.director_tier == "gemini_pro" else None
+            await call_llm_agentic_gemini(system_prompt=agentic_sys_prompt, user_message=event_user_msg, tools=tools, max_iterations=max_iter, api_keys=self.api_keys, model=gemini_model)
 
         # ── フォールバック ──
         if not final_events_data:
