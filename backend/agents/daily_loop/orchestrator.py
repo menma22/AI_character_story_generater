@@ -596,6 +596,7 @@ class DailyLoopOrchestrator:
 
         # コンテキスト構築
         macro_json = self._build_macro_context()[:1500]
+        memory_context = self._build_memory_context()
 
         # 活性化パラメータのテキスト取得
         activated_temperament_text = ""
@@ -629,8 +630,8 @@ class DailyLoopOrchestrator:
         try:
             results = await asyncio.gather(
                 self.profile_checker.check(output_text, macro_json),
-                self.temperament_checker.check(output_text, activated_temperament_text),
-                self.personality_checker.check(output_text, activated_personality_text),
+                self.temperament_checker.check(output_text, activated_temperament_text, memory_context),
+                self.personality_checker.check(output_text, activated_personality_text, memory_context),
                 self.values_checker.check(output_text, values_context),
                 return_exceptions=True,
             )
@@ -913,6 +914,13 @@ class DailyLoopOrchestrator:
 また、必ず、衝動的反応、理性的反応それぞれに従ったと仮定したときに起こりうる良い出来事と悪い出来事をそれぞれ2つ以上上げ、それも加味してストーリーを構築してください。
 必ず、与えられた能力と所持品も参照して、使えるものがあれば使ってください。
 
+【性格・気質の自己認識に関する原則】
+主人公は自分の性格や気質をしっかりとは自覚していません。
+- 短期記憶（key memory・デイリーログ）に記された意思や洞察を最優先で尊重すること
+- 内省や記憶から得た自己理解は「推測」であり、間違っていることもある
+- 短期記憶の意思が以前の自己像と矛盾する場合は「葛藤」や「変わろうとする意志」として描くこと
+- パラメータ名や心理学用語は絶対に使用禁止
+
 【あなたの役割】
 1. 行動や選択など決定: 衝動と理性の2つのルートを踏まえて主人公のとる行動や選択・スタンスを決める
 2. 周辺情報統合: 出来事の背景、周囲の状況、登場人物の反応を描写
@@ -1144,6 +1152,13 @@ class DailyLoopOrchestrator:
             system_prompt="""あなたは主人公AIの内省エージェントです。
 今日1日の出来事を振り返り、キャラクターの主観で内省メモを生成してください。
 
+【性格・気質の自己認識に関する原則】
+主人公は自分の性格や気質をしっかりとは自覚していません。
+- 短期記憶（key memory・デイリーログ）に記された意思や洞察を最優先で尊重すること
+- 内省や記憶から得た自己理解は「推測」であり、間違っていることもある
+- 短期記憶の意思が以前の自己像と矛盾する場合は「葛藤」や「変わろうとする意志」として描くこと
+- パラメータ名や心理学用語は絶対に使用禁止
+
 【3工程】
 1. 自己推測（Bem Self-Perception Theory）: 自分の行動パターンから自分はどういう人間かを推測する
    ※ 気質パラメータそのものにはアクセスできない。行動からの推測のみ。
@@ -1169,7 +1184,6 @@ class DailyLoopOrchestrator:
                 f"{wrap_context('マクロプロフィール', self._build_macro_context(), 'introspection')}\n\n"
                 f"{wrap_context('世界設定', self._build_world_context())}\n\n"
                 f"{wrap_context('今日の行動履歴', f'Day {day}の行動まとめ:\n{action_summary}')}\n\n"
-                f"{wrap_context('活性化された気質・性格パラメータ', f'活性化されたパラメータの傾向:\n{activation_summary}')}\n\n"
                 f"{wrap_context('現在ムード', f'V={self.current_mood.valence:.1f} A={self.current_mood.arousal:.1f} D={self.current_mood.dominance:.1f}')}\n\n"
                 f"{wrap_context('過去の記憶', self._build_memory_context())}\n\n"
                 f"{wrap_context('自伝的エピソード', self._build_episodes_context()[:600])}"
@@ -1382,6 +1396,13 @@ class DailyLoopOrchestrator:
         ]
         
         system_prompt = f"""あなたはキャラクター本人として日記を書く自律エージェントです。
+
+【性格・気質の自己認識に関する原則】
+主人公は自分の性格や気質をしっかりとは自覚していません。
+- 短期記憶（key memory・デイリーログ）に記された意思や洞察を最優先で尊重すること
+- 内省や記憶から得た自己理解は「推測」であり、間違っていることもある
+- 短期記憶の意思が以前の自己像と矛盾する場合は「葛藤」や「変わろうとする意志」として描くこと
+- パラメータ名や心理学用語は絶対に使用禁止
 
 【言語的指紋（厳守事項）】
 {voice}

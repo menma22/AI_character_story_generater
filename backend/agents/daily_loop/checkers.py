@@ -99,7 +99,7 @@ class TemperamentChecker(BaseChecker):
     def __init__(self, ws_manager=None, tier: str = "gemini", api_keys: Optional[dict] = None):
         super().__init__("気質", ws_manager, tier, api_keys)
 
-    async def check(self, output_text: str, activated_temperament_text: str) -> CheckResult:
+    async def check(self, output_text: str, activated_temperament_text: str, memory_context: str = "") -> CheckResult:
         await self._notify("気質パラメータ整合性をチェック中...")
 
         result = await call_llm(
@@ -108,10 +108,17 @@ class TemperamentChecker(BaseChecker):
 出力テキストの行動・反応が、活性化された気質パラメータ（Cloningerモデル: 新奇性追求・損害回避・報酬依存・固執性）
 と整合しているかチェックしてください。
 
+【判定ロジック（優先順位）】
+1. 短期記憶（key memory・デイリーログ）のコンテキストを最優先で参照する
+2. 出力が気質パラメータと乖離している場合:
+   - 短期記憶の内容から妥当と判断できる → 合格（理由を記載）
+   - 短期記憶からも説明できない → 不合格
+3. 短期記憶からも気質パラメータからも説明できない行動 → 絶対不合格（severity: major）
+
 【チェック例】
-- 損害回避が高い(4-5)のに、危険を無視した行動 → 不整合
-- 新奇性追求が低い(1-2)のに、突飛な冒険をしている → 不整合
-- 報酬依存が高いのに、他者の反応を全く気にしない → 不整合
+- 損害回避が高い(4-5)のに、危険を無視した行動 → ただし短期記憶に「リスクを取る決意をした」記録があれば合格
+- 新奇性追求が低い(1-2)のに、突飛な冒険をしている → 短期記憶で説明できなければ不整合
+- 報酬依存が高いのに、他者の反応を全く気にしない → 短期記憶で説明できなければ不整合
 
 出力形式: JSON
 {
@@ -121,6 +128,7 @@ class TemperamentChecker(BaseChecker):
   "suggestion": "修正の示唆（問題がある場合のみ）"
 }""",
             user_message=(
+                f"【短期記憶コンテキスト（最優先参照）】\n{memory_context[:1000]}\n\n"
                 f"【活性化された気質パラメータ】\n{activated_temperament_text}\n\n"
                 f"【チェック対象テキスト】\n{output_text[:2000]}"
             ),
@@ -149,7 +157,7 @@ class PersonalityChecker(BaseChecker):
     def __init__(self, ws_manager=None, tier: str = "gemini", api_keys: Optional[dict] = None):
         super().__init__("性格", ws_manager, tier, api_keys)
 
-    async def check(self, output_text: str, activated_personality_text: str) -> CheckResult:
+    async def check(self, output_text: str, activated_personality_text: str, memory_context: str = "") -> CheckResult:
         await self._notify("性格パラメータ整合性をチェック中...")
 
         result = await call_llm(
@@ -158,10 +166,17 @@ class PersonalityChecker(BaseChecker):
 出力テキストの行動・態度が、活性化された性格パラメータ（Big Five/HEXACO: 外向性・協調性・誠実性・神経症傾向・開放性等）
 と整合しているかチェックしてください。
 
+【判定ロジック（優先順位）】
+1. 短期記憶（key memory・デイリーログ）のコンテキストを最優先で参照する
+2. 出力が性格パラメータと乖離している場合:
+   - 短期記憶の内容から妥当と判断できる → 合格（理由を記載）
+   - 短期記憶からも説明できない → 不合格
+3. 短期記憶からも性格パラメータからも説明できない行動 → 絶対不合格（severity: major）
+
 【チェック例】
-- 外向性が低い(1-2)のに、見知らぬ人に積極的に話しかけている → 不整合
-- 協調性が高い(4-5)のに、対立的・攻撃的な言動ばかり → 不整合
-- 誠実性が高いのに、約束を平気で破る描写 → 不整合
+- 外向性が低い(1-2)のに、見知らぬ人に積極的に話しかけている → ただし短期記憶に「殻を破ろうとしている」記録があれば合格
+- 協調性が高い(4-5)のに、対立的・攻撃的な言動ばかり → 短期記憶で説明できなければ不整合
+- 誠実性が高いのに、約束を平気で破る描写 → 短期記憶で説明できなければ不整合
 
 出力形式: JSON
 {
@@ -171,6 +186,7 @@ class PersonalityChecker(BaseChecker):
   "suggestion": "修正の示唆（問題がある場合のみ）"
 }""",
             user_message=(
+                f"【短期記憶コンテキスト（最優先参照）】\n{memory_context[:1000]}\n\n"
                 f"【活性化された性格パラメータ】\n{activated_personality_text}\n\n"
                 f"【チェック対象テキスト】\n{output_text[:2000]}"
             ),
