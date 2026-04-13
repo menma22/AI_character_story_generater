@@ -827,6 +827,7 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 | Stage 33: 仕様書 vs 実装コード差分分析・加筆計画策定 | ✅ 分析完了 | v10/v2仕様書と実装コードの体系的差分分析完了。4カテゴリ（A:意図的変更8件、B:追加機能11件、C:未実装5件、D:数値相違6件）に分類。仕様書加筆計画（v10: 12項目、v2: 15項目）策定済。詳細レポート: `tasks/spec_vs_implementation_report.md` |
 | Stage 34: クリティカルバグ修正（NameError 3件 + データ欠損 + コンテキスト欠落） | ✅ 修正完了 | 検証レポート由来の致命・高優先度バグ7件を全修正。①`_values_violation()` normative_context NameError、②`_introspection()` normative_context/protagonist_plan_note NameError、③`_extract_key_memory()` action_summary NameError（events_processed 引数追加・呼び出し側更新）、④Phase D supporting_chars 未パース問題（LLM JSON変換ステップ追加）、⑤`_introspection()` 周囲人物コンテキスト欠落、⑥`_generate_diary()` 周囲人物・自伝的エピソード欠落、⑦PROJECT.md冒頭フロー記述の翌日予定位置修正 |
 | Stage 35: 翌日予定追加エージェント NameError/AttributeError修正 | ✅ 修正完了 | `next_day_planning.py`の`stage1_protagonist_plan()`が毎回クラッシュしていた致命バグを修正。①`wrap_context`未インポート（`context_descriptions.py`から追加）、②`self._build_memory_context()`がNextDayPlanningAgentクラスに存在しない（`memory_context`パラメータとしてオーケストレーターから注入する方式に変更）。この修正により`protagonist_plan`イベントが初めてweekly_events_storeに挿入されるようになり、v10 §4.9.4の機能が稼働開始 |
+| Stage 36: README.md仕様書レベル技術ドキュメント化 | ✅ 完了 | 簡易READMEからspecification_v10.md・v2・PROJECT.mdの内容を統合した濃密な技術ドキュメントに全面刷新。設計思想6原則、4層エージェント階層詳細図解、52パラメータ全構造、隠蔽原則、Redemption Bias対策、Daily Loop認知シミュレーション全フロー、3層記憶システム、LLMティアシステム、検証・評価7種、データモデル・ストレージ構造、API/WebSocket仕様、先行研究14理論対応表を網羅（149行→約450行） |
 
 ### 次のアクション
 
