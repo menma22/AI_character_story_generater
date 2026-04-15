@@ -163,6 +163,8 @@ async def get_debug_thoughts():
 
 # クライアントごとに実行中のタスクを保持（キャンセル機能のため）
 ws_active_tasks = {}
+# 現在実行中のMasterOrchestratorインスタンスへの参照（concept_review応答のため）
+active_orchestrator = None
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -190,7 +192,8 @@ async def handle_ws_message(data: dict, websocket: WebSocket):
         theme = data.get("theme", None)
         evaluators_override = data.get("evaluators_override", {})
         api_keys = data.get("api_keys", {})
-        asyncio.create_task(run_character_generation(profile_name, theme, evaluators_override, api_keys))
+        composition_preferences = data.get("composition_preferences", None)
+        asyncio.create_task(run_character_generation(profile_name, theme, evaluators_override, api_keys, composition_preferences))
     
     elif action == "resume_generation":
         # チェックポイントから再開
@@ -235,6 +238,30 @@ async def handle_ws_message(data: dict, websocket: WebSocket):
         edited_data = data.get("data", {})
         asyncio.create_task(save_manual_edit(package_name, artifact_name, edited_data))
 
+    elif action == "approve_concept":
+        # Human in the Loop: コンセプト承認
+        global active_orchestrator
+        if active_orchestrator:
+            active_orchestrator.handle_review_response("approve")
+        else:
+            await websocket.send_json({"type": "error", "content": "アクティブな生成セッションがありません"})
+
+    elif action == "revise_concept":
+        # Human in the Loop: フィードバック付きコンセプト再生成
+        if active_orchestrator:
+            feedback = data.get("feedback", "")
+            active_orchestrator.handle_review_response("revise", feedback=feedback)
+        else:
+            await websocket.send_json({"type": "error", "content": "アクティブな生成セッションがありません"})
+
+    elif action == "edit_concept_direct":
+        # Human in the Loop: コンセプト直接編集
+        if active_orchestrator:
+            edited_concept = data.get("concept_package", {})
+            active_orchestrator.handle_review_response("edit", edited_concept=edited_concept)
+        else:
+            await websocket.send_json({"type": "error", "content": "アクティブな生成セッションがありません"})
+
     elif action == "get_status":
         await websocket.send_json({
             "type": "status",
@@ -248,33 +275,46 @@ async def handle_ws_message(data: dict, websocket: WebSocket):
         })
 
 
-async def run_character_generation(profile_name: str, theme: str = None, evaluators_override: dict = None, api_keys: dict = None):
+async def run_character_generation(profile_name: str, theme: str = None, evaluators_override: dict = None, api_keys: dict = None, composition_preferences: dict = None):
     """キャラクター生成パイプライン全体を実行"""
     from backend.agents.master_orchestrator.orchestrator import MasterOrchestrator
+    from backend.models.character import StoryCompositionPreferences
     import dataclasses
-    
+
     base_profile = PROFILES.get(profile_name, PROFILES["draft"])
     target_profile = base_profile
     if evaluators_override:
         target_profile = dataclasses.replace(base_profile, **{
-            k: v for k, v in evaluators_override.items() 
+            k: v for k, v in evaluators_override.items()
             if hasattr(base_profile, k)
         })
-    
+
+    # 構成プリファレンスをPydanticモデルに変換
+    prefs = None
+    if composition_preferences:
+        try:
+            prefs = StoryCompositionPreferences(**composition_preferences)
+        except Exception as e:
+            logger.warning(f"Invalid composition_preferences: {e}")
+
     from datetime import datetime
     session_id = f"SID_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-    
+
     await manager.send_progress("init", 0.0, "キャラクター生成を開始します...")
     # クライアントにセッションIDを通知（中断時の再開キーとして使用）
     await manager.send_agent_thought("System", f"Session ID: {session_id}", "info")
-    
+
+    global active_orchestrator
     try:
-        orchestrator = MasterOrchestrator(profile=target_profile, ws_manager=manager, session_id=session_id, api_keys=api_keys)
+        orchestrator = MasterOrchestrator(profile=target_profile, ws_manager=manager, session_id=session_id, api_keys=api_keys, composition_preferences=prefs)
+        active_orchestrator = orchestrator
         package = await orchestrator.run(theme=theme)
         await _finalize_character_generation(package)
     except Exception as e:
         logger.error(f"Character generation failed: {e}", exc_info=True)
         await manager.send_error(f"キャラクター生成エラー: {str(e)}")
+    finally:
+        active_orchestrator = None
 
 async def resume_character_generation(character_name: str, profile_name: str, evaluators_override: dict = None, api_keys: dict = None):
     """チェックポイントから再開"""

@@ -39,6 +39,8 @@ function setupWSHandlers() {
             onGenerationComplete(data.result);
         } else if (data.phase === 'regenerate_complete') {
             onRegenerationComplete(data.result);
+        } else if (data.phase === 'concept_review') {
+            onConceptReview(data.result);
         }
     });
 

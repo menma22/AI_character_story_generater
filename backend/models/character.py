@@ -368,6 +368,23 @@ class WeeklyEventsStore(BaseModel):
 # 脚本パッケージ統合
 # ═══════════════════════════════════════════════════════════════
 
+class StoryCompositionPreferences(BaseModel):
+    """ユーザー指定の物語構成プリファレンス（Human in the Loop）
+
+    各フィールドはOptional。未指定の場合はAIが自律判断する。
+    選択肢は knowledge/fact/story_composition_theory.md の文献ベースカタログに準拠。
+    """
+    narrative_structure: Optional[str] = Field(None, description="物語構造: three_act, kishotenketsu, heros_journey, story_circle, freytag, save_the_cat, fichtean, in_medias_res, circular, episodic, parallel, nonlinear")
+    emotional_tone: Optional[str] = Field(None, description="感情トーン: heartwarming, bittersweet, comedic, tragic, melancholic, suspenseful, nostalgic, serene, hopeful, eerie, passionate, ironic")
+    character_arc: Optional[str] = Field(None, description="キャラクターアーク: positive_change, flat, disillusionment, fall, corruption, coming_of_age, redemption, transformation")
+    theme_weight: Optional[str] = Field(None, description="テーマの重さ: escapist, slice_of_life, emotional, social, psychological, philosophical, spiritual, allegorical")
+    climax_structure: Optional[str] = Field(None, description="クライマックス構造: single, multiple_peaks, gradual, wave, back_loaded, anti_climax, front_loaded, symmetric")
+    genre: Optional[str] = Field(None, description="ジャンル: coming_of_age, healing, workplace, mystery, romance, family, friendship, adventure, magical_realism, introspection, seasonal, survival")
+    pacing: Optional[str] = Field(None, description="ペーシング: slow_burn, fast_paced, rhythmic, pulse, accelerating, decelerating, even, breath")
+    narrative_voice: Optional[str] = Field(None, description="語り口: introspective, observational, emotional, detached, stream_of_consciousness, humorous, poetic, conversational, fragmentary, unreliable")
+    free_notes: Optional[str] = Field(None, description="ユーザーの自由記述による追加指示")
+
+
 class PackageMetadata(BaseModel):
     """パッケージメタデータ"""
     version: str = "2.0"
@@ -387,4 +404,5 @@ class CharacterPackage(BaseModel):
     autobiographical_episodes: Optional[AutobiographicalEpisodes] = None
     weekly_events_store: Optional[WeeklyEventsStore] = None
     character_capabilities: Optional[CharacterCapabilities] = None
+    composition_preferences: Optional[StoryCompositionPreferences] = None
     audit_report: dict = Field(default_factory=dict)

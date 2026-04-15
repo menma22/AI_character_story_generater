@@ -69,6 +69,162 @@
                 <div class="theme-input-group">
                     <label for="theme-input">テーマ・世界観を入力</label>
                     <textarea id="theme-input" placeholder="例: 元ヤクザの料理人が下町で定食屋を営む。過去の暴力と向き合いながら..."></textarea>
+
+                    <!-- ═══ Human in the Loop: 物語構成プリファレンス ═══ -->
+                    <div class="composition-prefs-section">
+                        <div class="composition-toggle" onclick="toggleCompositionPrefs()">
+                            <span class="composition-toggle-icon" id="comp-toggle-icon">▶</span>
+                            <span class="composition-toggle-label">物語構成の詳細設定</span>
+                            <span class="composition-toggle-hint">（任意: 各項目を指定するとAIの設計方針に反映）</span>
+                        </div>
+                        <div id="composition-summary" class="composition-summary hidden"></div>
+                        <div id="composition-prefs" class="composition-prefs hidden">
+                            <div class="composition-actions-top">
+                                <button class="btn-ghost btn-small" onclick="resetAllCompositionPrefs()">全てAIに任せる</button>
+                            </div>
+
+                            <!-- 1. 物語構造 -->
+                            <div class="comp-category">
+                                <h4 class="comp-category-title">物語構造 <span class="comp-theory">プロットアーキテクチャ</span></h4>
+                                <div class="comp-cards" data-name="narrative_structure">
+                                    <label class="comp-card"><input type="radio" name="comp_narrative_structure" value="three_act"><span class="comp-card-name">三幕構成</span><span class="comp-card-desc">設定→対立→解決。ハリウッド脚本の標準</span><span class="comp-card-source">アリストテレス / S.フィールド</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_narrative_structure" value="kishotenketsu"><span class="comp-card-name">起承転結</span><span class="comp-card-desc">葛藤を必須としない東アジア独自の四部構成。日常系に最適</span><span class="comp-card-source">中国古典詩 / 日本作文伝統</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_narrative_structure" value="heros_journey"><span class="comp-card-name">英雄の旅</span><span class="comp-card-desc">日常→召命→試練→帰還→変容の12段階</span><span class="comp-card-source">J.キャンベル</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_narrative_structure" value="story_circle"><span class="comp-card-name">ストーリーサークル</span><span class="comp-card-desc">英雄の旅を8ステップに圧縮した円環構造</span><span class="comp-card-source">D.ハーモン</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_narrative_structure" value="freytag"><span class="comp-card-name">フライタークのピラミッド</span><span class="comp-card-desc">導入→上昇→頂点→下降→結末の五部構成</span><span class="comp-card-source">G.フライターク</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_narrative_structure" value="episodic"><span class="comp-card-name">エピソード構造</span><span class="comp-card-desc">独立した挿話がゆるく連結。7日間日記に最も自然に適合</span><span class="comp-card-source">ピカレスク小説の伝統</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_narrative_structure" value="fichtean"><span class="comp-card-name">フィヒテ曲線</span><span class="comp-card-desc">冒頭から危機的状況。小危機が連鎖的にエスカレート</span><span class="comp-card-source">J.ガードナー</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_narrative_structure" value="in_medias_res"><span class="comp-card-name">イン・メディアス・レス</span><span class="comp-card-desc">物語の途中から開始し回想で補完。好奇心を即座に捉える</span><span class="comp-card-source">ホメロス / ホラティウス</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_narrative_structure" value="circular"><span class="comp-card-name">円環構造</span><span class="comp-card-desc">出発点に回帰するが主人公は変容している</span><span class="comp-card-source">J.ジョイス / T.S.エリオット</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_narrative_structure" value="save_the_cat"><span class="comp-card-name">Save the Cat</span><span class="comp-card-desc">15のビートで構成。各ビートに推奨配分あり</span><span class="comp-card-source">B.スナイダー</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_narrative_structure" value="parallel"><span class="comp-card-name">並行構造</span><span class="comp-card-desc">複数ストーリーラインが同時進行し交差する</span><span class="comp-card-source">R.アルトマン</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_narrative_structure" value="nonlinear"><span class="comp-card-name">ノンリニア構造</span><span class="comp-card-desc">時系列を意図的に再配置。モザイク的断片配置</span><span class="comp-card-source">K.ヴォネガット</span></label>
+                                </div>
+                            </div>
+
+                            <!-- 2. 感情トーン -->
+                            <div class="comp-category">
+                                <h4 class="comp-category-title">感情トーン <span class="comp-theory">雰囲気 / ムード</span></h4>
+                                <div class="comp-cards" data-name="emotional_tone">
+                                    <label class="comp-card"><input type="radio" name="comp_emotional_tone" value="heartwarming"><span class="comp-card-name">ほのぼの・心温まる</span><span class="comp-card-desc">人の優しさ・絆・小さな幸せに焦点</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_emotional_tone" value="bittersweet"><span class="comp-card-name">ほろ苦い・ビタースウィート</span><span class="comp-card-desc">喜びと悲しみが共存する</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_emotional_tone" value="comedic"><span class="comp-card-name">コミカル・ユーモラス</span><span class="comp-card-desc">笑い・軽妙さ・ウィットを基調</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_emotional_tone" value="tragic"><span class="comp-card-name">悲劇的</span><span class="comp-card-desc">避けられない破滅・喪失。カタルシス</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_emotional_tone" value="melancholic"><span class="comp-card-name">メランコリック</span><span class="comp-card-desc">深い内省的な悲しみ。静かな哀愁</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_emotional_tone" value="suspenseful"><span class="comp-card-name">サスペンスフル</span><span class="comp-card-desc">不確実性・予感・危機感が持続</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_emotional_tone" value="nostalgic"><span class="comp-card-name">ノスタルジック</span><span class="comp-card-desc">過去への甘美な憧れと郷愁</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_emotional_tone" value="serene"><span class="comp-card-name">穏やか・平和</span><span class="comp-card-desc">静謐さ・安らぎ・調和を描く</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_emotional_tone" value="hopeful"><span class="comp-card-name">希望に満ちた</span><span class="comp-card-desc">困難の中にも光を見出す</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_emotional_tone" value="eerie"><span class="comp-card-name">不穏・不安</span><span class="comp-card-desc">表面上は平穏だが何かがおかしい</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_emotional_tone" value="passionate"><span class="comp-card-name">情熱的・激情的</span><span class="comp-card-desc">強烈な感情が物語を駆動</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_emotional_tone" value="ironic"><span class="comp-card-name">皮肉・ドライ</span><span class="comp-card-desc">客観的距離。状況のアイロニー</span></label>
+                                </div>
+                            </div>
+
+                            <!-- 3. キャラクターアーク -->
+                            <div class="comp-category">
+                                <h4 class="comp-category-title">キャラクターアーク <span class="comp-theory">変化の類型</span></h4>
+                                <div class="comp-cards" data-name="character_arc">
+                                    <label class="comp-card"><input type="radio" name="comp_character_arc" value="positive_change"><span class="comp-card-name">ポジティブチェンジ</span><span class="comp-card-desc">「嘘」から出発し「真実」を受容して成長</span><span class="comp-card-source">K.M.ワイランド</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_character_arc" value="flat"><span class="comp-card-name">フラットアーク</span><span class="comp-card-desc">主人公は変化しないが周囲の世界を変える</span><span class="comp-card-source">K.M.ワイランド</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_character_arc" value="disillusionment"><span class="comp-card-name">幻滅アーク</span><span class="comp-card-desc">発見した真実は悲劇的。成長はあるが苦い</span><span class="comp-card-source">K.M.ワイランド</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_character_arc" value="fall"><span class="comp-card-name">堕落アーク</span><span class="comp-card-desc">真実があるのに嘘にしがみつく悲劇</span><span class="comp-card-source">K.M.ワイランド</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_character_arc" value="corruption"><span class="comp-card-name">腐敗アーク</span><span class="comp-card-desc">善から悪への転落</span><span class="comp-card-source">K.M.ワイランド</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_character_arc" value="coming_of_age"><span class="comp-card-name">成長アーク</span><span class="comp-card-desc">未熟さから成熟へ。自己発見・アイデンティティ確立</span><span class="comp-card-source">ビルドゥングスロマン</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_character_arc" value="redemption"><span class="comp-card-name">贖罪アーク</span><span class="comp-card-desc">過去の過ちから償いと自己変革</span><span class="comp-card-source">J.トゥルビー</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_character_arc" value="transformation"><span class="comp-card-name">変容アーク</span><span class="comp-card-desc">根本的アイデンティティ変化。別人になる</span><span class="comp-card-source">R.マッキー</span></label>
+                                </div>
+                            </div>
+
+                            <!-- 4. テーマの重さ -->
+                            <div class="comp-category">
+                                <h4 class="comp-category-title">テーマの重さ <span class="comp-theory">深度スペクトラム</span></h4>
+                                <div class="comp-cards" data-name="theme_weight">
+                                    <label class="comp-card"><input type="radio" name="comp_theme_weight" value="escapist"><span class="comp-card-name">ライト・エスケーピスト</span><span class="comp-card-desc">純粋な娯楽・気分転換。心地よさ優先</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_theme_weight" value="slice_of_life"><span class="comp-card-name">スライス・オブ・ライフ</span><span class="comp-card-desc">日常の断片をありのままに。普通の一日の美しさ</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_theme_weight" value="emotional"><span class="comp-card-name">感情探索</span><span class="comp-card-desc">特定の感情（喪失・愛・孤独）を深く掘り下げる</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_theme_weight" value="social"><span class="comp-card-name">社会的観察</span><span class="comp-card-desc">社会構造・人間関係を観察し暗黙の批評を含む</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_theme_weight" value="psychological"><span class="comp-card-name">心理的深層</span><span class="comp-card-desc">内面・動機・無意識・トラウマを掘り下げる</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_theme_weight" value="philosophical"><span class="comp-card-name">哲学的・実存的</span><span class="comp-card-desc">存在の意味・自由と責任・生と死</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_theme_weight" value="spiritual"><span class="comp-card-name">スピリチュアル・超越的</span><span class="comp-card-desc">物質を超えた領域。魂・運命・宇宙的つながり</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_theme_weight" value="allegorical"><span class="comp-card-name">寓話的・象徴的</span><span class="comp-card-desc">表面の物語が別の意味体系を暗示</span></label>
+                                </div>
+                            </div>
+
+                            <!-- 5. クライマックス構造 -->
+                            <div class="comp-category">
+                                <h4 class="comp-category-title">クライマックス構造 <span class="comp-theory">テンション曲線</span></h4>
+                                <div class="comp-cards" data-name="climax_structure">
+                                    <label class="comp-card"><input type="radio" name="comp_climax_structure" value="single"><span class="comp-card-name">単一クライマックス</span><span class="comp-card-desc">一つの頂点に向かって上昇し急速に解決</span><span class="comp-card-source">フライターク / 三幕構成</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_climax_structure" value="multiple_peaks"><span class="comp-card-name">複数ピーク</span><span class="comp-card-desc">小クライマックスが段階的にエスカレート</span><span class="comp-card-source">フィヒテ曲線</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_climax_structure" value="gradual"><span class="comp-card-name">漸進的上昇</span><span class="comp-card-desc">一貫して緩やかに上昇。累積的な重圧</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_climax_structure" value="wave"><span class="comp-card-name">波状構造</span><span class="comp-card-desc">緊張と弛緩が周期的に繰り返される</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_climax_structure" value="back_loaded"><span class="comp-card-name">後半集中型</span><span class="comp-card-desc">前半は静か、後半に急激に緊張が高まる</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_climax_structure" value="anti_climax"><span class="comp-card-name">アンチクライマックス</span><span class="comp-card-desc">意図的にクライマックスを欠く。日常の連続性</span><span class="comp-card-source">マッキーのミニプロット理論</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_climax_structure" value="front_loaded"><span class="comp-card-name">初頭衝撃型</span><span class="comp-card-desc">冒頭に最大インパクト。回復と再構築の過程</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_climax_structure" value="symmetric"><span class="comp-card-name">対称構造</span><span class="comp-card-desc">前半と後半が対称的。中間点を軸に反映</span></label>
+                                </div>
+                            </div>
+
+                            <!-- 6. ジャンル -->
+                            <div class="comp-category">
+                                <h4 class="comp-category-title">ジャンル <span class="comp-theory">7日間日記向け</span></h4>
+                                <div class="comp-cards" data-name="genre">
+                                    <label class="comp-card"><input type="radio" name="comp_genre" value="coming_of_age"><span class="comp-card-name">成長物語</span><span class="comp-card-desc">自己発見・アイデンティティ確立の過程</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_genre" value="healing"><span class="comp-card-name">癒し・回復</span><span class="comp-card-desc">心の傷からの回復。小さな気づきの積み重ね</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_genre" value="workplace"><span class="comp-card-name">職場ドラマ</span><span class="comp-card-desc">仕事の挑戦・同僚との関係・キャリアの岐路</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_genre" value="mystery"><span class="comp-card-name">ミステリー・謎解き</span><span class="comp-card-desc">日常の中の謎を手がかりに真相に迫る</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_genre" value="romance"><span class="comp-card-name">ロマンス・恋愛</span><span class="comp-card-desc">感情の揺れ動き。出会い・接近・葛藤</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_genre" value="family"><span class="comp-card-name">家族ドラマ</span><span class="comp-card-desc">家族間の絆・葛藤・世代間の理解</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_genre" value="friendship"><span class="comp-card-name">友情・仲間</span><span class="comp-card-desc">友人との深まり・衝突・和解</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_genre" value="adventure"><span class="comp-card-name">冒険・探索</span><span class="comp-card-desc">未知の場所・経験への挑戦</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_genre" value="magical_realism"><span class="comp-card-name">日常ファンタジー</span><span class="comp-card-desc">現実に非現実的要素が自然に溶け込む</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_genre" value="introspection"><span class="comp-card-name">自己探求・内省</span><span class="comp-card-desc">内面の旅。価値観の再評価・人生の棚卸し</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_genre" value="seasonal"><span class="comp-card-name">季節・移ろい</span><span class="comp-card-desc">季節の変化と感覚の変容。時の流れがテーマ</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_genre" value="survival"><span class="comp-card-name">サバイバル・克服</span><span class="comp-card-desc">困難な状況下での奮闘と克服</span></label>
+                                </div>
+                            </div>
+
+                            <!-- 7. ペーシング -->
+                            <div class="comp-category">
+                                <h4 class="comp-category-title">ペーシング <span class="comp-theory">語りの速度とリズム</span></h4>
+                                <div class="comp-cards" data-name="pacing">
+                                    <label class="comp-card"><input type="radio" name="comp_pacing" value="slow_burn"><span class="comp-card-name">スローバーン</span><span class="comp-card-desc">ゆっくり感情を積み重ね、後半で大きな見返り</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_pacing" value="fast_paced"><span class="comp-card-name">ハイテンポ</span><span class="comp-card-desc">展開が素早く次々とイベント発生</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_pacing" value="rhythmic"><span class="comp-card-name">リズミック交替</span><span class="comp-card-desc">緊張と弛緩を意識的に交互配置</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_pacing" value="pulse"><span class="comp-card-name">パルスペーシング</span><span class="comp-card-desc">間欠的な高強度バースト後に回復期</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_pacing" value="accelerating"><span class="comp-card-name">加速型</span><span class="comp-card-desc">序盤ゆっくり→結末に向かって圧縮</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_pacing" value="decelerating"><span class="comp-card-name">減速型</span><span class="comp-card-desc">序盤に激しい展開→後半は内省と静寂</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_pacing" value="even"><span class="comp-card-name">均等配分</span><span class="comp-card-desc">各日のテンションと密度がほぼ均等</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_pacing" value="breath"><span class="comp-card-name">ブレス型</span><span class="comp-card-desc">濃密な描写→余韻・空白。日本文学の「間」</span></label>
+                                </div>
+                            </div>
+
+                            <!-- 8. 語り口 -->
+                            <div class="comp-category">
+                                <h4 class="comp-category-title">語り口 <span class="comp-theory">日記の視点スタイル</span></h4>
+                                <div class="comp-cards" data-name="narrative_voice">
+                                    <label class="comp-card"><input type="radio" name="comp_narrative_voice" value="introspective"><span class="comp-card-name">内省的</span><span class="comp-card-desc">自分の感情・思考を深く掘り下げる</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_narrative_voice" value="observational"><span class="comp-card-name">観察的</span><span class="comp-card-desc">外界の出来事・人物・風景を鋭く記録</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_narrative_voice" value="emotional"><span class="comp-card-name">感情的・率直</span><span class="comp-card-desc">感情をフィルターなしで吐露</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_narrative_voice" value="detached"><span class="comp-card-name">客観的・距離を置いた</span><span class="comp-card-desc">感情を抑制し事実を淡々と記録</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_narrative_voice" value="stream_of_consciousness"><span class="comp-card-name">意識の流れ</span><span class="comp-card-desc">思考の流れをそのまま文章化。連想・飛躍</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_narrative_voice" value="humorous"><span class="comp-card-name">ユーモラス・自虐的</span><span class="comp-card-desc">自分の失敗をユーモアで包む親密な語り</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_narrative_voice" value="poetic"><span class="comp-card-name">詩的・抒情的</span><span class="comp-card-desc">散文詩のようなリズムと比喩。感覚的表現</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_narrative_voice" value="conversational"><span class="comp-card-name">対話的・語りかけ</span><span class="comp-card-desc">読者や将来の自分に語りかけるスタイル</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_narrative_voice" value="fragmentary"><span class="comp-card-name">断片的・メモ的</span><span class="comp-card-desc">完全な文章ではなく断片・箇条書き・走り書き</span></label>
+                                    <label class="comp-card"><input type="radio" name="comp_narrative_voice" value="unreliable"><span class="comp-card-name">信頼できない語り手</span><span class="comp-card-desc">語り手の認識と現実にズレ。行間を読む必要あり</span></label>
+                                </div>
+                            </div>
+
+                            <!-- 自由記述 -->
+                            <div class="comp-category">
+                                <h4 class="comp-category-title">自由記述 <span class="comp-theory">追加の指示・要望</span></h4>
+                                <textarea id="comp-free-notes" class="comp-free-notes" placeholder="例: 猫カフェの店長が主人公で、毎日一匹ずつ猫のエピソードを絡めてほしい / 方言を使う語り口にして..."></textarea>
+                            </div>
+                        </div>
+                    </div>
+
                     <div class="theme-actions">
                         <select id="profile-select">
                             <option value="draft">Draft（低コスト）</option>
@@ -79,7 +235,7 @@
                         <button class="btn-primary" onclick="startGeneration('theme')">生成開始</button>
                         <button class="btn-ghost" onclick="hideThemeInput()">キャンセル</button>
                     </div>
-                    
+
                     <div class="evaluator-settings" style="margin-top: 1rem; padding: 1rem; background: rgba(255, 255, 255, 0.05); border-radius: 8px;">
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
                             <label style="margin: 0; font-weight: 500;">Evaluator 個別設定 (Stage 2品質評価)</label>
@@ -126,6 +282,39 @@
                     <span>エージェント思考ログ</span>
                 </div>
                 <div id="thought-log" class="thought-log"></div>
+            </div>
+        </section>
+
+        <!-- コンセプトレビュー画面 (Human in the Loop) -->
+        <section id="concept-review-screen" class="screen">
+            <div class="review-header">
+                <h2>コンセプトレビュー</h2>
+                <p class="review-subtitle">Creative Directorが設計したコンセプトを確認してください。承認すると下流Phase（プロフィール・パラメータ・エピソード・イベント）の生成に進みます。</p>
+            </div>
+
+            <div id="review-concept-content" class="review-concept-content"></div>
+
+            <div class="review-actions">
+                <button class="btn-primary btn-large" onclick="approveConceptReview()">承認して続行</button>
+                <button class="btn-ghost" onclick="showRevisePanel()">フィードバックして再生成</button>
+                <button class="btn-ghost" onclick="editConceptDirect()">直接編集 (JSON)</button>
+            </div>
+
+            <div id="revise-panel" class="revise-panel hidden">
+                <label for="revise-feedback">変更してほしい点を記述してください</label>
+                <textarea id="revise-feedback" class="revise-textarea" placeholder="例: もっとダークな雰囲気にして / 主人公の職業を変えて / 山場をDay 3に持ってきて..."></textarea>
+                <div class="revise-actions">
+                    <button class="btn-primary" onclick="submitRevision()">フィードバックを送信して再生成</button>
+                    <button class="btn-ghost" onclick="hideRevisePanel()">キャンセル</button>
+                </div>
+            </div>
+
+            <div class="thought-stream" id="review-thought-stream">
+                <div class="thought-header">
+                    <span class="thought-icon">⟡</span>
+                    <span>エージェント思考ログ</span>
+                </div>
+                <div id="review-thought-log" class="thought-log"></div>
             </div>
         </section>
 

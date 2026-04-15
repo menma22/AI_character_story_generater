@@ -5,11 +5,12 @@ Phase A-1 → A-2 → A-3 → D を順次実行し、
 """
 
 import json
+import asyncio
 import logging
 from typing import Optional
 
 from backend.config import EvaluationProfile
-from backend.models.character import CharacterPackage, ConceptPackage, PackageMetadata
+from backend.models.character import CharacterPackage, ConceptPackage, PackageMetadata, StoryCompositionPreferences
 from backend.agents.creative_director.director import CreativeDirector
 from backend.tools.llm_api import token_tracker
 
@@ -18,15 +19,21 @@ logger = logging.getLogger(__name__)
 
 class MasterOrchestrator:
     """Tier 0: Master Orchestrator"""
-    
-    def __init__(self, profile: EvaluationProfile, ws_manager=None, existing_package: Optional[CharacterPackage] = None, session_id: Optional[str] = None, api_keys: Optional[dict] = None):
+
+    def __init__(self, profile: EvaluationProfile, ws_manager=None, existing_package: Optional[CharacterPackage] = None, session_id: Optional[str] = None, api_keys: Optional[dict] = None, composition_preferences: Optional[StoryCompositionPreferences] = None):
         self.profile = profile
         self.ws = ws_manager
         self.package = existing_package or CharacterPackage()
         from datetime import datetime
         self.session_id = session_id or f"SID_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         self.api_keys = api_keys
+        self.composition_preferences = composition_preferences
         self._last_orch = None  # Phase D の orch インスタンスを取り出すためのフック
+        # Human in the Loop: concept_review用の同期プリミティブ
+        self._review_event = asyncio.Event()
+        self._review_action = None   # "approve" | "revise"
+        self._review_feedback = None  # revise時のフィードバックテキスト
+        self._review_edited_concept = None  # 直接編集されたconcept_package
     
     async def _notify(self, content: str, status: str = "thinking"):
         if self.ws:
@@ -59,6 +66,13 @@ class MasterOrchestrator:
         except Exception as e:
             logger.warning(f"Checkpoint save failed: {e}")
     
+    def handle_review_response(self, action: str, feedback: str = None, edited_concept: dict = None):
+        """Human in the Loop: ユーザーのコンセプトレビュー応答を処理"""
+        self._review_action = action  # "approve" | "revise" | "edit"
+        self._review_feedback = feedback
+        self._review_edited_concept = edited_concept
+        self._review_event.set()
+
     async def run(self, theme: Optional[str] = None) -> CharacterPackage:
         """
         キャラクター生成パイプライン全体を実行
@@ -129,11 +143,20 @@ class MasterOrchestrator:
         
             return best_result
         
+        # ─── 構成プリファレンスを保存 ─────────────────────────
+        if self.composition_preferences:
+            self.package.composition_preferences = self.composition_preferences
+
         # ─── Tier -1: Creative Director ───────────────────────
         await self._checkpoint() # 直前に保存
         if not self.package.concept_package:
             await self._progress("creative_director", 0.0, "Creative Director起動中...")
-            director = CreativeDirector(profile=self.profile, ws_manager=self.ws, api_keys=self.api_keys)
+            director = CreativeDirector(
+                profile=self.profile,
+                ws_manager=self.ws,
+                api_keys=self.api_keys,
+                composition_preferences=self.composition_preferences,
+            )
             concept = await director.run(theme=theme)
             self.package.concept_package = concept
             await self._checkpoint()
@@ -142,9 +165,57 @@ class MasterOrchestrator:
             await self._notify("Creative Director: 既存のコンセプトを読み込み完了 (Skip)")
             concept = self.package.concept_package
             await self._progress("creative_director", 1.0)
-            
+
         cc_preview = concept.character_concept[:60] if concept.character_concept else "(未定義)"
         await self._notify(f"concept_package確定: {cc_preview}...")
+
+        # ─── Human in the Loop: Concept Review ────────────────
+        # Creative Director完了後、ユーザーにレビュー機会を提供
+        if self.ws:
+            await self._notify("コンセプトレビューを開始します。ユーザーの確認を待っています...", "waiting")
+            await self.ws.send_phase_result("concept_review", {
+                "concept_package": concept.model_dump(mode="json"),
+                "message": "コンセプトが完成しました。確認してください。",
+            })
+            # ユーザーの応答を待機
+            self._review_event.clear()
+            await self._review_event.wait()
+
+            if self._review_action == "revise":
+                # フィードバック付きで再生成
+                await self._notify(f"ユーザーフィードバックに基づいてコンセプトを再生成します: {self._review_feedback[:80]}...")
+                await self._progress("creative_director", 0.0, "コンセプト再生成中...")
+                director = CreativeDirector(
+                    profile=self.profile,
+                    ws_manager=self.ws,
+                    api_keys=self.api_keys,
+                    composition_preferences=self.composition_preferences,
+                    regeneration_context=f"═══ 【ユーザーフィードバック】 ═══\n以下は前回の生成結果に対するユーザーのフィードバックです。このフィードバックを反映してconcept_packageを改善してください。\n\n【前回の生成結果の概要】\ncharacter_concept: {concept.character_concept[:200]}...\nstory_outline: {concept.story_outline[:200]}...\n\n【ユーザーフィードバック】\n{self._review_feedback}\n═══════════════════════",
+                )
+                concept = await director.run(theme=theme)
+                self.package.concept_package = concept
+                await self._checkpoint()
+                await self._progress("creative_director", 1.0, "コンセプト再生成完了")
+                # 再生成後、再度レビューの機会を提供
+                await self.ws.send_phase_result("concept_review", {
+                    "concept_package": concept.model_dump(mode="json"),
+                    "message": "再生成したコンセプトです。確認してください。",
+                })
+                self._review_event.clear()
+                await self._review_event.wait()
+
+            if self._review_action == "edit":
+                # 直接編集されたconcept_packageを適用
+                if self._review_edited_concept:
+                    try:
+                        concept = ConceptPackage(**self._review_edited_concept)
+                        self.package.concept_package = concept
+                        await self._checkpoint()
+                        await self._notify("編集されたコンセプトを適用しました。")
+                    except Exception as e:
+                        await self._notify(f"編集データのバリデーションエラー: {e}", "warning")
+
+            await self._notify("コンセプトレビュー承認。下流Phaseに進みます。", "complete")
         
         # ─── Phase A-1: マクロプロフィール + 言語的表現方法 生成 ────────────────
         if not self.package.macro_profile:

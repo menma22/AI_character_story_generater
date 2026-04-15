@@ -1262,3 +1262,260 @@ body {
         width: 100%;
     }
 }
+
+
+/* ═══════════════════════════════════════════════════════════
+   Human in the Loop: 物語構成プリファレンス
+   ═══════════════════════════════════════════════════════════ */
+
+.composition-prefs-section {
+    margin-top: 1.2rem;
+    border: 1px solid var(--border-subtle);
+    border-radius: 10px;
+    overflow: hidden;
+}
+
+.composition-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.8rem 1rem;
+    cursor: pointer;
+    background: var(--bg-secondary);
+    transition: background 0.2s;
+    user-select: none;
+}
+
+.composition-toggle:hover {
+    background: var(--bg-tertiary);
+}
+
+.composition-toggle-icon {
+    font-size: 0.7rem;
+    transition: transform 0.2s;
+    color: var(--text-muted);
+}
+
+.composition-toggle-icon.open {
+    transform: rotate(90deg);
+}
+
+.composition-toggle-label {
+    font-weight: 600;
+    font-size: 0.95rem;
+    color: var(--text-primary);
+}
+
+.composition-toggle-hint {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
+.composition-summary {
+    padding: 0.6rem 1rem;
+    font-size: 0.85rem;
+    color: var(--accent-primary);
+    background: var(--accent-primary-glow);
+    border-top: 1px solid var(--border-subtle);
+}
+
+.composition-prefs {
+    padding: 1rem;
+    border-top: 1px solid var(--border-subtle);
+    max-height: 60vh;
+    overflow-y: auto;
+}
+
+.composition-actions-top {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 0.8rem;
+}
+
+.btn-small {
+    padding: 0.3rem 0.7rem;
+    font-size: 0.8rem;
+}
+
+.comp-category {
+    margin-bottom: 1.2rem;
+}
+
+.comp-category-title {
+    font-size: 0.95rem;
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+    color: var(--text-primary);
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+}
+
+.comp-theory {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    font-weight: 400;
+}
+
+.comp-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 0.5rem;
+}
+
+.comp-card {
+    display: flex;
+    flex-direction: column;
+    padding: 0.6rem 0.8rem;
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.15s;
+    background: var(--bg-card);
+    position: relative;
+}
+
+.comp-card:hover {
+    background: var(--bg-card-hover);
+    border-color: var(--accent-primary);
+}
+
+.comp-card input[type="radio"] {
+    position: absolute;
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.comp-card:has(input:checked) {
+    border-color: var(--accent-primary);
+    background: var(--accent-primary-glow);
+    box-shadow: 0 0 0 1px var(--accent-primary);
+}
+
+.comp-card-name {
+    font-weight: 600;
+    font-size: 0.85rem;
+    color: var(--text-primary);
+    margin-bottom: 2px;
+}
+
+.comp-card-desc {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    line-height: 1.3;
+}
+
+.comp-card-source {
+    font-size: 0.65rem;
+    color: var(--text-muted);
+    margin-top: 3px;
+    font-style: italic;
+}
+
+.comp-free-notes {
+    width: 100%;
+    min-height: 60px;
+    padding: 0.6rem;
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    background: var(--bg-card);
+    color: var(--text-primary);
+    font-size: 0.85rem;
+    font-family: inherit;
+    resize: vertical;
+}
+
+.comp-free-notes:focus {
+    outline: none;
+    border-color: var(--accent-primary);
+}
+
+
+/* ═══════════════════════════════════════════════════════════
+   Human in the Loop: コンセプトレビュー画面
+   ═══════════════════════════════════════════════════════════ */
+
+#concept-review-screen {
+    max-width: 900px;
+    margin: 0 auto;
+}
+
+.review-header {
+    margin-bottom: 1.5rem;
+}
+
+.review-header h2 {
+    color: var(--accent-primary);
+    margin-bottom: 0.5rem;
+}
+
+.review-subtitle {
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    line-height: 1.5;
+}
+
+.review-concept-content {
+    margin-bottom: 1.5rem;
+}
+
+.review-actions {
+    display: flex;
+    gap: 0.8rem;
+    margin-bottom: 1.5rem;
+    flex-wrap: wrap;
+}
+
+.btn-large {
+    padding: 0.8rem 2rem;
+    font-size: 1rem;
+}
+
+.revise-panel {
+    padding: 1.2rem;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-subtle);
+    border-radius: 10px;
+    margin-bottom: 1.5rem;
+}
+
+.revise-panel label {
+    font-weight: 500;
+    margin-bottom: 0.5rem;
+    display: block;
+    color: var(--text-primary);
+}
+
+.revise-textarea {
+    width: 100%;
+    min-height: 100px;
+    padding: 0.8rem;
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    background: var(--bg-card);
+    color: var(--text-primary);
+    font-size: 0.9rem;
+    font-family: inherit;
+    resize: vertical;
+    margin-bottom: 0.8rem;
+}
+
+.revise-textarea:focus {
+    outline: none;
+    border-color: var(--accent-primary);
+}
+
+.revise-actions {
+    display: flex;
+    gap: 0.5rem;
+}
+
+@media (max-width: 768px) {
+    .comp-cards {
+        grid-template-columns: 1fr;
+    }
+    .review-actions {
+        flex-direction: column;
+    }
+}
