@@ -145,21 +145,26 @@ function startGeneration(mode) {
         narrative_connection_auditor_enabled: document.getElementById('eval-narrative')?.checked ?? false
     };
 
+    // 構成プリファレンスの収集
+    const compositionPreferences = collectCompositionPreferences();
+
     if (mode === 'theme') {
         const theme = document.getElementById('theme-input').value.trim();
-        wsManager.send('generate_character', { 
-            profile, 
-            theme: theme || null, 
+        wsManager.send('generate_character', {
+            profile,
+            theme: theme || null,
             evaluators_override: evaluators,
-            api_keys: getApiKeys()
+            api_keys: getApiKeys(),
+            composition_preferences: compositionPreferences,
         });
         addThought('System', `テーマ指定モードで生成開始 (${profile})`, 'thinking');
     } else {
-        wsManager.send('generate_character', { 
-            profile, 
-            theme: null, 
+        wsManager.send('generate_character', {
+            profile,
+            theme: null,
             evaluators_override: evaluators,
-            api_keys: getApiKeys()
+            api_keys: getApiKeys(),
+            composition_preferences: compositionPreferences,
         });
         addThought('System', `フルオート生成開始 (${profile})`, 'thinking');
     }
@@ -766,4 +771,194 @@ function getApiKeys() {
     } catch (e) {
         return {};
     }
+}
+
+// ═══════════════════════════════════════════════════════════
+// Human in the Loop: 物語構成プリファレンス
+// ═══════════════════════════════════════════════════════════
+
+const COMP_FIELD_NAMES = [
+    'narrative_structure', 'emotional_tone', 'character_arc',
+    'theme_weight', 'climax_structure', 'genre', 'pacing', 'narrative_voice'
+];
+
+const COMP_DISPLAY_NAMES = {
+    narrative_structure: '物語構造',
+    emotional_tone: '感情トーン',
+    character_arc: 'キャラクターアーク',
+    theme_weight: 'テーマの重さ',
+    climax_structure: 'クライマックス構造',
+    genre: 'ジャンル',
+    pacing: 'ペーシング',
+    narrative_voice: '語り口',
+};
+
+function toggleCompositionPrefs() {
+    const prefs = document.getElementById('composition-prefs');
+    const icon = document.getElementById('comp-toggle-icon');
+    if (prefs.classList.contains('hidden')) {
+        prefs.classList.remove('hidden');
+        icon.classList.add('open');
+    } else {
+        prefs.classList.add('hidden');
+        icon.classList.remove('open');
+    }
+    updateCompositionSummary();
+}
+
+function resetAllCompositionPrefs() {
+    COMP_FIELD_NAMES.forEach(name => {
+        const radios = document.querySelectorAll(`input[name="comp_${name}"]`);
+        radios.forEach(r => r.checked = false);
+    });
+    const freeNotes = document.getElementById('comp-free-notes');
+    if (freeNotes) freeNotes.value = '';
+    updateCompositionSummary();
+}
+
+function collectCompositionPreferences() {
+    const prefs = {};
+    let hasAny = false;
+
+    COMP_FIELD_NAMES.forEach(name => {
+        const checked = document.querySelector(`input[name="comp_${name}"]:checked`);
+        if (checked) {
+            prefs[name] = checked.value;
+            hasAny = true;
+        }
+    });
+
+    const freeNotes = document.getElementById('comp-free-notes')?.value?.trim();
+    if (freeNotes) {
+        prefs.free_notes = freeNotes;
+        hasAny = true;
+    }
+
+    return hasAny ? prefs : null;
+}
+
+function updateCompositionSummary() {
+    const summary = document.getElementById('composition-summary');
+    if (!summary) return;
+
+    const parts = [];
+    COMP_FIELD_NAMES.forEach(name => {
+        const checked = document.querySelector(`input[name="comp_${name}"]:checked`);
+        if (checked) {
+            // カード名を取得
+            const card = checked.closest('.comp-card');
+            const cardName = card?.querySelector('.comp-card-name')?.textContent || checked.value;
+            parts.push(cardName);
+        }
+    });
+
+    if (parts.length > 0) {
+        summary.textContent = parts.join(' / ');
+        summary.classList.remove('hidden');
+    } else {
+        summary.classList.add('hidden');
+    }
+}
+
+// ラジオボタンの変更時にサマリーを更新
+document.addEventListener('change', (e) => {
+    if (e.target.name?.startsWith('comp_')) {
+        updateCompositionSummary();
+    }
+});
+
+
+// ═══════════════════════════════════════════════════════════
+// Human in the Loop: コンセプトレビュー画面
+// ═══════════════════════════════════════════════════════════
+
+let reviewConceptData = null;
+
+function onConceptReview(result) {
+    reviewConceptData = result.concept_package;
+    addThought('System', result.message || 'コンセプトレビューの準備ができました', 'complete');
+
+    // レビュー画面にコンセプトを描画
+    const content = document.getElementById('review-concept-content');
+    if (content && reviewConceptData) {
+        content.innerHTML = Renderer.renderConcept(reviewConceptData);
+    }
+
+    // フィードバックパネルをリセット
+    hideRevisePanel();
+
+    // レビュー画面に遷移
+    showScreen('concept-review-screen');
+}
+
+function approveConceptReview() {
+    wsManager.send('approve_concept', {});
+    addThought('System', 'コンセプトを承認しました。下流Phaseの生成に進みます...', 'thinking');
+    showScreen('generation-screen');
+}
+
+function showRevisePanel() {
+    document.getElementById('revise-panel').classList.remove('hidden');
+    document.getElementById('revise-feedback').value = '';
+    document.getElementById('revise-feedback').focus();
+}
+
+function hideRevisePanel() {
+    document.getElementById('revise-panel').classList.add('hidden');
+}
+
+function submitRevision() {
+    const feedback = document.getElementById('revise-feedback').value.trim();
+    if (!feedback) {
+        alert('フィードバック内容を入力してください');
+        return;
+    }
+
+    wsManager.send('revise_concept', { feedback });
+    addThought('System', `フィードバックを送信しました: ${feedback.substring(0, 60)}...`, 'thinking');
+
+    // 生成画面に戻してCreative Directorの再実行を表示
+    showScreen('generation-screen');
+}
+
+function editConceptDirect() {
+    if (!reviewConceptData) return;
+
+    // 編集モーダルを開く（concept_packageとして）
+    currentEditArtifact = 'concept_package';
+
+    document.getElementById('edit-modal-title').textContent = 'JSON編集: コンセプト（レビュー中）';
+    document.getElementById('edit-json-textarea').value = JSON.stringify(reviewConceptData, null, 2);
+    document.getElementById('edit-error-msg').classList.add('hidden');
+    document.getElementById('edit-save-btn').disabled = false;
+
+    // 保存ボタンの動作をレビュー用にオーバーライド
+    document.getElementById('edit-save-btn').onclick = saveConceptEditDuringReview;
+    document.getElementById('edit-modal').classList.remove('hidden');
+}
+
+function saveConceptEditDuringReview() {
+    const textarea = document.getElementById('edit-json-textarea');
+    const errorMsg = document.getElementById('edit-error-msg');
+
+    let parsed;
+    try {
+        parsed = JSON.parse(textarea.value);
+    } catch (e) {
+        errorMsg.textContent = `JSONパースエラー: ${e.message}`;
+        errorMsg.classList.remove('hidden');
+        return;
+    }
+
+    errorMsg.classList.add('hidden');
+
+    // edit_concept_directアクションでバックエンドに送信
+    wsManager.send('edit_concept_direct', { concept_package: parsed });
+    addThought('System', '編集したコンセプトを適用して続行します...', 'thinking');
+
+    // モーダルを閉じて生成画面に遷移
+    document.getElementById('edit-modal').classList.add('hidden');
+    // 保存ボタンの動作を元に戻す
+    document.getElementById('edit-save-btn').onclick = saveArtifactEdit;
+    showScreen('generation-screen');
 }
