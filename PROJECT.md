@@ -13,14 +13,14 @@
 ```
 AI_character_story_generater/
 ├── backend/
-│   ├── main.py                                # FastAPI エントリポイント (WebSocket + REST API) ※2026-04-15 17:48 再起動完了 (PID 111488)
+│   ├── main.py                                # FastAPI エントリポイント (WebSocket + REST API, approve/revise/edit_concept アクション対応)
 │   ├── regeneration.py                        # アーティファクト個別再生成モジュール (依存マップ + 再生成コア)
 │   ├── config.py                              # 設定管理 (APIキー, 4段階プロファイル, モデル定義)
 │   ├── agents/
 │   │   ├── creative_director/
-│   │   │   └── director.py                    # Tier -1: Creative Director (5フェーズ, 2層自己批判, Web検索必須, file_read)
+│   │   │   └── director.py                    # Tier -1: Creative Director (5フェーズ, 2層自己批判, Web検索必須, file_read, 構成プリファレンス注入+[G]整合性チェック)
 │   │   ├── master_orchestrator/
-│   │   │   └── orchestrator.py                # Tier 0: Phase A-1→A-2→A-3→D 順次制御 + Evaluator統合
+│   │   │   └── orchestrator.py                # Tier 0: Phase A-1→A-2→A-3→D 順次制御 + Evaluator統合 + concept_review一時停止
 │   │   ├── phase_a1/
 │   │   │   └── orchestrator.py                # Phase A-1: マクロプロフィール (8 Workers, 並列化)
 │   │   ├── phase_a2/
@@ -43,7 +43,7 @@ AI_character_story_generater/
 │   │   └── evaluators/
 │   │       └── pipeline.py                    # Evaluator群7種 (SchemaValidator常時ON, LLM5種)
 │   ├── models/
-│   │   ├── character.py                       # Pydantic v2 データモデル (v2 §6.3.4準拠スキーマ)
+│   │   ├── character.py                       # Pydantic v2 データモデル (v2 §6.3.4準拠スキーマ + StoryCompositionPreferences)
 │   │   └── memory.py                          # 記憶・ムード・イベント処理モデル
 │   ├── tools/
 │   │   ├── llm_api.py                         # LLM API統合ラッパー (Anthropic + Google AI Studio + フォールバック)
@@ -68,7 +68,7 @@ AI_character_story_generater/
 │           │       └── 003_summary.json       # さらに要約（段階的忘却）
 │           └── diaries/day_NN.md              # 日記本文（独立DB）
 ├── frontend/
-│   ├── index.html                             # メインUI (APIキー設定画面, 4画面構成)
+│   ├── index.html                             # メインUI (APIキー設定画面, 4画面構成, 構成プリファレンスUI, コンセプトレビュー画面)
 │   ├── css/style.css                          # プレミアムダークテーマ (設定モーダル対応)
 │   └── js/
 │       ├── websocket.js                       # WebSocket接続管理 (自動再接続)
@@ -167,8 +167,8 @@ graph TB
 #### コアロジック・ルール
 
 **4層エージェント階層（Day 0）:**
-1. **Tier -1 Creative Director** (Opus): Tool-Callingによる自律推敲ループ。search_web + file_read + request_critique + submit_final_concept の4ツール。Self-Critiqueチェックリスト [A]-[F] の6カテゴリ。
-2. **Tier 0 Master Orchestrator** (Opus): Phase A-1→A-2→A-3→D順次制御。各Phase完了後にEvaluator-Optimizerループで即時評価・再生成。
+1. **Tier -1 Creative Director** (Opus): Tool-Callingによる自律推敲ループ。search_web + file_read + request_critique + submit_final_concept の4ツール。Self-Critiqueチェックリスト [A]-[G] の7カテゴリ（[G]=ユーザー構成方針との整合性）。ユーザー指定の `StoryCompositionPreferences` をMarkdown形式でプロンプトに注入。
+2. **Tier 0 Master Orchestrator** (Opus): Phase A-1→A-2→A-3→D順次制御。各Phase完了後にEvaluator-Optimizerループで即時評価・再生成。**Creative Director完了後にconcept_review一時停止**（asyncio.Event）でユーザーレビューを待機。approve/revise/edit の3アクション対応。
 3. **Phase Orchestrators**: 各Phase内のWorker群を管理。A-1=8 Workers+LinguisticExpressionWorker（9Worker合計、PhaseA1Result返却）、A-2=15 Workers（v2 §6.4.2準拠）、A-3=Planner(自然言語)+Writer(JSON一括)、D=4 Workers(自然言語)+EventWriter(JSON)。
 4. **Workers**: プロファイル別モデル（high_quality=sonnet, draft=gemini）。最低ティア=Gemini 2.5 Pro。
 
@@ -192,6 +192,32 @@ Step 2: 規範層 Worker 4基を並列実行
   GoalsDreamsWorker (長期・中期目標)
 Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 ```
+
+**Human in the Loop（生成前 + 生成後）:**
+```
+【生成前】ユーザーが8カテゴリの物語構成プリファレンスを任意選択
+  → StoryCompositionPreferences として WebSocket ペイロードに同梱
+  → Creative Director のプロンプトにMarkdown形式で注入
+  → Self-Critique [G] でユーザー構成方針との整合性を自動チェック
+
+【生成後】Creative Director → [concept_review 一時停止] → ユーザーレビュー
+  → 「承認して続行」: approve_concept → Phase A-1 へ
+  → 「フィードバックして再生成」: revise_concept → Creative Director 再実行
+  → 「直接編集」: edit_concept_direct → 編集済みJSONで続行
+```
+
+**物語構成プリファレンス `StoryCompositionPreferences`（8カテゴリ + 自由記述）:**
+| カテゴリ | 選択肢数 | 理論的根拠 |
+|---|---|---|
+| 物語構造 (narrative_structure) | 12種 | Aristotle, Freytag, Campbell, Harmon, Snyder, 起承転結 |
+| 感情トーン (emotional_tone) | 12種 | Ekman, Plutchik, McKee |
+| キャラクターアーク (character_arc) | 8種 | Weiland, Vogler, Campbell |
+| テーマの重さ (theme_weight) | 8種 | Booker, McKee |
+| クライマックス構造 (climax_structure) | 8種 | Freytag, McKee, Field |
+| ジャンル (genre) | 12種 | 文学ジャンル理論 |
+| ペーシング (pacing) | 8種 | McKee, Field, Snyder |
+| 語り口 (narrative_voice) | 10種 | Genette, Booth, Bakhtin |
+| 自由記述 (free_notes) | - | ユーザー自由入力 |
 
 **日次ループ（Day 1-7）:**
 ```
@@ -784,6 +810,19 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 - **動的キー優先ロジック**: `llm_api.py` の `call_llm` において、引数として渡された `api_keys` が存在する場合は環境変数よりも優先して使用する。
 - **設定 UI**: モダンなモーダル UI を実装し、各プロバイダごとのキー設定を容易に。
 
+### 24. Human in the Loop: 物語構成プリファレンス + Creative Director後レビュー
+
+**(a) 当初設計**: ユーザーが指定できるのは「テーマ」と「品質プロファイル」のみ。物語の構造・感情トーン・語り口等の構成要素を事前に指定する仕組みがなかった。また、Creative Directorの出力後に人間が確認・修正してから下流Phaseに進む手段も存在しなかった。
+
+**(b) 変更・根拠**: 2つの問題を同時に解決。①**生成前**: 文献ベース（Aristotle, Freytag, Campbell, Harmon, Snyder, McKee, Weiland, Vogler, Genette, Booth, Bakhtin等11理論家＋17Web情報源）の網羅的な選択肢から物語構成を指定できるUI。8カテゴリ78+選択肢。②**生成後**: Creative Director完了後にパイプラインを`asyncio.Event`で一時停止し、ユーザーがconcept_packageを確認→承認/フィードバック再生成/直接編集の3パスで介入可能に。
+
+**(c) 採用プラクティス**:
+- **`StoryCompositionPreferences`モデル**: 8カテゴリ＋自由記述の全Optional Pydanticモデル。未選択項目はAI自律判断
+- **Creative Directorへの注入**: 選択された項目を日本語ラベルに変換し`【ユーザー指定の構成方針（Human in the Loop）】`としてMarkdown形式でプロンプトに注入。Self-Critiqueに`[G] ユーザー構成方針との整合性`チェック項目（5チェックボックス）を追加
+- **パイプライン一時停止**: MasterOrchestratorがCreative Director完了後に`concept_review`イベントを送信、`asyncio.Event`でユーザー応答を待機。`active_orchestrator`グローバル変数でWebSocketハンドラからオーケストレーターインスタンスにアクセス
+- **3アクション**: `approve_concept`（続行）、`revise_concept`（フィードバック付き再生成）、`edit_concept_direct`（編集済みJSON適用）
+- **フロントエンドUI**: アコーディオン形式のカード選択UI（各カードに名前+説明+出典理論家）、コンセプトレビュー画面（既存`Renderer.renderConcept()`再利用）、サマリーバー表示
+
 ---
 
 ## パート3: プロジェクト管理
@@ -828,6 +867,7 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 | Stage 34: クリティカルバグ修正（NameError 3件 + データ欠損 + コンテキスト欠落） | ✅ 修正完了 | 検証レポート由来の致命・高優先度バグ7件を全修正。①`_values_violation()` normative_context NameError、②`_introspection()` normative_context/protagonist_plan_note NameError、③`_extract_key_memory()` action_summary NameError（events_processed 引数追加・呼び出し側更新）、④Phase D supporting_chars 未パース問題（LLM JSON変換ステップ追加）、⑤`_introspection()` 周囲人物コンテキスト欠落、⑥`_generate_diary()` 周囲人物・自伝的エピソード欠落、⑦PROJECT.md冒頭フロー記述の翌日予定位置修正 |
 | Stage 35: 翌日予定追加エージェント NameError/AttributeError修正 | ✅ 修正完了 | `next_day_planning.py`の`stage1_protagonist_plan()`が毎回クラッシュしていた致命バグを修正。①`wrap_context`未インポート（`context_descriptions.py`から追加）、②`self._build_memory_context()`がNextDayPlanningAgentクラスに存在しない（`memory_context`パラメータとしてオーケストレーターから注入する方式に変更）。この修正により`protagonist_plan`イベントが初めてweekly_events_storeに挿入されるようになり、v10 §4.9.4の機能が稼働開始 |
 | Stage 36: README.md仕様書レベル技術ドキュメント化 | ✅ 完了 | 簡易READMEからspecification_v10.md・v2・PROJECT.mdの内容を統合した濃密な技術ドキュメントに全面刷新。設計思想6原則、4層エージェント階層詳細図解、52パラメータ全構造、隠蔽原則、Redemption Bias対策、Daily Loop認知シミュレーション全フロー、3層記憶システム、LLMティアシステム、検証・評価7種、データモデル・ストレージ構造、API/WebSocket仕様、先行研究14理論対応表を網羅（149行→約450行） |
+| Stage 37: Human in the Loop（物語構成プリファレンス + コンセプトレビュー） | ✅ 実装完了 | `StoryCompositionPreferences`（8カテゴリ78+選択肢、文献ベース11理論家）、Creative Director構成方針注入+Self-Critique[G]追加、`asyncio.Event`によるconcept_review一時停止、approve/revise/edit 3アクション、アコーディオン型カード選択UI、コンセプトレビュー画面。変更ファイル: character.py, main.py, orchestrator.py, director.py, index.html, app.js, style.css |
 
 ### 次のアクション
 
