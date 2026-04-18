@@ -240,6 +240,15 @@ class PhaseDOrchestrator:
         self.regeneration_context = regeneration_context
         self.api_keys = api_keys
         self.character_capabilities: Optional[CharacterCapabilities] = None
+        self._master_orch = None
+
+    def set_master_orch(self, master_orch):
+        """マスターオーケストレータの参照をセット（キャンセルチェック用）"""
+        self._master_orch = master_orch
+
+    def _check_cancelled(self):
+        if self._master_orch and getattr(self._master_orch, "_cancelled", False):
+            raise asyncio.CancelledError("User requested cancellation")
 
     async def _notify(self, content: str, status: str = "thinking"):
         if self.ws:
@@ -282,93 +291,153 @@ class PhaseDOrchestrator:
         context = self._full_context()
 
         # ── Step 1-2: WorldContext + SupportingCharacters (並列、自然言語テキスト) ──
-        await self._notify("Step 1-2: 世界設定 + 周囲人物を並列生成")
-
-        world_task = call_llm(
-            tier=self.profile.worker_tier, system_prompt=WORLD_CONTEXT_PROMPT,
-            user_message=f"{context}\n\n世界設定を生成してください。",
-            api_keys=self.api_keys,
-        )
-        chars_task = call_llm(
-            tier=self.profile.worker_tier, system_prompt=SUPPORTING_CHARACTERS_PROMPT,
-            user_message=f"{context}\n\n周囲の人物を設計してください。",
-            api_keys=self.api_keys,
-        )
-
-        world_result, chars_result = await asyncio.gather(world_task, chars_task)
-
-        world_text = world_result["content"] if isinstance(world_result["content"], str) else json.dumps(world_result["content"], ensure_ascii=False)
-        chars_text = chars_result["content"] if isinstance(chars_result["content"], str) else json.dumps(chars_result["content"], ensure_ascii=False)
-
-        world_context = WorldContext(description=world_text)
-
-        # chars_text（自然言語）から SupportingCharacter オブジェクトをパース
+        world_context = None
         supporting_chars = []
-        try:
-            parse_result = await call_llm(
-                tier=self.profile.worker_tier,
-                system_prompt=(
-                    "以下の人物設計テキストをJSONに変換してください。\n"
-                    "出力形式: {\"characters\": [{\"name\": \"...\", \"role\": \"...\", "
-                    "\"relationship_to_protagonist\": \"...\", \"brief_profile\": \"...\", "
-                    "\"own_small_want\": \"...\"}]}\n"
-                    "テキストに含まれる全人物を漏れなく含めること。"
-                ),
-                user_message=chars_text,
-                json_mode=True,
+        
+        # 既存チェック
+        store = getattr(self._master_orch.package, "weekly_events_store", None) if self._master_orch else None
+        if store and store.world_context and store.world_context.description:
+            await self._notify("Step 1: 既存の世界設定を読み込み (Skip)")
+            world_context = store.world_context
+            world_text = world_context.description
+        else:
+            await self._notify("Step 1: 世界設定を生成")
+            world_res = await call_llm(
+                tier=self.profile.worker_tier, system_prompt=WORLD_CONTEXT_PROMPT,
+                user_message=f"{context}\n\n世界設定を生成してください。",
                 api_keys=self.api_keys,
             )
-            parse_data = parse_result["content"] if isinstance(parse_result["content"], dict) else {}
-            for c in parse_data.get("characters", []):
-                supporting_chars.append(SupportingCharacter(
-                    name=c.get("name", ""),
-                    role=c.get("role", ""),
-                    relationship_to_protagonist=c.get("relationship_to_protagonist", ""),
-                    brief_profile=c.get("brief_profile", ""),
-                    own_small_want=c.get("own_small_want", ""),
-                ))
-        except Exception as e:
-            logger.warning(f"[Phase D] SupportingCharacter パース失敗（空リストで続行）: {e}")
+            world_text = world_res["content"] if isinstance(world_res["content"], str) else json.dumps(world_res["content"], ensure_ascii=False)
+            world_context = WorldContext(description=world_text)
+            if self._master_orch:
+                if not self._master_orch.package.weekly_events_store:
+                    self._master_orch.package.weekly_events_store = WeeklyEventsStore(world_context=world_context, supporting_characters=[], narrative_arc=NarrativeArc(description=""), conflict_intensity_arc=ConflictIntensityArc(), events=[])
+                else:
+                    self._master_orch.package.weekly_events_store.world_context = world_context
+                await self._master_orch._checkpoint()
+
+        self._check_cancelled()
+
+        if store and store.supporting_characters and len(store.supporting_characters) > 0:
+            await self._notify("Step 2: 既存の周囲人物を読み込み (Skip)")
+            supporting_chars = store.supporting_characters
+            chars_text = "読み込み済み人物データがあります。" # 文字列化は後続のプロンプトで必要なら行う
+        else:
+            await self._notify("Step 2: 周囲人物を設計")
+            chars_res = await call_llm(
+                tier=self.profile.worker_tier, system_prompt=SUPPORTING_CHARACTERS_PROMPT,
+                user_message=f"{context}\n\n周囲の人物を設計してください。",
+                api_keys=self.api_keys,
+            )
+            chars_text = chars_res["content"] if isinstance(chars_res["content"], str) else json.dumps(chars_res["content"], ensure_ascii=False)
+            
+            # パース
+            try:
+                parse_result = await call_llm(
+                    tier=self.profile.worker_tier,
+                    system_prompt=(
+                        "以下の人物設計テキストをJSONに変換してください。\n"
+                        "出力形式: {\"characters\": [{\"name\": \"...\", \"role\": \"...\", "
+                        "\"relationship_to_protagonist\": \"...\", \"brief_profile\": \"...\", "
+                        "\"own_small_want\": \"...\"}]}\n"
+                        "テキストに含まれる全人物を漏れなく含めること。"
+                    ),
+                    user_message=chars_text,
+                    json_mode=True,
+                    api_keys=self.api_keys,
+                )
+                parse_data = parse_result["content"] if isinstance(parse_result["content"], dict) else {}
+                for c in parse_data.get("characters", []):
+                    supporting_chars.append(SupportingCharacter(
+                        name=c.get("name", ""),
+                        role=c.get("role", ""),
+                        relationship_to_protagonist=c.get("relationship_to_protagonist", ""),
+                        brief_profile=c.get("brief_profile", ""),
+                        own_small_want=c.get("own_small_want", ""),
+                    ))
+                
+                if self._master_orch:
+                    if not self._master_orch.package.weekly_events_store:
+                        self._master_orch.package.weekly_events_store = WeeklyEventsStore(world_context=world_context, supporting_characters=supporting_chars, narrative_arc=NarrativeArc(description=""), conflict_intensity_arc=ConflictIntensityArc(), events=[])
+                    else:
+                        self._master_orch.package.weekly_events_store.supporting_characters = supporting_chars
+                    await self._master_orch._checkpoint()
+            except Exception as e:
+                logger.warning(f"[Phase D] SupportingCharacter パース失敗: {e}")
+
+        self._check_cancelled()
 
         if self.ws:
-            await self.ws.send_agent_thought("[Phase D] WorldContext", "世界設定生成完了", "complete")
+            await self.ws.send_agent_thought("[Phase D] WorldContext", "世界設定完了", "complete")
             await self.ws.send_agent_thought("[Phase D] SupportingCharacters", "周囲人物設計完了", "complete")
 
         # ── Step 2.5: CharacterCapabilitiesAgent（エージェンティックループ） ──
-        await self._notify("Step 2.5: CharacterCapabilitiesAgent 起動（所持品・能力・行動をエージェントで設計）...")
-        from backend.agents.phase_d.capabilities_agent import CharacterCapabilitiesAgent
-        caps_agent = CharacterCapabilitiesAgent(
-            concept=self.concept,
-            macro_profile=self.macro,
-            context=context,
-            profile=self.profile,
-            ws_manager=self.ws,
-            api_keys=self.api_keys,
-        )
-        self.character_capabilities = await caps_agent.run()
+        existing_caps = getattr(self._master_orch.package, "character_capabilities", None) if self._master_orch else None
+        if existing_caps and (existing_caps.possessions or existing_caps.abilities):
+            await self._notify("Step 2.5: 既存の所持品・能力を読み込み (Skip)")
+            self.character_capabilities = existing_caps
+        else:
+            await self._notify("Step 2.5: CharacterCapabilitiesAgent 起動（所持品・能力・行動をエージェントで設計）...")
+            from backend.agents.phase_d.capabilities_agent import CharacterCapabilitiesAgent
+            caps_agent = CharacterCapabilitiesAgent(
+                concept=self.concept,
+                macro_profile=self.macro,
+                context=context,
+                profile=self.profile,
+                ws_manager=self.ws,
+                api_keys=self.api_keys,
+            )
+            self.character_capabilities = await caps_agent.run()
+            if self._master_orch:
+                self._master_orch.package.character_capabilities = self.character_capabilities
+                await self._master_orch._checkpoint()
+        
         caps_text = self.character_capabilities.raw_text
 
+        self._check_cancelled()
+
         # ── Step 3-4: NarrativeArcDesigner + ConflictIntensityDesigner (並列、自然言語) ──
-        await self._notify("Step 3-4: 物語アーク + 葛藤強度設計")
+        arc_text = None
+        conflict_text = None
+        
+        if store and store.narrative_arc and store.narrative_arc.description:
+            await self._notify("Step 3: 既存の物語アークを読み込み (Skip)")
+            narrative_arc = store.narrative_arc
+            arc_text = narrative_arc.description
+        else:
+            await self._notify("Step 3: 物語アークを設計")
+            arc_res = await call_llm(
+                tier=self.profile.director_tier, system_prompt=NARRATIVE_ARC_PROMPT,
+                user_message=f"{context}\n\n世界: {world_text}\n\n人物: {chars_text}\n\nアーク設計してください。",
+                cache_system=True,
+                api_keys=self.api_keys,
+            )
+            arc_text = arc_res["content"] if isinstance(arc_res["content"], str) else json.dumps(arc_res["content"], ensure_ascii=False)
+            narrative_arc = NarrativeArc(description=arc_text)
+            if self._master_orch:
+                self._master_orch.package.weekly_events_store.narrative_arc = narrative_arc
+                await self._master_orch._checkpoint()
 
-        arc_task = call_llm(
-            tier=self.profile.director_tier, system_prompt=NARRATIVE_ARC_PROMPT,
-            user_message=f"{context}\n\n世界: {world_text}\n\n人物: {chars_text}\n\nアーク設計してください。",
-            cache_system=True,
-            api_keys=self.api_keys,
-        )
-        conflict_task = call_llm(
-            tier=self.profile.worker_tier, system_prompt=CONFLICT_INTENSITY_PROMPT,
-            user_message=f"葛藤強度アークを設定してください。",
-            api_keys=self.api_keys,
-        )
+        self._check_cancelled()
 
-        arc_result, conflict_result = await asyncio.gather(arc_task, conflict_task)
-        arc_text = arc_result["content"] if isinstance(arc_result["content"], str) else json.dumps(arc_result["content"], ensure_ascii=False)
-        conflict_text = conflict_result["content"] if isinstance(conflict_result["content"], str) else json.dumps(conflict_result["content"], ensure_ascii=False)
+        if store and store.conflict_intensity_arc and len(store.conflict_intensity_arc.daily_intensities) > 0:
+            await self._notify("Step 4: 既存の葛藤強度アークを読み込み (Skip)")
+            conflict_intensity = store.conflict_intensity_arc
+            conflict_text = "読み込み済みデータがあります。"
+        else:
+            await self._notify("Step 4: 葛藤強度アークを設計")
+            conflict_res = await call_llm(
+                tier=self.profile.worker_tier, system_prompt=CONFLICT_INTENSITY_PROMPT,
+                user_message=f"葛藤強度アークを設定してください。",
+                api_keys=self.api_keys,
+            )
+            conflict_text = conflict_res["content"] if isinstance(conflict_res["content"], str) else json.dumps(conflict_res["content"], ensure_ascii=False)
+            conflict_intensity = ConflictIntensityArc() # 現状は空だが構造維持
+            if self._master_orch:
+                self._master_orch.package.weekly_events_store.conflict_intensity_arc = conflict_intensity
+                await self._master_orch._checkpoint()
 
-        narrative_arc = NarrativeArc(description=arc_text)
-        conflict_intensity = ConflictIntensityArc()
+        self._check_cancelled()
 
         # ── Step 5: WeeklyEventWriter（エージェンティックループ） ──
         await self._notify("Step 5: エージェンティック・イベント生成を開始...")

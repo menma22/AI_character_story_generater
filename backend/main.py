@@ -183,6 +183,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
 async def handle_ws_message(data: dict, websocket: WebSocket):
     """WebSocketメッセージの処理"""
+    global active_orchestrator
     action = data.get("action", "")
     logger.debug(f"[WS] Received action: {action} with data: {data}")
     
@@ -193,7 +194,9 @@ async def handle_ws_message(data: dict, websocket: WebSocket):
         evaluators_override = data.get("evaluators_override", {})
         api_keys = data.get("api_keys", {})
         composition_preferences = data.get("composition_preferences", None)
-        asyncio.create_task(run_character_generation(profile_name, theme, evaluators_override, api_keys, composition_preferences))
+        task = asyncio.create_task(run_character_generation(profile_name, theme, evaluators_override, api_keys, composition_preferences))
+        ws_active_tasks[id(websocket)] = task
+        task.add_done_callback(lambda t: ws_active_tasks.pop(id(websocket), None))
     
     elif action == "resume_generation":
         # チェックポイントから再開
@@ -201,7 +204,9 @@ async def handle_ws_message(data: dict, websocket: WebSocket):
         profile_name = data.get("profile", AppConfig.DEFAULT_PROFILE)
         evaluators_override = data.get("evaluators_override", {})
         api_keys = data.get("api_keys", {})
-        asyncio.create_task(resume_character_generation(character_name, profile_name, evaluators_override, api_keys))
+        task = asyncio.create_task(resume_character_generation(character_name, profile_name, evaluators_override, api_keys))
+        ws_active_tasks[id(websocket)] = task
+        task.add_done_callback(lambda t: ws_active_tasks.pop(id(websocket), None))
     
     elif action == "generate_diary":
         # 日記生成開始
@@ -223,6 +228,17 @@ async def handle_ws_message(data: dict, websocket: WebSocket):
             ws_active_tasks[task_id].cancel()
             ws_active_tasks.pop(task_id, None)
             
+    elif action == "cancel_character_generation":
+        # キャラクター生成の中断
+        task_id = id(websocket)
+        if active_orchestrator:
+            logger.info(f"Cancelling character generation per user request (Session: {getattr(active_orchestrator, 'session_id', 'unknown')})")
+            active_orchestrator.cancel()
+        
+        if task_id in ws_active_tasks:
+            ws_active_tasks[task_id].cancel()
+            ws_active_tasks.pop(task_id, None)
+
     elif action == "regenerate_artifact":
         package_name = data.get("package_name", "")
         artifact_name = data.get("artifact_name", "")
@@ -240,7 +256,6 @@ async def handle_ws_message(data: dict, websocket: WebSocket):
 
     elif action == "approve_concept":
         # Human in the Loop: コンセプト承認
-        global active_orchestrator
         if active_orchestrator:
             active_orchestrator.handle_review_response("approve")
         else:

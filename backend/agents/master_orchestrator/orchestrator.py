@@ -34,6 +34,12 @@ class MasterOrchestrator:
         self._review_action = None   # "approve" | "revise"
         self._review_feedback = None  # revise時のフィードバックテキスト
         self._review_edited_concept = None  # 直接編集されたconcept_package
+        self._cancelled = False  # 中断フラグ
+    
+    def cancel(self):
+        """生成プロセスを中断する"""
+        self._cancelled = True
+        logger.info(f"MasterOrchestrator cancellation requested for session {self.session_id}")
     
     async def _notify(self, content: str, status: str = "thinking"):
         if self.ws:
@@ -103,6 +109,10 @@ class MasterOrchestrator:
             
             for iteration in range(1, max_iter + 1):
                 try:
+                    if self._cancelled:
+                        await self._notify("中断リクエストを受信しました。プロセスを終了します。", "warning")
+                        raise asyncio.CancelledError("User requested cancellation")
+
                     if iteration > 1:
                         await self._notify(f"{phase_name}: 再生成ループ {iteration}/{max_iter} を開始", "warning")
                     
@@ -110,6 +120,11 @@ class MasterOrchestrator:
                     # orch_kwargs に api_keys を注入
                     full_kwargs = {**orch_kwargs, "api_keys": self.api_keys}
                     orch = orch_class(**full_kwargs)
+                    
+                    # キャンセルチェック用の参照を渡せれば渡す (Phase D等で利用)
+                    if hasattr(orch, "set_master_orch"):
+                        orch.set_master_orch(self)
+
                     result = await orch.run()
                     self._last_orch = orch  # Phase D capabilities 取得用フック
                     
@@ -131,6 +146,8 @@ class MasterOrchestrator:
                     else:
                         errors = [e.error for e in evals if not e.passed]
                         await self._notify(f"{phase_name} 評価Fail: {errors[0]}", "warning")
+                except asyncio.CancelledError:
+                    raise
                 except Exception as e:
                     logger.error(f"Error in {phase_name} (iter {iteration}): {e}", exc_info=True)
                     await self._notify(f"{phase_name} コード実行エラー: {str(e)}", "error")
@@ -139,8 +156,6 @@ class MasterOrchestrator:
                     
             await self._notify(f"{phase_name}: 評価上限到達。暫定ベスト結果を採用します", "warning")
             all_eval_results.extend(best_evals)
-            return best_result
-        
             return best_result
         
         # ─── 構成プリファレンスを保存 ─────────────────────────
@@ -218,7 +233,7 @@ class MasterOrchestrator:
             await self._notify("コンセプトレビュー承認。下流Phaseに進みます。", "complete")
         
         # ─── Phase A-1: マクロプロフィール + 言語的表現方法 生成 ────────────────
-        if not self.package.macro_profile:
+        if not self.package.macro_profile or not self.package.macro_profile.basic_info or not self.package.macro_profile.basic_info.name:
             await self._progress("phase_a1", 0.0, "Phase A-1: マクロプロフィール + 言語的表現方法 生成開始")
             try:
                 from backend.agents.phase_a1.orchestrator import PhaseA1Orchestrator
@@ -244,7 +259,7 @@ class MasterOrchestrator:
             await self._progress("phase_a1", 1.0)
         
         # ─── Phase A-2: ミクロパラメータ生成 ──────────────────
-        if not self.package.micro_parameters:
+        if not self.package.micro_parameters or not self.package.micro_parameters.temperament:
             await self._progress("phase_a2", 0.0, "Phase A-2: ミクロパラメータ生成開始")
             try:
                 from backend.agents.phase_a2.orchestrator import PhaseA2Orchestrator
@@ -268,7 +283,7 @@ class MasterOrchestrator:
             await self._progress("phase_a2", 1.0)
         
         # ─── Phase A-3: 自伝的エピソード生成 ──────────────────
-        if not self.package.autobiographical_episodes:
+        if not self.package.autobiographical_episodes or not self.package.autobiographical_episodes.episodes:
             await self._progress("phase_a3", 0.0, "Phase A-3: 自伝的エピソード生成開始")
             try:
                 from backend.agents.phase_a3.orchestrator import PhaseA3Orchestrator
@@ -292,7 +307,7 @@ class MasterOrchestrator:
             await self._progress("phase_a3", 1.0)
         
         # ─── Phase D: イベント列生成 ──────────────────────────
-        if not self.package.weekly_events_store:
+        if not self.package.weekly_events_store or not self.package.weekly_events_store.events:
             await self._progress("phase_d", 0.0, "Phase D: 7日分イベント列生成開始")
             try:
                 from backend.agents.phase_d.orchestrator import PhaseDOrchestrator

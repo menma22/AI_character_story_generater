@@ -688,11 +688,20 @@ async def call_llm_agentic_gemini(
                 timeout=300.0
             )
         except Exception as e:
-            if "MALFORMED_FUNCTION_CALL" in str(e) or "finish_reason" in str(e):
-                fallback_text = "前回の指示でツール呼び出し形式エラーが発生しました。正しいJSON形式で再度ツールを呼び出してください。"
-                try: chat.history.pop()
+            if "MALFORMED_FUNCTION_CALL" in str(e) or "finish_reason" in str(e) or "400" in str(e):
+                logger.warning(f"[call_llm_agentic_gemini] API error caught: {e}. Attempting recovery...")
+                # 壊れた直前の回答パーツを履歴から削除を試みる
+                try:
+                    if len(chat.history) > 0:
+                        chat.history.pop()
                 except: pass
-                response = await asyncio.to_thread(chat.send_message, fallback_text)
+                
+                fallback_text = "前回のツール呼び出しで形式エラーが発生しました。引数は定義されたJSONスキーマに厳密に従い、正しい形式で再度ツールを呼び出してください。"
+                try:
+                    response = await asyncio.to_thread(chat.send_message, fallback_text)
+                except Exception as retry_e:
+                    logger.error(f"[call_llm_agentic_gemini] Recovery failed: {retry_e}")
+                    raise retry_e
             else:
                 raise e
         
