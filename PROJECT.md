@@ -13,14 +13,14 @@
 ```
 AI_character_story_generater/
 ├── backend/
-│   ├── main.py                                # FastAPI エントリポイント (WebSocket + REST API) ※2026-04-18 14:31 再起動完了 (PID 105476)
+│   ├── main.py                                # FastAPI エントリポイント (WebSocket + REST API) ※2026-04-19 00:55 再起動完了
 │   ├── regeneration.py                        # アーティファクト個別再生成モジュール (依存マップ + 再生成コア)
 │   ├── config.py                              # 設定管理 (APIキー, 4段階プロファイル, モデル定義)
 │   ├── agents/
 │   │   ├── creative_director/
 │   │   │   └── director.py                    # Tier -1: Creative Director (5フェーズ, 2層自己批判, Web検索必須, file_read, 構成プリファレンス注入+[G]整合性チェック)
 │   │   ├── master_orchestrator/
-│   │   │   └── orchestrator.py                # Tier 0: Phase A-1→A-2→A-3→D 順次制御 + Evaluator統合 + concept_review一時停止
+│   │   │   └── orchestrator.py                # Tier 0: Phase A-1→A-2→A-3→D 順次制御 + Evaluator統合 + concept_review一時停止 + cancel()中断機能
 │   │   ├── phase_a1/
 │   │   │   └── orchestrator.py                # Phase A-1: マクロプロフィール (8 Workers, 並列化)
 │   │   ├── phase_a2/
@@ -168,7 +168,7 @@ graph TB
 
 **4層エージェント階層（Day 0）:**
 1. **Tier -1 Creative Director** (Opus): Tool-Callingによる自律推敲ループ。search_web + file_read + request_critique + submit_final_concept の4ツール。Self-Critiqueチェックリスト [A]-[G] の7カテゴリ（[G]=ユーザー構成方針との整合性）。ユーザー指定の `StoryCompositionPreferences` をMarkdown形式でプロンプトに注入。
-2. **Tier 0 Master Orchestrator** (Opus): Phase A-1→A-2→A-3→D順次制御。各Phase完了後にEvaluator-Optimizerループで即時評価・再生成。**Creative Director完了後にconcept_review一時停止**（asyncio.Event）でユーザーレビューを待機。approve/revise/edit の3アクション対応。
+2. **Tier 0 Master Orchestrator** (Opus): Phase A-1→A-2→A-3→D順次制御。各Phase完了後にEvaluator-Optimizerループで即時評価・再生成。**Creative Director完了後にconcept_review一時停止**（asyncio.Event）でユーザーレビューを待機。approve/revise/edit の3アクション対応。**`cancel()`メソッドによる中断機能**（WebSocket `cancel_character_generation` アクション対応）。Phase Dには`set_master_orch()`で参照を渡し、キャンセル伝播。
 3. **Phase Orchestrators**: 各Phase内のWorker群を管理。A-1=8 Workers+LinguisticExpressionWorker（9Worker合計、PhaseA1Result返却）、A-2=15 Workers（v2 §6.4.2準拠）、A-3=Planner(自然言語)+Writer(JSON一括)、D=4 Workers(自然言語)+EventWriter(JSON)。
 4. **Workers**: プロファイル別モデル（high_quality=sonnet, draft=gemini）。最低ティア=Gemini 2.5 Pro。
 
@@ -868,6 +868,7 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 | Stage 35: 翌日予定追加エージェント NameError/AttributeError修正 | ✅ 修正完了 | `next_day_planning.py`の`stage1_protagonist_plan()`が毎回クラッシュしていた致命バグを修正。①`wrap_context`未インポート（`context_descriptions.py`から追加）、②`self._build_memory_context()`がNextDayPlanningAgentクラスに存在しない（`memory_context`パラメータとしてオーケストレーターから注入する方式に変更）。この修正により`protagonist_plan`イベントが初めてweekly_events_storeに挿入されるようになり、v10 §4.9.4の機能が稼働開始 |
 | Stage 36: README.md仕様書レベル技術ドキュメント化 | ✅ 完了 | 簡易READMEからspecification_v10.md・v2・PROJECT.mdの内容を統合した濃密な技術ドキュメントに全面刷新。設計思想6原則、4層エージェント階層詳細図解、52パラメータ全構造、隠蔽原則、Redemption Bias対策、Daily Loop認知シミュレーション全フロー、3層記憶システム、LLMティアシステム、検証・評価7種、データモデル・ストレージ構造、API/WebSocket仕様、先行研究14理論対応表を網羅（149行→約450行） |
 | Stage 37: Human in the Loop（物語構成プリファレンス + コンセプトレビュー） | ✅ 実装完了 | `StoryCompositionPreferences`（8カテゴリ78+選択肢、文献ベース11理論家）、Creative Director構成方針注入+Self-Critique[G]追加、`asyncio.Event`によるconcept_review一時停止、approve/revise/edit 3アクション、アコーディオン型カード選択UI、コンセプトレビュー画面。変更ファイル: character.py, main.py, orchestrator.py, director.py, index.html, app.js, style.css |
+| Stage 38: Phase Dエラー修正・タスク管理改善・中断機能 | ✅ 実装完了 | `MALFORMED_FUNCTION_CALL`エラーの回復処理強化（llm_api.py: 壊れた履歴削除+具体的リカバリメッセージ+400エラー対応）。MasterOrchestrator: `cancel()`メソッド+`_cancelled`フラグ+`set_master_orch()`による下位オーケストレータへのキャンセル伝播。PhaseDOrchestrator: 各ステップ(WorldContext/SupportingCharacters/Capabilities/NarrativeArc/ConflictIntensity)に既存データチェック+スキップ機能追加、生成直後にチェックポイント保存、`_check_cancelled()`による中断ポイント6箇所実装。main.py: `cancel_character_generation` WebSocketアクション追加、タスクをws_active_tasksで管理。フェーズスキップ判定をデータ内容の充実度で判定するように強化（empty objectでは通過しない）。変更ファイル: llm_api.py, master_orchestrator/orchestrator.py, phase_d/orchestrator.py, main.py |
 
 ### 次のアクション
 
