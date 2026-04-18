@@ -850,6 +850,18 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
   - **課題**: 當初のStep 5は7日分（14-28件）を1回のAgentic Loopで一括生成しようとしていたため、巨大なJSON出力に耐えきれずLLM側で `MALFORMED_FUNCTION_CALL` を頻発させていた。
   - **解決策**: `for day in range(1, 8)` のループで1日ずつイベント（2-4件ずつ）を順次生成する方式に抜本的に変更。前日までの生成分を `【これまでのイベント】` としてコンテキストに累積して渡す。これにより①出力パース落ちの根本原因を解消し、②各日完了ごとにチェックポイントを保存可能にし、③前日のイベント結果を踏まえた論理的な連続性が向上した。
 
+### Stage 40: 中断再開(レジューム)時の状態復元とファストフォワードの確実化
+
+**(a) 当初設計**: WebSocket上の `resume_generation` アクション実行時、`main.py`の`resume_character_generation` 関数では `MasterOrchestrator` のインスタンスを初期化するのみで、グローバル変数 `active_orchestrator` への代入を行っていなかった。また、`MasterOrchestrator` のパイプライン設計上、「Creative Director 完了後には必ずコンセプトの承認（Human in the Loop）を一旦待機する」という同期処理（`asyncio.Event`）が組み込まれていた。
+
+**(b) 変更・根拠**: この設計により2つの重大なバグが発生していた。
+1. **セッション変数の欠損**: グローバル変数にセットされていないため、フロントエンドで「コンセプト承認 (approve_concept)」アクションを発火しても「アクティブな生成セッションがありません」というエラーが発生して通信が破棄されていた。
+2. **冗長な待機と進行ブロック**: 既に下流の「Phase A-1（マクロプロフィール）〜 Phase D」が生成されているチェックポイントから再開した場合でも、強引に「コンセプトレビューを待機」状態で一時停止してしまい、「全て生成済みの場合は即座にダッシュボードへ遷移する」というユーザーの期待するファストフォワードの挙動を破壊していた。
+
+**(c) 採用プラクティス**:
+- **グローバルセッションへのインスタンス再代入**: `resume_character_generation` 実行時に `global active_orchestrator` としてインスタンスを確実にセットし、`finally` ブロックで安全に `None` 化するライフサイクル管理を徹底。
+- **下流依存データに基づくステート判定 (`has_downstream`)**: `MasterOrchestrator` にてコンセプトのユーザーレビュー待機処理に入る前に、「すでに下流の生成データ（Phase A-1の `basic_info.name`）が存在しているか」という `has_downstream` 判定を実行。存在する場合は「過去の実行セッションにおいて既に承認済みである」と見なし、レビュー待機をスキップ（ファストフォワード）して後続の検証・完了フェーズへ自動進行させるようにアーキテクチャを修正。
+
 ---
 
 ## パート3: プロジェクト管理
@@ -897,6 +909,7 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 | Stage 37: Human in the Loop（物語構成プリファレンス + コンセプトレビュー） | ✅ 実装完了 | `StoryCompositionPreferences`（8カテゴリ78+選択肢、文献ベース11理論家）、Creative Director構成方針注入+Self-Critique[G]追加、`asyncio.Event`によるconcept_review一時停止、approve/revise/edit 3アクション、アコーディオン型カード選択UI、コンセプトレビュー画面。変更ファイル: character.py, main.py, orchestrator.py, director.py, index.html, app.js, style.css |
 | Stage 38: Phase Dエラー修正・タスク管理改善・中断機能 | ✅ 実装完了 | `MALFORMED_FUNCTION_CALL`エラーの回復処理強化（llm_api.py: 壊れた履歴削除+具体的リカバリメッセージ+400エラー対応）。MasterOrchestrator: `cancel()`メソッド+`_cancelled`フラグ+`set_master_orch()`による下位オーケストレータへのキャンセル伝播。PhaseDOrchestrator: 各ステップ(WorldContext/SupportingCharacters/Capabilities/NarrativeArc/ConflictIntensity)に既存データチェック+スキップ機能追加、生成直後にチェックポイント保存、`_check_cancelled()`による中断ポイント6箇所実装。main.py: `cancel_character_generation` WebSocketアクション追加、タスクをws_active_tasksで管理。フェーズスキップ判定をデータ内容の充実度で判定するように強化（empty objectでは通過しない）。変更ファイル: llm_api.py, master_orchestrator/orchestrator.py, phase_d/orchestrator.py, main.py |
 | Stage 39: repomix MCP サーバー登録・コードベース把握手順の標準化 | ✅ 完了 | Claude Code に repomix MCP サーバー（`cmd /c npx -y repomix --mcp`）をプロジェクトスコープで登録。Windows で `npx` が直接起動できないため `cmd /c` 経由のラッパーを採用。MCP ヘルスチェック「✓ Connected」確認済。プロジェクト `CLAUDE.md` に「使用可能な MCP サーバー」セクションを追加し、**コードの全体像を把握する必要がある場合は repomix MCP（`pack_codebase` / `pack_remote_repository`）を必ず優先使用する**運用ルールを明文化。個別 Glob/Grep/Read の多数回呼び出しより先に pack → `grep_repomix_output` による必要箇所抽出を行う手順を標準化。変更ファイル: `CLAUDE.md`, `C:\Users\mahim\.claude.json`（MCP 登録） |
+| Stage 40: 中断再開フェーズの高速化とセッション変数の安定化 | ✅ 修正完了 | `resume_character_generation`実行時に`active_orchestrator`グローバル変数が設定されておらず、フロントエンドのレビューアクションが「アクティブな生成セッションがありません」で失敗するバグを修正。同時に、下流のPhase A-1が存在する場合（`has_downstream`）は過去にコンセプトレビューが承認済みであると判定し、再開時の不要な待機をスキップするロジックを導入。これにより全チェックポイントからの途切れのない再開・ファストフォワードを実現。変更ファイル: main.py, orchestrator.py |
 
 ### 次のアクション
 
