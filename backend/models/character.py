@@ -366,6 +366,33 @@ class WeeklyEventsStore(BaseModel):
 
 
 # ═══════════════════════════════════════════════════════════════
+# 生成ステータス管理（管理ボックス）
+# ═══════════════════════════════════════════════════════════════
+
+class GenerationStatus(BaseModel):
+    """
+    キャラクター生成プロセスの進捗を厳密に管理するモデル。
+    各フラグが True の場合、そのステップは完了しており再生成をスキップできる。
+    """
+    # Phase A 系
+    phase_a1_complete: bool = Field(False, description="マクロプロフィール + 言語表現の生成完了")
+    phase_a2_complete: bool = Field(False, description="ミクロパラメータの生成完了")
+    phase_a3_complete: bool = Field(False, description="自伝的エピソードの生成完了")
+    
+    # Phase D 系 (詳細ステップ管理)
+    phase_d_world_complete: bool = Field(False, description="世界設定の生成完了")
+    phase_d_chars_complete: bool = Field(False, description="周囲の人物設計の生成完了")
+    phase_d_caps_complete: bool = Field(False, description="所持品・能力・可能行動の生成完了")
+    phase_d_arc_complete: bool = Field(False, description="物語アーク設計の生成完了")
+    phase_d_intensity_complete: bool = Field(False, description="葛藤強度アークの生成完了")
+    phase_d_events_complete: bool = Field(False, description="7日分イベント列の全生成完了")
+    phase_d_current_day: int = Field(0, description="生成済みの最終日 (1-7)")
+
+    # 全体ステータス
+    phase_d_complete: bool = Field(False, description="Phase D 全体の完了")
+
+
+# ═══════════════════════════════════════════════════════════════
 # 脚本パッケージ統合
 # ═══════════════════════════════════════════════════════════════
 
@@ -398,6 +425,7 @@ class PackageMetadata(BaseModel):
 class CharacterPackage(BaseModel):
     """脚本パッケージ全体（v2 §9.1準拠）"""
     metadata: PackageMetadata = Field(default_factory=PackageMetadata)
+    status: GenerationStatus = Field(default_factory=GenerationStatus, description="生成プロセスの進捗状態（管理ボックス）")
     concept_package: Optional[ConceptPackage] = None
     macro_profile: Optional[MacroProfile] = None
     linguistic_expression: Optional[LinguisticExpression] = None

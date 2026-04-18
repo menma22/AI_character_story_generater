@@ -6,7 +6,7 @@
 
 ## パート1: アプリシステム概要
 
-![システムアーキテクチャ図 - APIキー動的伝播と多層エージェント構造](file:///C:/Users/mahim/.gemini/antigravity/brain/dc6680ae-7ab0-4006-b618-70009f5296fb/system_architecture_diagram_v25_api_key_system_1775981239290.png)
+![システムアーキテクチャ図 - 生成進捗管理（管理ボックス）と多層エージェント構造](file:///C:/Users/mahim/.gemini/antigravity/brain/a14e044c-e41f-414d-9b9d-473be3b8c3ea/system_architecture_diagram_v42_management_box_v3_1776506073820.png)
 
 ### ディレクトリ・ファイル構成
 
@@ -270,6 +270,8 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 | モデル | 用途 | Phase | 拡張フィールド |
 |---|---|---|---|
 | `ConceptPackage` | キャラクター概念設計 | Tier -1 | psychological_hints(want_and_need, ghost_wound, lie) |
+| `GenerationStatus` | 生成プロセスの進捗管理（管理ボックス） | 全体 | 各フェーズ・ステップの完了フラグ、Phase Dの日次進捗 |
+| `CharacterPackage` | 脚本パッケージ全体 | 全体 | `status: GenerationStatus` を内包 |
 | `MacroProfile` | マクロプロフィール（9セクション） | A-1 | VoiceFingerprint拡張(二人称, 絵文字, 自問頻度, 比喩頻度)。voice_fingerprintは後方互換のため残存 |
 | `LinguisticExpression` | 言語的表現方法（独立生成アイテム） | A-1 | SpeechCharacteristics(concrete_features+abstract_feel+conversation_style+emotional_expression_tendency) + DiaryWritingAtmosphere(tone+structure+introspection+written/omitted+atmosphere)。日記生成プロンプトにのみ注入 |
 | `MicroParameters` | 52パラメータ + 規範層 | A-2 | 15 Worker対応サブモデル(SchwartzValuesOutput等) |
@@ -289,6 +291,7 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 #### UI/UX
 
 - **フェーズ構成の区分化**: Day 0 ダッシュボード（キャラクター設定結果確認画面）と Day 1-7（日記生成）のシミュレーションループを明確にUI分割。
+- **生成進捗管理（管理ボックス）**: `GenerationStatus` モデルによる厳密な状態管理。各フェーズ（A1-3, D）および Phase D 内部の各ステップの完了をフラグで管理し、重複生成を構造的に防止。
 - **4画面構成**: 起動 → 生成中（思考とフェーズトラッカー） → Day 0結果（6タブ・ダッシュボード） → 履歴
 - **生成進行UI（Phase Tracker）**: 生成中画面にて、現在のパイプライン実行状態（Creative Director → A-1 → A-2 → A-3 → D）をステップ形式で可視化。
 - **インライン日記生成とキャンセル機能**: 「日記」ダッシュボード内で、他画面に遷移せずインラインで思考ログと生成中の日記をリアルタイム表示。
@@ -822,7 +825,24 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 - **3アクション**: `approve_concept`（続行）、`revise_concept`（フィードバック付き再生成）、`edit_concept_direct`（編集済みJSON適用）
 - **フロントエンドUI**: アコーディオン形式のカード選択UI（各カードに名前+説明+出典理論家）、コンセプトレビュー画面（既存`Renderer.renderConcept()`再利用）、サマリーバー表示
 
-### 25. Phase Dエラー修正・タスク管理改善・中断機能
+### 26. 生成進捗管理（管理ボックス）による再生成防止
+
+**Subject / Feature**: キャラクター生成の中断再開における堅牢性とデータ保護
+
+**(a) Original Design**: 各フェーズの実行前に「特定のフィールド（例: `macro_profile`）が空かどうか」を判定してスキップを決定していた。Phase D などの多段階ステップでも同様に、一部データの有無だけでフェーズ全体の実行を判断していた。
+
+**(b) The Change & Rationale**: 
+- **再生成の発生**: フィールドの有無による判定は、一部が生成された状態で中断した場合や、推論結果が空に近い場合に「未生成」と誤認され、既に存在するデータを上書きしたり、高コストな生成を冗長に繰り返したりするリスクがあった。
+- **ログの二重化**: 再実行により「思考（Thinking）」ログが再度出力され、ユーザーに「また最初からやり直している」という不安を与える。
+- **管理の不透明性**: どのステップが確実に完了しているかを明示的に示す「管理ボックス」が不在だった。
+
+**(c) Adopted Best Practice**:
+- **`GenerationStatus` モデルの導入**: 各フェーズおよび Phase D 内部の各ステップ（世界, 人物, 所持品, アーク, 強度）に個別の完了フラグ（boolean）を付与。これを「管理ボックス」として `CharacterPackage` に統合。
+- **ステータス自動復旧（Self-Healing）**: 既存のチェックポイントをロードした際、フラグが欠落していてもデータの存在を検知してフラグを自動更新するロジックを実装。既存キャラクターのデータの不整合を自動で修復する。
+- **チェックポイントの網羅性**: 各ステップ完了ごとに `GenerationStatus` を更新し、即座に保存を行うことで、中断後の再開地点を確実に保護。
+- **ログの整理**: スキップ時には「既存データの完備 (Skip)」と1行だけ通知し、冗長な思考ログを出力しない。
+
+### 27. Phase Dエラー修正・タスク管理改善・中断機能
 
 **(a) 当初設計**: Phase Dの`call_llm_agentic_gemini`でGeminiが`MALFORMED_FUNCTION_CALL`を返した場合、2つのパターンが存在した: (1) 例外として `send_message` から投げられるケース、(2) レスポンスの `finish_reason` フィールドに設定されるケース。後者は `except` ブロックに入らず `ValueError("Geminiから有効な回答を得られませんでした。")` として上位に伝播し、結果として MasterOrchestrator の `_execute_phase_with_retry` がPhase D全体を最初から再実行していた。これにより既に生成済みの世界設定・周囲人物・所持品・能力がすべて再生成されていた。また、生成を中断する手段がなく、長時間の生成中にユーザーが待つしかなかった。
 

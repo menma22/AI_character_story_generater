@@ -226,10 +226,11 @@ class PhaseDOrchestrator:
         supporting_chars = []
         
         # 既存チェック
-        store = getattr(self._master_orch.package, "weekly_events_store", None) if self._master_orch else None
-        if store and store.world_context and store.world_context.description:
+        status = self._master_orch.package.status if self._master_orch else None
+        
+        if status and status.phase_d_world_complete:
             await self._notify("Step 1: 既存の世界設定を読み込み (Skip)")
-            world_context = store.world_context
+            world_context = self._master_orch.package.weekly_events_store.world_context
             world_text = world_context.description
         else:
             await self._notify("Step 1: 世界設定を生成")
@@ -245,14 +246,15 @@ class PhaseDOrchestrator:
                     self._master_orch.package.weekly_events_store = WeeklyEventsStore(world_context=world_context, supporting_characters=[], narrative_arc=NarrativeArc(description=""), conflict_intensity_arc=ConflictIntensityArc(), events=[])
                 else:
                     self._master_orch.package.weekly_events_store.world_context = world_context
+                self._master_orch.package.status.phase_d_world_complete = True
                 await self._master_orch._checkpoint()
 
         self._check_cancelled()
 
-        if store and store.supporting_characters and len(store.supporting_characters) > 0:
+        if status and status.phase_d_chars_complete:
             await self._notify("Step 2: 既存の周囲人物を読み込み (Skip)")
-            supporting_chars = store.supporting_characters
-            chars_text = "読み込み済み人物データがあります。" # 文字列化は後続のプロンプトで必要なら行う
+            supporting_chars = self._master_orch.package.weekly_events_store.supporting_characters
+            chars_text = "読み込み済み人物データがあります。" 
         else:
             await self._notify("Step 2: 周囲人物を設計")
             chars_res = await call_llm(
@@ -292,6 +294,7 @@ class PhaseDOrchestrator:
                         self._master_orch.package.weekly_events_store = WeeklyEventsStore(world_context=world_context, supporting_characters=supporting_chars, narrative_arc=NarrativeArc(description=""), conflict_intensity_arc=ConflictIntensityArc(), events=[])
                     else:
                         self._master_orch.package.weekly_events_store.supporting_characters = supporting_chars
+                    self._master_orch.package.status.phase_d_chars_complete = True
                     await self._master_orch._checkpoint()
             except Exception as e:
                 logger.warning(f"[Phase D] SupportingCharacter パース失敗: {e}")
@@ -303,10 +306,9 @@ class PhaseDOrchestrator:
             await self.ws.send_agent_thought("[Phase D] SupportingCharacters", "周囲人物設計完了", "complete")
 
         # ── Step 2.5: CharacterCapabilitiesAgent（エージェンティックループ） ──
-        existing_caps = getattr(self._master_orch.package, "character_capabilities", None) if self._master_orch else None
-        if existing_caps and (existing_caps.possessions or existing_caps.abilities):
+        if status and status.phase_d_caps_complete:
             await self._notify("Step 2.5: 既存の所持品・能力を読み込み (Skip)")
-            self.character_capabilities = existing_caps
+            self.character_capabilities = self._master_orch.package.character_capabilities
         else:
             await self._notify("Step 2.5: CharacterCapabilitiesAgent 起動（所持品・能力・行動をエージェントで設計）...")
             from backend.agents.phase_d.capabilities_agent import CharacterCapabilitiesAgent
@@ -321,6 +323,7 @@ class PhaseDOrchestrator:
             self.character_capabilities = await caps_agent.run()
             if self._master_orch:
                 self._master_orch.package.character_capabilities = self.character_capabilities
+                self._master_orch.package.status.phase_d_caps_complete = True
                 await self._master_orch._checkpoint()
         
         caps_text = self.character_capabilities.raw_text
@@ -331,9 +334,9 @@ class PhaseDOrchestrator:
         arc_text = None
         conflict_text = None
         
-        if store and store.narrative_arc and store.narrative_arc.description:
+        if status and status.phase_d_arc_complete:
             await self._notify("Step 3: 既存の物語アークを読み込み (Skip)")
-            narrative_arc = store.narrative_arc
+            narrative_arc = self._master_orch.package.weekly_events_store.narrative_arc
             arc_text = narrative_arc.description
         else:
             await self._notify("Step 3: 物語アークを設計")
@@ -347,13 +350,14 @@ class PhaseDOrchestrator:
             narrative_arc = NarrativeArc(description=arc_text)
             if self._master_orch:
                 self._master_orch.package.weekly_events_store.narrative_arc = narrative_arc
+                self._master_orch.package.status.phase_d_arc_complete = True
                 await self._master_orch._checkpoint()
 
         self._check_cancelled()
 
-        if store and store.conflict_intensity_arc and store.conflict_intensity_arc.raw_text:
+        if status and status.phase_d_intensity_complete:
             await self._notify("Step 4: 既存の葛藤強度アークを読み込み (Skip)")
-            conflict_intensity = store.conflict_intensity_arc
+            conflict_intensity = self._master_orch.package.weekly_events_store.conflict_intensity_arc
             conflict_text = conflict_intensity.raw_text
         else:
             await self._notify("Step 4: 葛藤強度アークを設計")
@@ -366,6 +370,7 @@ class PhaseDOrchestrator:
             conflict_intensity = ConflictIntensityArc(raw_text=conflict_text) # テキストを維持して保存
             if self._master_orch:
                 self._master_orch.package.weekly_events_store.conflict_intensity_arc = conflict_intensity
+                self._master_orch.package.status.phase_d_intensity_complete = True
                 await self._master_orch._checkpoint()
 
         self._check_cancelled()
@@ -382,8 +387,8 @@ class PhaseDOrchestrator:
         await self._notify("Step 5: イベント順次生成を開始...")
 
         events = []
-        if store and store.events and len(store.events) > 0:
-            events = store.events
+        if self._master_orch and self._master_orch.package.weekly_events_store.events:
+            events = self._master_orch.package.weekly_events_store.events
             await self._notify(f"既存のイベントを {len(events)} 件読み込みました。")
 
         upstream_context = f"{context}\n\n世界: {world_text}\n\n人物: {chars_text}\n\nアーク: {arc_text}\n\n強度: {conflict_text}\n\n所持品・能力: {caps_text}"
@@ -466,6 +471,9 @@ class PhaseDOrchestrator:
             # 各日終了後にチェックポイント保存
             if self._master_orch:
                 self._master_orch.package.weekly_events_store.events = events
+                self._master_orch.package.status.phase_d_current_day = day
+                if day == 7:
+                    self._master_orch.package.status.phase_d_events_complete = True
                 await self._master_orch._checkpoint()
 
         self._check_cancelled()

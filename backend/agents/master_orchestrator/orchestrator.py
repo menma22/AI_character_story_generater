@@ -162,8 +162,47 @@ class MasterOrchestrator:
         if self.composition_preferences:
             self.package.composition_preferences = self.composition_preferences
 
+        # ─── ステータスの自動復旧（既存データがある場合） ─────────────────
+        status = self.package.status
+        if self.package.concept_package:
+            # concept_package はフラグがないが、existence で判定
+            pass
+
+        if self.package.macro_profile and self.package.macro_profile.basic_info and self.package.macro_profile.basic_info.name:
+            if not status.phase_a1_complete:
+                logger.info("既存データから phase_a1_complete を復旧しました")
+                status.phase_a1_complete = True
+
+        if self.package.micro_parameters and self.package.micro_parameters.temperament:
+            if not status.phase_a2_complete:
+                logger.info("既存データから phase_a2_complete を復旧しました")
+                status.phase_a2_complete = True
+
+        if self.package.autobiographical_episodes and self.package.autobiographical_episodes.episodes:
+            if not status.phase_a3_complete:
+                logger.info("既存データから phase_a3_complete を復旧しました")
+                status.phase_a3_complete = True
+
+        if self.package.weekly_events_store:
+            ws = self.package.weekly_events_store
+            if ws.world_context and ws.world_context.description:
+                status.phase_d_world_complete = True
+            if ws.supporting_characters and len(ws.supporting_characters) > 0:
+                status.phase_d_chars_complete = True
+            if ws.narrative_arc and ws.narrative_arc.description:
+                status.phase_d_arc_complete = True
+            if ws.conflict_intensity_arc and ws.conflict_intensity_arc.raw_text:
+                status.phase_d_intensity_complete = True
+            if ws.events and len(ws.events) > 0:
+                status.phase_d_current_day = max(e.day for e in ws.events)
+                if len(ws.events) >= 14: # 暫定基準
+                    status.phase_d_events_complete = True
+                    status.phase_d_complete = True
+        
+        if self.package.character_capabilities and (self.package.character_capabilities.possessions or self.package.character_capabilities.abilities):
+            status.phase_d_caps_complete = True
+
         # ─── Tier -1: Creative Director ───────────────────────
-        await self._checkpoint() # 直前に保存
         if not self.package.concept_package:
             await self._progress("creative_director", 0.0, "Creative Director起動中...")
             director = CreativeDirector(
@@ -238,7 +277,7 @@ class MasterOrchestrator:
             await self._notify("下流の生成データが存在するため、コンセプトレビューをスキップします。", "complete")
         
         # ─── Phase A-1: マクロプロフィール + 言語的表現方法 生成 ────────────────
-        if not self.package.macro_profile or not self.package.macro_profile.basic_info or not self.package.macro_profile.basic_info.name:
+        if not status.phase_a1_complete:
             await self._progress("phase_a1", 0.0, "Phase A-1: マクロプロフィール + 言語的表現方法 生成開始")
             try:
                 from backend.agents.phase_a1.orchestrator import PhaseA1Orchestrator
@@ -251,6 +290,7 @@ class MasterOrchestrator:
                 self.package.macro_profile = phase_a1_result.macro_profile
                 self.package.linguistic_expression = phase_a1_result.linguistic_expression
                 macro_profile = phase_a1_result.macro_profile
+                status.phase_a1_complete = True
                 await self._checkpoint()
                 await self._progress("phase_a1", 1.0, "Phase A-1完了")
                 await self._notify(f"macro_profile + linguistic_expression 確定: {macro_profile.basic_info.name}")
@@ -259,12 +299,12 @@ class MasterOrchestrator:
                 await self._notify(f"Phase A-1エラー: {str(e)}", "error")
                 raise
         else:
-            await self._notify("Phase A-1: 既存のマクロプロフィールを読み込み完了 (Skip)")
+            await self._notify("Phase A-1: 既存データを完備 (Skip)")
             macro_profile = self.package.macro_profile
             await self._progress("phase_a1", 1.0)
         
         # ─── Phase A-2: ミクロパラメータ生成 ──────────────────
-        if not self.package.micro_parameters or not self.package.micro_parameters.temperament:
+        if not status.phase_a2_complete:
             await self._progress("phase_a2", 0.0, "Phase A-2: ミクロパラメータ生成開始")
             try:
                 from backend.agents.phase_a2.orchestrator import PhaseA2Orchestrator
@@ -275,6 +315,7 @@ class MasterOrchestrator:
                     lambda res: evaluator.evaluate_phase_a2(res)
                 )
                 self.package.micro_parameters = micro_params
+                status.phase_a2_complete = True
                 await self._checkpoint()
                 await self._progress("phase_a2", 1.0, "Phase A-2完了")
                 await self._notify(f"micro_parameters確定: 気質{len(micro_params.temperament)}個 + 性格{len(micro_params.personality)}個")
@@ -283,12 +324,12 @@ class MasterOrchestrator:
                 await self._notify(f"Phase A-2エラー: {str(e)}", "error")
                 raise
         else:
-            await self._notify("Phase A-2: 既存のミクロパラメータを読み込み完了 (Skip)")
+            await self._notify("Phase A-2: 既存データを完備 (Skip)")
             micro_params = self.package.micro_parameters
             await self._progress("phase_a2", 1.0)
         
         # ─── Phase A-3: 自伝的エピソード生成 ──────────────────
-        if not self.package.autobiographical_episodes or not self.package.autobiographical_episodes.episodes:
+        if not status.phase_a3_complete:
             await self._progress("phase_a3", 0.0, "Phase A-3: 自伝的エピソード生成開始")
             try:
                 from backend.agents.phase_a3.orchestrator import PhaseA3Orchestrator
@@ -299,6 +340,7 @@ class MasterOrchestrator:
                     lambda res: evaluator.evaluate_phase_a3(res, concept, macro_profile)
                 )
                 self.package.autobiographical_episodes = episodes
+                status.phase_a3_complete = True
                 await self._checkpoint()
                 await self._progress("phase_a3", 1.0, "Phase A-3完了")
                 await self._notify(f"autobiographical_episodes確定: {len(episodes.episodes)}個のエピソード")
@@ -307,12 +349,12 @@ class MasterOrchestrator:
                 await self._notify(f"Phase A-3エラー: {str(e)}", "error")
                 raise
         else:
-            await self._notify("Phase A-3: 既存の自伝的エピソードを読み込み完了 (Skip)")
+            await self._notify("Phase A-3: 既存データを完備 (Skip)")
             episodes = self.package.autobiographical_episodes
             await self._progress("phase_a3", 1.0)
         
         # ─── Phase D: イベント列生成 ──────────────────────────
-        if not self.package.weekly_events_store or not self.package.weekly_events_store.events:
+        if not status.phase_d_complete:
             await self._progress("phase_d", 0.0, "Phase D: 7日分イベント列生成開始")
             try:
                 from backend.agents.phase_d.orchestrator import PhaseDOrchestrator
@@ -323,9 +365,11 @@ class MasterOrchestrator:
                     lambda res: evaluator.evaluate_phase_d(res, episodes)
                 )
                 self.package.weekly_events_store = events_store
-                # Phase D Orchestrator インスタンスから capabilities を取得して保存
+                # Phase D Orchestrator インスタンスから capabilities を取得して保存 (内部で status.phase_d_caps_complete 等が更新されている前提)
                 if self._last_orch is not None and hasattr(self._last_orch, "character_capabilities"):
                     self.package.character_capabilities = self._last_orch.character_capabilities
+                
+                status.phase_d_complete = True
                 await self._checkpoint()
                 await self._progress("phase_d", 1.0, "Phase D完了")
                 caps_count = len(self.package.character_capabilities.possessions) if self.package.character_capabilities else 0
@@ -335,11 +379,9 @@ class MasterOrchestrator:
                 await self._notify(f"Phase Dエラー: {str(e)}", "error")
                 raise
         else:
-            await self._notify("Phase D: 既存のイベント列を読み込み完了 (Skip)")
+            await self._notify("Phase D: 既存データを完備 (Skip)")
             events_store = self.package.weekly_events_store
             await self._progress("phase_d", 1.0)
-            if not self.package.character_capabilities:
-                await self._notify("Phase D: character_capabilities が未生成です。必要であれば再生成してください。", "warning")
         
         # ─── Tier 3: 最終クロス構成チェック (Consistency / Interestingness) ──
         await self._notify("最終フェーズ横断Evaluatorを実行中...")
