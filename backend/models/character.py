@@ -354,6 +354,7 @@ class ConflictIntensityArc(BaseModel):
     day_5: str = "strong"
     day_6: str = "aftermath"
     day_7: str = "convergence"
+    raw_text: str = ""
 
 class WeeklyEventsStore(BaseModel):
     """週間イベントストア（Phase D出力）"""

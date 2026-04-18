@@ -351,10 +351,10 @@ class PhaseDOrchestrator:
 
         self._check_cancelled()
 
-        if store and store.conflict_intensity_arc and len(store.conflict_intensity_arc.daily_intensities) > 0:
+        if store and store.conflict_intensity_arc and store.conflict_intensity_arc.raw_text:
             await self._notify("Step 4: 既存の葛藤強度アークを読み込み (Skip)")
             conflict_intensity = store.conflict_intensity_arc
-            conflict_text = "読み込み済みデータがあります。"
+            conflict_text = conflict_intensity.raw_text
         else:
             await self._notify("Step 4: 葛藤強度アークを設計")
             conflict_res = await call_llm(
@@ -363,7 +363,7 @@ class PhaseDOrchestrator:
                 api_keys=self.api_keys,
             )
             conflict_text = conflict_res["content"] if isinstance(conflict_res["content"], str) else json.dumps(conflict_res["content"], ensure_ascii=False)
-            conflict_intensity = ConflictIntensityArc() # 現状は空だが構造維持
+            conflict_intensity = ConflictIntensityArc(raw_text=conflict_text) # テキストを維持して保存
             if self._master_orch:
                 self._master_orch.package.weekly_events_store.conflict_intensity_arc = conflict_intensity
                 await self._master_orch._checkpoint()
