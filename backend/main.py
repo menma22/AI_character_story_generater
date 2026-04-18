@@ -320,35 +320,35 @@ async def handle_ws_message(data: dict, websocket: WebSocket):
 
 async def run_character_generation(profile_name: str, theme: str = None, evaluators_override: dict = None, api_keys: dict = None, composition_preferences: dict = None):
     """キャラクター生成パイプライン全体を実行"""
-    from backend.agents.master_orchestrator.orchestrator import MasterOrchestrator
-    from backend.models.character import StoryCompositionPreferences
-    import dataclasses
-
-    base_profile = PROFILES.get(profile_name, PROFILES["draft"])
-    target_profile = base_profile
-    if evaluators_override:
-        target_profile = dataclasses.replace(base_profile, **{
-            k: v for k, v in evaluators_override.items()
-            if hasattr(base_profile, k)
-        })
-
-    # 構成プリファレンスをPydanticモデルに変換
-    prefs = None
-    if composition_preferences:
-        try:
-            prefs = StoryCompositionPreferences(**composition_preferences)
-        except Exception as e:
-            logger.warning(f"Invalid composition_preferences: {e}")
-
-    from datetime import datetime
-    session_id = f"SID_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-
-    await manager.send_progress("init", 0.0, "キャラクター生成を開始します...")
-    # クライアントにセッションIDを通知（中断時の再開キーとして使用）
-    await manager.send_agent_thought("System", f"Session ID: {session_id}", "info")
-
-    global active_orchestrator
     try:
+        from backend.agents.master_orchestrator.orchestrator import MasterOrchestrator
+        from backend.models.character import StoryCompositionPreferences
+        import dataclasses
+        from datetime import datetime
+
+        base_profile = PROFILES.get(profile_name, PROFILES["draft"])
+        target_profile = base_profile
+        if evaluators_override:
+            target_profile = dataclasses.replace(base_profile, **{
+                k: v for k, v in evaluators_override.items()
+                if hasattr(base_profile, k)
+            })
+
+        # 構成プリファレンスをPydanticモデルに変換
+        prefs = None
+        if composition_preferences:
+            try:
+                prefs = StoryCompositionPreferences(**composition_preferences)
+            except Exception as e:
+                logger.warning(f"Invalid composition_preferences: {e}")
+
+        session_id = f"SID_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+        await manager.send_progress("init", 0.0, "キャラクター生成を開始します...")
+        # クライアントにセッションIDを通知（中断時の再開キーとして使用）
+        await manager.send_agent_thought("System", f"Session ID: {session_id}", "info")
+
+        global active_orchestrator
         orchestrator = MasterOrchestrator(profile=target_profile, ws_manager=manager, session_id=session_id, api_keys=api_keys, composition_preferences=prefs)
         active_orchestrator = orchestrator
         package = await orchestrator.run(theme=theme)
@@ -361,29 +361,29 @@ async def run_character_generation(profile_name: str, theme: str = None, evaluat
 
 async def resume_character_generation(character_name: str, profile_name: str, evaluators_override: dict = None, api_keys: dict = None):
     """チェックポイントから再開"""
-    from backend.agents.master_orchestrator.orchestrator import MasterOrchestrator
-    from backend.storage.md_storage import load_checkpoint
-    import dataclasses
-    
-    await manager.send_agent_thought("System", f"{character_name} の復旧を開始します...", "thinking")
-    
-    package = await load_checkpoint(character_name)
-    if not package:
-        await manager.send_error(f"チェックポイントが見つかりませんでした: {character_name}")
-        return
-        
-    base_profile = PROFILES.get(profile_name, PROFILES["draft"])
-    target_profile = base_profile
-    if evaluators_override:
-        target_profile = dataclasses.replace(base_profile, **{
-            k: v for k, v in evaluators_override.items() 
-            if hasattr(base_profile, k)
-        })
-        
-    global active_orchestrator
-    orchestrator = MasterOrchestrator(profile=target_profile, ws_manager=manager, existing_package=package, session_id=character_name, api_keys=api_keys) # character_name が事実上のSession ID
-    active_orchestrator = orchestrator
     try:
+        from backend.agents.master_orchestrator.orchestrator import MasterOrchestrator
+        from backend.storage.md_storage import load_checkpoint
+        import dataclasses
+        
+        await manager.send_agent_thought("System", f"{character_name} の復旧を開始します...", "thinking")
+        
+        package = await load_checkpoint(character_name)
+        if not package:
+            await manager.send_error(f"チェックポイントが見つかりませんでした: {character_name}")
+            return
+            
+        base_profile = PROFILES.get(profile_name, PROFILES["draft"])
+        target_profile = base_profile
+        if evaluators_override:
+            target_profile = dataclasses.replace(base_profile, **{
+                k: v for k, v in evaluators_override.items() 
+                if hasattr(base_profile, k)
+            })
+            
+        global active_orchestrator
+        orchestrator = MasterOrchestrator(profile=target_profile, ws_manager=manager, existing_package=package, session_id=character_name, api_keys=api_keys) # character_name が事実上のSession ID
+        active_orchestrator = orchestrator
         package = await orchestrator.run()
         await _finalize_character_generation(package)
     except Exception as e:
@@ -420,15 +420,15 @@ async def _finalize_character_generation(package):
 
 async def run_diary_generation(package_name: str, days: int = 7, profile_name: str = None, api_keys: dict = None):
     """日記生成パイプライン全体を実行"""
-    from backend.agents.daily_loop.orchestrator import DailyLoopOrchestrator
-    
-    pkg_path = AppConfig.STORAGE_DIR / package_name / "package.json"
-    if not pkg_path.exists():
-        await manager.send_error(f"パッケージが見つかりません: {package_name}")
-        return
-    
     try:
+        from backend.agents.daily_loop.orchestrator import DailyLoopOrchestrator
         from backend.models.character import CharacterPackage
+        
+        pkg_path = AppConfig.STORAGE_DIR / package_name / "package.json"
+        if not pkg_path.exists():
+            await manager.send_error(f"パッケージが見つかりません: {package_name}")
+            return
+        
         pkg_data = json.loads(pkg_path.read_text(encoding="utf-8"))
         package = CharacterPackage(**pkg_data)
         

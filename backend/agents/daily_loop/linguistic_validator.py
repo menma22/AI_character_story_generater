@@ -4,6 +4,7 @@
 """
 
 import logging
+from typing import Optional
 from backend.models.character import LinguisticExpression
 from backend.models.memory import DiaryEntry, MoodState
 from backend.tools.llm_api import call_llm
