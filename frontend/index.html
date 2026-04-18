@@ -258,7 +258,10 @@
         <!-- 生成中画面 -->
         <section id="generation-screen" class="screen">
             <div class="gen-header">
-                <h2 id="gen-phase">処理開始中...</h2>
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <h2 id="gen-phase">処理開始中...</h2>
+                    <button id="cancel-generation-btn" class="btn-ghost" style="color: var(--accent-error); border-color: rgba(239, 68, 68, 0.5); padding: 0.5rem 1rem; font-size: 0.85rem;" onclick="cancelCharacterGeneration()">🛑 生成を中断</button>
+                </div>
                 <div id="phase-tracker-container" class="phase-tracker" style="display: none;">
                     <div class="phase-step" id="step-creative_director"><div class="step-circle">1</div><div class="step-label">Concept / Director</div></div>
                     <div class="phase-line"></div>

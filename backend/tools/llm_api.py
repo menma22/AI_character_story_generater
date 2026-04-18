@@ -711,7 +711,23 @@ async def call_llm_agentic_gemini(
         }
         token_tracker.record(model_name, usage)
         
-        if not response.candidates or not response.candidates[0].content.parts:
+        # ─── finish_reason が MALFORMED_FUNCTION_CALL の場合のリカバリ ───
+        candidate = response.candidates[0] if response.candidates else None
+        finish_reason_val = getattr(candidate, "finish_reason", None)
+        # finish_reason は int (enum値) または文字列で来る可能性がある
+        finish_reason_str = str(finish_reason_val) if finish_reason_val else ""
+        
+        if "MALFORMED" in finish_reason_str or finish_reason_str == "7":
+            logger.warning(f"[call_llm_agentic_gemini] finish_reason=MALFORMED_FUNCTION_CALL detected (step {i+1}). Recovering...")
+            # 壊れた応答を履歴から削除
+            try:
+                if len(chat.history) > 0:
+                    chat.history.pop()
+            except: pass
+            current_message = "前回のツール呼び出しの形式にエラーがありました。引数は定義されたJSONスキーマに厳密に従い、正しい形式で再度ツールを呼び出してください。必ずいずれかのツールを呼び出してください。"
+            continue  # このイテレーションをスキップして次のステップへ
+        
+        if not response.candidates or not candidate or not candidate.content.parts:
             raise ValueError("Geminiから有効な回答を得られませんでした。")
 
         part = response.candidates[0].content.parts[0]

@@ -204,6 +204,59 @@ const Renderer = {
     },
 
     /**
+     * 所持品・能力・可能行動を表示
+     */
+    renderCapabilities(caps) {
+        if (!caps) return '';
+        
+        const possessions = caps.possessions || [];
+        const abilities = caps.abilities || [];
+        const actions = caps.available_actions || [];
+        
+        if (!possessions.length && !abilities.length && !actions.length) return '';
+        
+        let html = '<div class="content-card" style="margin-bottom: 1.5rem; border-left: 3px solid var(--accent-secondary);">';
+        html += '<h3 style="color: var(--accent-secondary);">所持品・能力・可能行動</h3>';
+        
+        if (possessions.length) {
+            html += '<div style="margin-bottom: 1rem;"><div class="label" style="margin-bottom: 0.5rem;">所持品</div>';
+            html += possessions.map(p => `
+                <div style="margin-bottom: 0.5rem; padding: 0.5rem; background: rgba(255,255,255,0.03); border-radius: 6px;">
+                    <strong>${p.name || ''}</strong>${p.always_carried ? ' <span class="event-badge high" style="font-size:0.7rem;">常に携帯</span>' : ''}
+                    <div style="font-size:0.85rem; color:var(--text-muted); margin-top:2px;">${p.description || ''}</div>
+                    ${p.emotional_significance ? `<div style="font-size:0.8rem; color:var(--accent-primary); margin-top:2px; font-style:italic;">${p.emotional_significance}</div>` : ''}
+                </div>
+            `).join('');
+            html += '</div>';
+        }
+        
+        if (abilities.length) {
+            html += '<div style="margin-bottom: 1rem;"><div class="label" style="margin-bottom: 0.5rem;">能力</div>';
+            html += abilities.map(a => `
+                <div style="margin-bottom: 0.5rem; padding: 0.5rem; background: rgba(255,255,255,0.03); border-radius: 6px;">
+                    <strong>${a.name || ''}</strong> <span class="event-badge medium" style="font-size:0.7rem;">${a.proficiency || ''}</span>
+                    <div style="font-size:0.85rem; color:var(--text-muted); margin-top:2px;">${a.description || ''}</div>
+                </div>
+            `).join('');
+            html += '</div>';
+        }
+        
+        if (actions.length) {
+            html += '<div><div class="label" style="margin-bottom: 0.5rem;">可能行動</div>';
+            html += actions.map(a => `
+                <div style="margin-bottom: 0.5rem; padding: 0.5rem; background: rgba(255,255,255,0.03); border-radius: 6px;">
+                    <strong>${a.action || ''}</strong>
+                    <div style="font-size:0.85rem; color:var(--text-muted); margin-top:2px;">${a.context || ''}</div>
+                </div>
+            `).join('');
+            html += '</div>';
+        }
+        
+        html += '</div>';
+        return html;
+    },
+
+    /**
      * 日記を表示
      */
     renderDiary(diaries) {

@@ -76,6 +76,30 @@ function setupWSHandlers() {
         }
     });
 
+    // キャラクター生成中断完了のハンドラ
+    wsManager.on('generation_cancelled', (data) => {
+        addThought('System', '⏹ 生成が中断されました。そこまでのデータをダッシュボードに表示します。', 'complete');
+        
+        const pkgName = data.package_name;
+        if (pkgName) {
+            // 中断時点までのデータを取得してダッシュボードに表示
+            fetch(`/api/packages/${pkgName}`)
+                .then(r => r.json())
+                .then(pkg => {
+                    currentPackage = pkg;
+                    currentPackage._package_name = pkgName;
+                    renderResults(pkg);
+                    setTimeout(() => showScreen('result-screen'), 800);
+                })
+                .catch(err => {
+                    console.error('Partial package fetch error:', err);
+                    addThought('System', 'パーシャルデータの取得に失敗しました。履歴から確認してください。', 'error');
+                });
+        } else {
+            addThought('System', '保存されたデータが見つかりませんでした。', 'error');
+        }
+    });
+
     isWSHandlersSetup = true;
 }
 
@@ -218,6 +242,21 @@ function resumeGeneration() {
     });
     
     addThought('System', 'チェックポイントから再開中...', 'thinking');
+}
+
+function cancelCharacterGeneration() {
+    if (!confirm('生成を中断しますか？\nここまでの生成データは保存され、ダッシュボードに表示されます。')) return;
+    
+    // キャンセルボタンを無効化
+    const btn = document.getElementById('cancel-generation-btn');
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = '⏳ 中断処理中...';
+    }
+    
+    // バックエンドにキャンセル指示を送信
+    wsManager.send('cancel_character_generation', {});
+    addThought('System', '⏹ 生成中断リクエストを送信しました...', 'thinking');
 }
 
 function showResumeButton() {
@@ -414,7 +453,13 @@ function renderResults(pkg) {
     document.getElementById('profile-content').innerHTML = Renderer.renderProfile(pkg?.macro_profile);
     document.getElementById('parameters-content').innerHTML = Renderer.renderParameters(pkg?.micro_parameters);
     document.getElementById('episodes-content').innerHTML = Renderer.renderEpisodes(pkg?.autobiographical_episodes);
-    document.getElementById('events-content').innerHTML = Renderer.renderEvents(pkg?.weekly_events_store);
+    // イベントタブ: capabilities + events を表示
+    let eventsHtml = '';
+    if (pkg?.character_capabilities) {
+        eventsHtml += Renderer.renderCapabilities(pkg.character_capabilities);
+    }
+    eventsHtml += Renderer.renderEvents(pkg?.weekly_events_store);
+    document.getElementById('events-content').innerHTML = eventsHtml;
 }
 
 // ─── タブ切替 ──────────────────────────────────────────────

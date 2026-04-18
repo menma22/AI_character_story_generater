@@ -231,13 +231,41 @@ async def handle_ws_message(data: dict, websocket: WebSocket):
     elif action == "cancel_character_generation":
         # キャラクター生成の中断
         task_id = id(websocket)
+        package_name = None
+        
         if active_orchestrator:
             logger.info(f"Cancelling character generation per user request (Session: {getattr(active_orchestrator, 'session_id', 'unknown')})")
+            
+            # 中断前にチェックポイントを強制保存
+            try:
+                active_orchestrator._checkpoint()
+                # パッケージ名を取得（キャラ名 or セッションID）
+                pkg = active_orchestrator.package
+                char_name = None
+                if pkg and hasattr(pkg, 'macro_profile') and pkg.macro_profile:
+                    bi = getattr(pkg.macro_profile, 'basic_info', None)
+                    if bi:
+                        char_name = getattr(bi, 'name', None)
+                if char_name:
+                    from backend.storage.md_storage import safe_name
+                    package_name = safe_name(char_name)
+                else:
+                    package_name = getattr(active_orchestrator, 'session_id', None)
+            except Exception as e:
+                logger.error(f"Error saving checkpoint during cancel: {e}")
+            
             active_orchestrator.cancel()
         
         if task_id in ws_active_tasks:
             ws_active_tasks[task_id].cancel()
             ws_active_tasks.pop(task_id, None)
+        
+        # フロントエンドに中断完了を通知（パーシャルデータの表示用）
+        await websocket.send_json({
+            "type": "generation_cancelled",
+            "package_name": package_name,
+            "message": "生成が中断されました。"
+        })
 
     elif action == "regenerate_artifact":
         package_name = data.get("package_name", "")
