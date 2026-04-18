@@ -561,19 +561,44 @@ async function loadPackage(name) {
 async function resumeFromCheckpoint(name, phase) {
     // チェックポイントから再開
     const apiKeys = getApiKeys();
+    
+    // 現在のプロファイルを取得
+    const profileSelect = document.getElementById('profile-select');
+    const profile = profileSelect ? profileSelect.value : 'draft';
+
+    // Evaluator設定の収集
+    const evaluators = {
+        schema_validator_enabled: document.getElementById('eval-schema')?.checked ?? true,
+        consistency_checker_enabled: document.getElementById('eval-consistency')?.checked ?? false,
+        bias_auditor_enabled: document.getElementById('eval-bias')?.checked ?? false,
+        interestingness_evaluator_enabled: document.getElementById('eval-interestingness')?.checked ?? false,
+        event_metadata_auditor_enabled: document.getElementById('eval-event')?.checked ?? false,
+        distribution_validator_enabled: document.getElementById('eval-distribution')?.checked ?? true,
+        narrative_connection_auditor_enabled: document.getElementById('eval-narrative')?.checked ?? false
+    };
 
     // 生成画面へ移動
     showScreen('generation-screen');
-    resetGenerationUI();
+    
+    // UIを初期化
+    document.getElementById('thought-log').innerHTML = '';
+    document.getElementById('progress-bar').style.width = '0%';
+    document.getElementById('phase-tracker-container').style.display = 'flex';
+    resetPhaseTracker();
+    
+    document.querySelector('.thought-entry.error')?.remove();
+    const btn = document.getElementById('resume-btn');
+    if (btn) btn.remove();
 
     // WebSocket で resume_generation を送信
-    ws.send({
-        action: "resume_generation",
+    wsManager.send('resume_generation', {
         character_name: name,
-        profile: currentProfile || "draft",
-        evaluators_override: {},
+        profile: profile,
+        evaluators_override: evaluators,
         api_keys: apiKeys
     });
+    
+    addThought('System', 'チェックポイントから再開中...', 'thinking');
 }
 
 // ─── ダウンロード ────────────────────────────────────────
