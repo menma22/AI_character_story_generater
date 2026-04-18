@@ -6,14 +6,14 @@
 
 ## パート1: アプリシステム概要
 
-![システムアーキテクチャ図 - 生成進捗管理（管理ボックス）と多層エージェント構造](file:///C:/Users/mahim/.gemini/antigravity/brain/a14e044c-e41f-414d-9b9d-473be3b8c3ea/system_architecture_diagram_v42_management_box_v3_1776506073820.png)
+![システムアーキテクチャ図 - 生成進捗管理（管理ボックス）と多層エージェント構造](file:///C:/Users/mahim/.gemini/antigravity/brain/5bb85ced-0ade-45ba-8a69-9db1580dcd72/system_architecture_diagram_v43_fix_stalling_1776511153000_png_1776508788682.png)
 
 ### ディレクトリ・ファイル構成
 
 ```
 AI_character_story_generater/
 ├── backend/
-│   ├── main.py                                # FastAPI エントリポイント (WebSocket + REST API) ※2026-04-18 18:39 再起動完了 (PID: 15228)
+│   ├── main.py                                # FastAPI エントリポイント (WebSocket + REST API) ※2026-04-18 19:10 再起動完了 (PID: 12424)
 │   ├── regeneration.py                        # アーティファクト個別再生成モジュール (依存マップ + 再生成コア)
 │   ├── config.py                              # 設定管理 (APIキー, 4段階プロファイル, モデル定義)
 │   ├── agents/
@@ -798,7 +798,18 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
   - **言語表現バリデーション層の追加**: `LinguisticExpressionValidator`クラスを新設。日記テキストが以下を守っているか詳細に検証: 一人称の統一、避ける語彙の有無、口癖の自然な出現、文末表現のバリエーション、漢字ひらがな傾向、絵文字使用傾向、自問形式の頻度、比喩・反語の頻度、日記のトーン、内省の深さ
   - **3段階ゲート化**: 日記提出フロー を「check_diary_rules（基本的な言語ルール） → validate_linguistic_expression（詳細な言語表現） → third_party_review（読み物としての品質）」の3段階に。第2段階で細かい言語特性の遵守を厳密に検証し、修正アドバイスを返す
   - **スコアリング**: バリデーター は「0.0～1.0の品質スコア」と「どの項目が守られていたか/守られていなかったか」を明示する。これにより品質の可視化と段階的改善が可能
+### 28. 日記生成停止問題の修正（インポート漏れとエラーハンドリング）
 
+**(a) 当初設計**: `backend/agents/daily_loop/linguistic_validator.py` において、`Optional` 型ヒントが使用されていたが、`typing.Optional` のインポートが漏れていた。また、`main.py` の非同期生成タスク (`run_diary_generation` 等) では初期化時の例外捕捉が不十分だった。
+
+**(b) 変更・根拠**: 日記シミュレーションの開始時に `NameError` が発生し、バックエンドがサイレントに停止（「開始準備中...」でログが止まる）していた。非同期タスクの初期化フェーズで発生したエラーが捕捉されず、フロントエンドに通知されないため、原因の特定が困難だった。
+
+**(c) 採用プラクティス**:
+- **根本原因の修正**: `linguistic_validator.py` に `from typing import Optional` を追加。
+- **包括的エラーハンドリング**: `main.py` の各生成エントリーポイントにおいて、全インポート・初期化処理を `try-except` ブログ内に配置。予期せぬエラー発生時も即座に `generation_error` イベントを送信し、原因をフロントエンドで可視化。
+- **静的インポートチェック**: `backend` 内の主要ファイルを網羅的にチェックし、他の `typing` インポート漏れがないことを確認。
+
+---
 ### 23. APIキーの動的操作・伝播システム（デカップリング）
 
 **(a) 当初設計**: APIキーはバックエンドの `.env` ファイルにハードコードされ、環境変数としてのみ管理されていた。ユーザーが自身のキーを使用する手段がなく、サーバー側のリソースに依存していた。
@@ -930,6 +941,7 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 | Stage 39: repomix MCP サーバー登録・コードベース把握手順の標準化 | ✅ 完了 | Claude Code に repomix MCP サーバー（`cmd /c npx -y repomix --mcp`）をプロジェクトスコープで登録。Windows で `npx` が直接起動できないため `cmd /c` 経由のラッパーを採用。MCP ヘルスチェック「✓ Connected」確認済。プロジェクト `CLAUDE.md` に「使用可能な MCP サーバー」セクションを追加し、**コードの全体像を把握する必要がある場合は repomix MCP（`pack_codebase` / `pack_remote_repository`）を必ず優先使用する**運用ルールを明文化。個別 Glob/Grep/Read の多数回呼び出しより先に pack → `grep_repomix_output` による必要箇所抽出を行う手順を標準化。変更ファイル: `CLAUDE.md`, `C:\Users\mahim\.claude.json`（MCP 登録） |
 | Stage 40: 中断再開フェーズの高速化とセッション変数の安定化 | ✅ 修正完了 | `resume_character_generation`実行時に`active_orchestrator`グローバル変数が設定されておらず、フロントエンドのレビューアクションが「アクティブな生成セッションがありません」で失敗するバグを修正。同時に、下流のPhase A-1が存在する場合（`has_downstream`）は過去にコンセプトレビューが承認済みであると判定し、再開時の不要な待機をスキップするロジックを導入。これにより全チェックポイントからの途切れのない再開・ファストフォワードを実現。変更ファイル: main.py, orchestrator.py |
 | Stage 41: Phase D 中断再開時の AttributeError 修正 | ✅ 修正完了 | Phase Dのチェックポイント再開時、`ConflictIntensityArc`に存在しない`daily_intensities`属性の`len()`を評価してクラッシュするバグを修正。`ConflictIntensityArc`モデルに`raw_text`フィールドを後方互換性を持たせて追加し、スキップ判定とテキスト復元を正しく行うよう修正。変更ファイル: character.py, phase_d/orchestrator.py |
+| Stage 42: 日記生成停止問題の修正（NameError + エラーハンドリング） | ✅ 修正完了 | `linguistic_validator.py` の `Optional` インポート漏れ修正、および `main.py` の非同期タスク初期化フェーズへの包括的 try-except 導入により、サイレント停止問題を解決。検証 E2E テスト（Day 1 本番動作）完了。 |
 ### 次のアクション
 
 1. **【最優先】仕様書加筆の設計判断** → 感情強度バイパス方式（v10原則「重み低下」vs 実装「完全スキップ」）、イベント数（2-4件/日 vs 仕様4-6件/日）、Phase B実装有無の3点を決定
@@ -988,7 +1000,7 @@ powershell -Command "python -m backend.main 2>&1 | Out-File -Encoding utf8 serve
 > 必ずプロジェクトルートで実行してください。`backend/main.py` を直接実行するとインポートエラーが発生します。
 
 ### 3. 現在の状態
-- **最新起動**: 2026-04-18 18:19 (JST)
-- **PID**: 27276
+- **最新起動**: 2026-04-18 19:10 (JST)
+- **PID**: 12424
 - **ポート**: 8001
 - **状態ログ**: `knowledge/fact/app_status.md`
