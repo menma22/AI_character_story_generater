@@ -380,13 +380,17 @@ async def resume_character_generation(character_name: str, profile_name: str, ev
             if hasattr(base_profile, k)
         })
         
+    global active_orchestrator
     orchestrator = MasterOrchestrator(profile=target_profile, ws_manager=manager, existing_package=package, session_id=character_name, api_keys=api_keys) # character_name が事実上のSession ID
+    active_orchestrator = orchestrator
     try:
         package = await orchestrator.run()
         await _finalize_character_generation(package)
     except Exception as e:
         logger.error(f"Resume failed: {e}", exc_info=True)
         await manager.send_error(f"再開エラー: {str(e)}")
+    finally:
+        active_orchestrator = None
 
 async def _finalize_character_generation(package):
     """生成完了後の保存と通知（作業ディレクトリに統一保存）"""

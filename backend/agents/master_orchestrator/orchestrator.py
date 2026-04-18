@@ -186,7 +186,10 @@ class MasterOrchestrator:
 
         # ─── Human in the Loop: Concept Review ────────────────
         # Creative Director完了後、ユーザーにレビュー機会を提供
-        if self.ws:
+        # ※すでに下流のPhase A-1（マクロプロフィール）が存在する場合は、過去に承認済みとみなしてスキップ
+        has_downstream = self.package.macro_profile and self.package.macro_profile.basic_info and self.package.macro_profile.basic_info.name
+        
+        if self.ws and not has_downstream:
             await self._notify("コンセプトレビューを開始します。ユーザーの確認を待っています...", "waiting")
             await self.ws.send_phase_result("concept_review", {
                 "concept_package": concept.model_dump(mode="json"),
@@ -231,6 +234,8 @@ class MasterOrchestrator:
                         await self._notify(f"編集データのバリデーションエラー: {e}", "warning")
 
             await self._notify("コンセプトレビュー承認。下流Phaseに進みます。", "complete")
+        elif self.ws and has_downstream:
+            await self._notify("下流の生成データが存在するため、コンセプトレビューをスキップします。", "complete")
         
         # ─── Phase A-1: マクロプロフィール + 言語的表現方法 生成 ────────────────
         if not self.package.macro_profile or not self.package.macro_profile.basic_info or not self.package.macro_profile.basic_info.name:
