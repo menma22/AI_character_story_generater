@@ -13,7 +13,7 @@
 ```
 AI_character_story_generater/
 ├── backend/
-│   ├── main.py                                # FastAPI エントリポイント (WebSocket + REST API) ※2026-04-18 17:40 再起動完了 (PID: 21236)
+│   ├── main.py                                # FastAPI エントリポイント (WebSocket + REST API) ※2026-04-18 18:19 再起動完了 (PID: 27276)
 │   ├── regeneration.py                        # アーティファクト個別再生成モジュール (依存マップ + 再生成コア)
 │   ├── config.py                              # 設定管理 (APIキー, 4段階プロファイル, モデル定義)
 │   ├── agents/
@@ -934,31 +934,41 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 
 
 ## アプリの再起動方法
-プロジェクトルートから以下のコマンドで起動・再起動できます：
 
-1. 既存プロセスの停止
+バックエンドサーバー（FastAPI）の再起動は、以下の手順で行ってください。詳細は [backend-management スキル](file:///c:/Users/mahim/.gemini/antigravity/scratch/AI_character_story_generater/.agents/skills/backend-management/SKILL.md) を参照してください。
 
+### 1. 既存プロセスの停止（ポート 8001 占有時）
 
-# ポート8001を使っているPIDを確認
-netstat -ano | grep ":8001.*LISTENING"
+ポート 8001 を使用しているプロセスを特定し、強制終了します。
 
-パワーシェルの場合：netstat -ano | Select-String ":8001"
+```powershell
+# ポート 8001 を使用している PID を特定
+netstat -ano | findstr :8001
 
-# そのPIDを強制終了（例: PID 86056の場合）
-taskkill //PID <PID番号> //F
+# 特定した PID（例: 27276）を強制終了
+taskkill /F /PID 27276
+```
 
-taskkill /F /IM python.exe　強制的に全て終了
+> [!TIP]
+> 全ての Python プロセスを終了させても良い場合は `taskkill /F /IM python.exe` が使用可能です。
 
-パワーシェルの場合：taskkill /F /PID 86056
-2. アプリの起動
+### 2. アプリの起動
 
+プロジェクトのルートディレクトリで以下のコマンドを実行します。
 
-cd c:/Users/mahim/.gemini/antigravity/scratch/AI_character_story_generater
+```powershell
+# 標準的な起動
 python -m backend.main
-デフォルトで http://localhost:8001 で起動します
-バックグラウンドで実行したい場合は末尾に & を付けてください
-ワンライナー（停止＋再起動）：
 
+# ログをファイルに出力しながら起動（推奨）
+powershell -Command "python -m backend.main 2>&1 | Out-File -Encoding utf8 server_stdout.log"
+```
 
-taskkill //F //FI "IMAGENAME eq python.exe" 2>/dev/null; cd c:/Users/mahim/.gemini/antigravity/scratch/AI_character_story_generater && python -m backend.main &
-注意: 上記の taskkill はすべてのPythonプロセスを止めるので、他にPythonプロセスが動いている場合はPID指定の方法を使ってください。
+> [!IMPORTANT]
+> 必ずプロジェクトルートで実行してください。`backend/main.py` を直接実行するとインポートエラーが発生します。
+
+### 3. 現在の状態
+- **最新起動**: 2026-04-18 18:19 (JST)
+- **PID**: 27276
+- **ポート**: 8001
+- **状態ログ**: `knowledge/fact/app_status.md`
