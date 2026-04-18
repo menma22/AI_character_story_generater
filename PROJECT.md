@@ -823,6 +823,30 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 - **3アクション**: `approve_concept`（続行）、`revise_concept`（フィードバック付き再生成）、`edit_concept_direct`（編集済みJSON適用）
 - **フロントエンドUI**: アコーディオン形式のカード選択UI（各カードに名前+説明+出典理論家）、コンセプトレビュー画面（既存`Renderer.renderConcept()`再利用）、サマリーバー表示
 
+### 25. Phase Dエラー修正・タスク管理改善・中断機能
+
+**(a) 当初設計**: Phase Dの`call_llm_agentic_gemini`でGeminiが`MALFORMED_FUNCTION_CALL`を返した場合、2つのパターンが存在した: (1) 例外として `send_message` から投げられるケース、(2) レスポンスの `finish_reason` フィールドに設定されるケース。後者は `except` ブロックに入らず `ValueError("Geminiから有効な回答を得られませんでした。")` として上位に伝播し、結果として MasterOrchestrator の `_execute_phase_with_retry` がPhase D全体を最初から再実行していた。これにより既に生成済みの世界設定・周囲人物・所持品・能力がすべて再生成されていた。また、生成を中断する手段がなく、長時間の生成中にユーザーが待つしかなかった。
+
+**(b) 変更・根拠**: エラーログの分析により、`finish_reason: MALFORMED_FUNCTION_CALL` がレスポンスオブジェクトのフィールドとして返るケースが主要な原因だった。`MALFORMED_FUNCTION_CALL` の enum値は `7`（int）だが、SDKバージョンにより文字列で返る場合もあるため、両方に対応が必要。また、Phase Dの各ステップ（世界設定→周囲人物→所持品能力→物語アーク→葛藤強度→イベント生成）は独立しており、途中で失敗してもそれまでのステップのデータは再利用できるべき。
+
+**(c) 採用プラクティス**:
+- **エージェンティックループの2層MALFORMED対策** (`llm_api.py`):
+  - `except` ブロック: `send_message` が例外を投げた場合のリカバリ（壊れた履歴削除+再試行メッセージ）
+  - `finish_reason` チェック: レスポンス受信後に `finish_reason` が `MALFORMED` を含むか `7` であれば、壊れた履歴を削除し `continue` でループの次のイテレーションへ移行（例外にせずリカバリ）
+- **Phase Dチェックポイント・スキップ** (`phase_d/orchestrator.py`):
+  - 各ステップ（世界設定・周囲人物・能力・アーク・葛藤）完了後に `_master_orch._checkpoint()` で即時保存
+  - 各ステップ開始時に既存データの有無をチェックし、存在すればスキップ（例: `world_context.description` が既に存在する場合はStep 1スキップ）
+  - `_check_cancelled()` を6箇所に挿入し、キャンセルフラグを確認
+- **キャンセル機能フルスタック実装**:
+  - バックエンド: `MasterOrchestrator.cancel()` + `_cancelled` フラグ + Phase Dへの `set_master_orch()` 伝播
+  - WebSocket: `cancel_character_generation` アクション → チェックポイント強制保存 → `generation_cancelled` イベント送信（パッケージ名付き）
+  - フロントエンド: 生成中画面に「🛑 生成を中断」ボタン追加、`cancelCharacterGeneration()` 確認ダイアログ付き、`generation_cancelled` ハンドラでパーシャルデータをダッシュボードに表示
+- **ダッシュボードのパーシャルデータ表示**:
+  - `Renderer.renderCapabilities()` 新設: 所持品（名前・説明・常に携帯・感情的意味）、能力（名前・熟練度）、可能行動（名前・文脈）をカード形式で表示
+  - `renderResults()` でイベントタブに capabilities + events を統合表示
+  - 各レンダラー関数は先頭で `if (!data) return '未生成'` のnullチェックを行うため、パーシャルデータでもクラッシュしない
+- **設計原則**: 「エージェンティックループのエラーは例外とレスポンスフィールドの2つの経路で発生しうる。両方を捕捉して同じリカバリパスに合流させる」「チェックポイントは各ステップの粒度で保存し、再実行時は保存済みステップをスキップする」
+
 ---
 
 ## パート3: プロジェクト管理
