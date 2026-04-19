@@ -165,6 +165,8 @@ async def get_debug_thoughts():
 ws_active_tasks = {}
 # 現在実行中のMasterOrchestratorインスタンスへの参照（concept_review応答のため）
 active_orchestrator = None
+# 日記生成中のパッケージ名を追跡（同時実行防止）
+_diary_generation_active: set = set()
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -420,6 +422,18 @@ async def _finalize_character_generation(package):
 
 async def run_diary_generation(package_name: str, days: int = 7, profile_name: str = None, api_keys: dict = None):
     """日記生成パイプライン全体を実行"""
+    global _diary_generation_active
+
+    # 同時実行防止ガード
+    if package_name in _diary_generation_active:
+        logger.warning(f"[run_diary_generation] 既に日記生成中: {package_name}。リクエストを拒否します。")
+        await manager.send_error(f"「{package_name}」の日記生成は既に実行中です。完了をお待ちください。")
+        return
+
+    _diary_generation_active.add(package_name)
+    session_id = f"diary_{package_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    logger.info(f"[run_diary_generation] 開始: package={package_name}, session_id={session_id}")
+
     try:
         from backend.agents.daily_loop.orchestrator import DailyLoopOrchestrator
         from backend.models.character import CharacterPackage
@@ -432,10 +446,16 @@ async def run_diary_generation(package_name: str, days: int = 7, profile_name: s
         pkg_data = json.loads(pkg_path.read_text(encoding="utf-8"))
         package = CharacterPackage(**pkg_data)
         
-        await manager.send_progress("diary_init", 0.0, "日記生成を開始します...")
+        await manager.send_progress("diary_init", 0.0, f"日記生成を開始します... (session: {session_id})")
         
         target_profile = PROFILES.get(profile_name, PROFILES["draft"])
-        orchestrator = DailyLoopOrchestrator(package=package, profile=target_profile, ws_manager=manager, api_keys=api_keys)
+        orchestrator = DailyLoopOrchestrator(
+            package=package,
+            profile=target_profile,
+            ws_manager=manager,
+            api_keys=api_keys,
+            session_id=session_id,
+        )
         results = await orchestrator.run(days=days)
 
         # 日記を保存
@@ -454,12 +474,14 @@ async def run_diary_generation(package_name: str, days: int = 7, profile_name: s
             encoding="utf-8"
         )
 
-        await manager.send_progress("diary_complete", 1.0, f"{len(results)}日分の日記生成が完了しました")
+        await manager.send_progress("diary_complete", 1.0, f"{len(results)}日分の日記生成が完了しました (session: {session_id})")
         
     except Exception as e:
-        logger.error(f"Diary generation failed: {e}", exc_info=True)
+        logger.error(f"Diary generation failed (session={session_id}): {e}", exc_info=True)
         await manager.send_error(f"日記生成エラー: {str(e)}")
-
+    finally:
+        _diary_generation_active.discard(package_name)
+        logger.info(f"[run_diary_generation] 終了: package={package_name}, session_id={session_id}")
 
 # ─── アーティファクト再生成・編集 ─────────────────────────────
 

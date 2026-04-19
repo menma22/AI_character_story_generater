@@ -254,15 +254,8 @@ async def save_daily_log(character_name: str, day: int, day_state):
         # ムード変遷
         md_content += f"**ムード変遷:** V={ep.mood_before.valence:.1f}→{ep.mood_after.valence:.1f} / A={ep.mood_before.arousal:.1f}→{ep.mood_after.arousal:.1f} / D={ep.mood_before.dominance:.1f}→{ep.mood_after.dominance:.1f}\n\n"
 
-        # 衝動系エージェント出力
-        if ep.impulsive_output and ep.impulsive_output.raw_text:
-            md_content += "#### 衝動反応（Impulsive）\n\n"
-            md_content += f"{ep.impulsive_output.raw_text}\n\n"
-
-        # 理性ブランチ出力
-        if ep.reflective_output and ep.reflective_output.raw_text:
-            md_content += "#### 内面分析（Reflective）\n\n"
-            md_content += f"{ep.reflective_output.raw_text}\n\n"
+        # 衝動反応（Impulsive）と理性分析（Reflective）は別ファイルに保存
+        # → save_rim_outputs() を参照
 
         # Integration (行動決定)
         if ep.integration_output and ep.integration_output.final_action:
@@ -346,5 +339,55 @@ async def save_daily_log(character_name: str, day: int, day_state):
         md_content += f"| **Day {day} 合計** | **{total_input:,}** | **{total_output:,}** | **${total_cost:.4f}** |\n\n"
 
     file_path = logs_dir / f"Day_{day}.md"
+    file_path.write_text(md_content, encoding="utf-8")
+    return file_path
+
+
+async def save_rim_outputs(character_name: str, day: int, day_state):
+    """
+    衝動エージェント（Impulsive）と理性エージェント（Reflective）の出力を
+    Dayログとは別ファイルに保存する。
+    これらの出力は日記AIには渡さず、デバッグ・分析用途でのみ使用される。
+    """
+    if not character_name:
+        character_name = "Unknown_Character"
+
+    char_dir = STORAGE_ROOT / safe_name(character_name)
+    logs_dir = char_dir / "daily_logs"
+    _ensure_dir(logs_dir)
+
+    md_content = f"# Day {day} RIM出力（衝動/理性エージェント） — {character_name}\n\n"
+    md_content += "*このファイルは衝動エージェント（Impulsive）と理性エージェント（Reflective）の*\n"
+    md_content += "*生出力を保存したものです。日記AIには渡されません。*\n\n"
+
+    has_content = False
+    for i, ep in enumerate(day_state.events_processed):
+        event_header_written = False
+
+        if ep.impulsive_output and ep.impulsive_output.raw_text:
+            if not event_header_written:
+                md_content += f"## イベント {i+1}: {ep.event_id}\n\n"
+                md_content += f"**出来事:** {ep.event_content}\n\n"
+                event_header_written = True
+            md_content += "### 衝動反応（Impulsive）\n\n"
+            md_content += f"{ep.impulsive_output.raw_text}\n\n"
+            has_content = True
+
+        if ep.reflective_output and ep.reflective_output.raw_text:
+            if not event_header_written:
+                md_content += f"## イベント {i+1}: {ep.event_id}\n\n"
+                md_content += f"**出来事:** {ep.event_content}\n\n"
+                event_header_written = True
+            md_content += "### 内面分析（Reflective）\n\n"
+            md_content += f"{ep.reflective_output.raw_text}\n\n"
+            has_content = True
+
+        if event_header_written:
+            md_content += "---\n\n"
+
+    if not has_content:
+        md_content += "*このDayのRIM出力はありません*\n"
+
+    file_path = logs_dir / f"Day_{day}_rim_outputs.md"
     file_path.write_text(md_content, encoding="utf-8")
     return file_path

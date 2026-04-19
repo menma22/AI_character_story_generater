@@ -305,7 +305,7 @@ class DailyLogStore:
 class DailyLoopOrchestrator:
     """Day 1-7 日次ループオーケストレータ（v10 §4 完全準拠）"""
 
-    def __init__(self, package: CharacterPackage, profile: EvaluationProfile, ws_manager=None, api_keys: Optional[dict] = None):
+    def __init__(self, package: CharacterPackage, profile: EvaluationProfile, ws_manager=None, api_keys: Optional[dict] = None, session_id: Optional[str] = None):
         self.package = package
         self.profile = profile
         self.ws = ws_manager
@@ -335,6 +335,11 @@ class DailyLoopOrchestrator:
 
         if restored_mood or restored_memory:
             logger.info(f"[DailyLoop] 既存状態を復元: mood={'restored' if restored_mood else 'fresh'}, memory={'restored' if restored_memory else 'fresh'}")
+
+        # セッションID管理（キャラ名ベース）
+        from datetime import datetime as _dt
+        self.session_id = session_id or f"diary_{self._cname}_{_dt.now().strftime('%Y%m%d_%H%M%S')}"
+        logger.info(f"[DailyLoop] セッション開始: session_id={self.session_id}, character={self._cname}")
         
         # サブエージェント初期化
         self.activation_agent = None
@@ -382,7 +387,7 @@ class DailyLoopOrchestrator:
     
     async def _notify(self, content: str, status: str = "thinking"):
         if self.ws:
-            await self.ws.send_agent_thought("[日次ループ]", content, status)
+            await self.ws.send_agent_thought(f"[日次ループ:{self._cname}]", content, status)
     
     def _get_day_events(self, day: int) -> list[Event]:
         """指定日のイベントを取得（時刻順にソート）"""
@@ -1419,7 +1424,13 @@ class DailyLoopOrchestrator:
             )
         ]
         
-        system_prompt = f"""あなたはキャラクター本人として日記を書く自律エージェントです。
+        system_prompt = f"""あなたはキャラクター「{self._cname}」本人として日記を書く自律エージェントです。
+
+【重要: セッション情報】
+あなたが日記を書くべきキャラクター: 「{self._cname}」
+セッションID: {self.session_id}
+Day: {day}
+このキャラクター以外の日記を書いてはいけません。必ず上記のキャラクターとして日記を書いてください。
 
 【性格・気質の自己認識に関する原則】
 主人公は自分の性格や気質をしっかりとは自覚していません。
@@ -1517,12 +1528,14 @@ class DailyLoopOrchestrator:
         )
 
         retry_label = "（再生成）" if checker_feedback else ""
-        await self._notify(f"日記生成エージェントを自律モードで起動{retry_label}...")
+        await self._notify(f"Day {day}: 日記生成エージェントを自律モードで起動{retry_label}... (session={self.session_id})")
+        logger.info(f"[DailyLoop] session={self.session_id} Day {day}: _generate_diary 開始。tier={self.profile.worker_tier}, イベント数={len(events)}")
         
         from backend.tools.llm_api import call_llm_agentic_gemini as _diary_gemini_fallback
 
         if self.profile.worker_tier in ("opus", "sonnet"):
             try:
+                logger.info(f"[DailyLoop] session={self.session_id} Day {day}: Claude ({self.profile.worker_tier}) agentic 呼び出し開始")
                 await call_llm_agentic(
                     tier=self.profile.worker_tier,
                     system_prompt=system_prompt,
@@ -1531,9 +1544,11 @@ class DailyLoopOrchestrator:
                     max_iterations=10,
                     api_keys=self.api_keys,
                 )
+                logger.info(f"[DailyLoop] session={self.session_id} Day {day}: Claude agentic 完了。final_diary_contentの長さ={len(final_diary_content)}")
             except Exception as e:
-                logger.warning(f"[DailyLoop] Diary: Claude ({self.profile.worker_tier}) agentic failed: {e}. Falling back to Gemini.")
+                logger.warning(f"[DailyLoop] session={self.session_id} Day {day}: Diary: Claude ({self.profile.worker_tier}) agentic failed: {e}. Falling back to Gemini.", exc_info=True)
                 try:
+                    logger.info(f"[DailyLoop] session={self.session_id} Day {day}: Geminiフォールバック開始")
                     await _diary_gemini_fallback(
                         system_prompt=system_prompt,
                         user_message=user_message,
@@ -1541,11 +1556,13 @@ class DailyLoopOrchestrator:
                         max_iterations=10,
                         api_keys=self.api_keys,
                     )
+                    logger.info(f"[DailyLoop] session={self.session_id} Day {day}: Geminiフォールバック完了。final_diary_contentの長さ={len(final_diary_content)}")
                 except Exception as e2:
-                    logger.error(f"[DailyLoop] Diary: Gemini fallback also failed: {e2}.")
+                    logger.error(f"[DailyLoop] session={self.session_id} Day {day}: Diary: Gemini fallback also failed: {e2}.", exc_info=True)
         else:
             gemini_model = LLMModels.GEMINI_3_1_PRO if self.profile.worker_tier == "gemini_pro" else None
             try:
+                logger.info(f"[DailyLoop] session={self.session_id} Day {day}: Gemini agentic 呼び出し開始 (model={gemini_model or 'default'})")
                 await _diary_gemini_fallback(
                     system_prompt=system_prompt,
                     user_message=user_message,
@@ -1554,11 +1571,12 @@ class DailyLoopOrchestrator:
                     api_keys=self.api_keys,
                     model=gemini_model,
                 )
+                logger.info(f"[DailyLoop] session={self.session_id} Day {day}: Gemini agentic 完了。final_diary_contentの長さ={len(final_diary_content)}")
             except Exception as e:
-                logger.error(f"[DailyLoop] Diary: Gemini agentic failed: {e}.")
+                logger.error(f"[DailyLoop] session={self.session_id} Day {day}: Diary: Gemini agentic failed: {e}.", exc_info=True)
 
         if not final_diary_content:
-            logger.warning("Agentic loop finished without submitting final diary.")
+            logger.warning(f"[DailyLoop] session={self.session_id} Day {day}: Agentic loop finished without submitting final diary. check_passed={check_passed}, third_party_passed={third_party_passed}")
             final_diary_content = "(本日は何も書く気になれなかった)"
             
         return DiaryEntry(
@@ -1889,7 +1907,7 @@ class DailyLoopOrchestrator:
                         checker_feedback=checker_feedback_for_diary,
                     )
                 except Exception as e:
-                    logger.error(f"[DailyLoop] Day {day} 日記生成エラー: {e}")
+                    logger.error(f"[DailyLoop] session={self.session_id} Day {day} 日記生成エラー: {e}", exc_info=True)
                     diary = DiaryEntry(day=day, content="（日記生成に失敗しました）", mood_at_writing=self.current_mood.model_copy())
                     break
 
@@ -1965,9 +1983,10 @@ class DailyLoopOrchestrator:
             self.day_results.append(day_state)
 
             try:
-                from backend.storage.md_storage import save_daily_log
+                from backend.storage.md_storage import save_daily_log, save_rim_outputs
                 cname = self.package.macro_profile.basic_info.name if (self.package.macro_profile and self.package.macro_profile.basic_info) else "Unknown_Character"
                 await save_daily_log(cname, day, day_state)
+                await save_rim_outputs(cname, day, day_state)
             except Exception as e:
                 import logging
                 logging.getLogger("daily_loop").error(f"MD保存エラー: {e}")

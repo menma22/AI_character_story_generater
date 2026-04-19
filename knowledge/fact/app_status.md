@@ -1,12 +1,10 @@
-# アプリケーション起動ステータス
+# アプリケーション稼働状況
 
-- **最終起動日時**: 2026-04-18 18:39 (JST)
-- **ポート**: 8001
-- **PID**: 15228
-- **実行コマンド**: `python -m backend.main`
-- **最新の状態**: プロセス再起動完了 (2026-04-18 18:39) - IndentationError 修正後
-- **詳細**: `backend/agents/daily_loop/activation.py` の IndentationError を修正し、ポート 8001 にて新規プロセス (PID 15228) を起動。
-- **停止方法**: 
-  - ポート 8001 を使用している PID を特定し、`taskkill /F /PID <PID>` で終了。
-  - または `taskkill /F /IM python.exe` で全ての Python プロセスを終了。
-- **現在の状態**: 正常起動中。使用コマンド: `powershell -Command "python -m backend.main 2>&1 | Out-File -Encoding utf8 server_stdout.log"`
+## 最新の起動
+- **最終起動日時**: 2026-04-18 19:10 (JST)
+- **プロセスID (PID)**: 12424
+- **バックエンドポート**: 8001
+- **状態**: 🟢 正常稼働中
+
+## 修正履歴 (直近)
+- **2026-04-18 19:10**: `linguistic_validator.py` の NameError 修正および `main.py` のエラーハンドリング強化後の再起動。日記生成の正常動作を確認済み。
