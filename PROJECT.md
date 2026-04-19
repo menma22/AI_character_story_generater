@@ -309,7 +309,8 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
   - `short_term_memory/day_NN.json` — ShortTermMemoryDBスナップショット（normal_area + diary_store）
   - `mood_states/day_NN.json` — MoodState（daily_mood + carry_over_mood）
   - `key_memories/day_NN.json` — key memory（300字以内、圧縮対象外）
-  - `daily_logs/Day_{N}.md` — 日次ログ（全エージェント出力・ムード変遷・内省・日記・翌日予定）
+  - `daily_logs/Day_{N}.md` — 日次ログ（統合エージェント出力・ムード変遷・内省・日記・翌日予定。衝動/理性エージェント出力は除外）
+  - `daily_logs/Day_{N}_rim_outputs.md` — 衝動/理性エージェント（Impulsive/Reflective）の生出力（デバッグ・分析用）
 - **復元・再開**: DailyLoopOrchestrator初期化時に最新スナップショットを自動ロードし、保存済み日の翌日から再開
 - **その他永続化ファイル**:
   - `package.json` — 最終キャラクターパッケージ（生成完了時）
@@ -942,6 +943,7 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 | Stage 40: 中断再開フェーズの高速化とセッション変数の安定化 | ✅ 修正完了 | `resume_character_generation`実行時に`active_orchestrator`グローバル変数が設定されておらず、フロントエンドのレビューアクションが「アクティブな生成セッションがありません」で失敗するバグを修正。同時に、下流のPhase A-1が存在する場合（`has_downstream`）は過去にコンセプトレビューが承認済みであると判定し、再開時の不要な待機をスキップするロジックを導入。これにより全チェックポイントからの途切れのない再開・ファストフォワードを実現。変更ファイル: main.py, orchestrator.py |
 | Stage 41: Phase D 中断再開時の AttributeError 修正 | ✅ 修正完了 | Phase Dのチェックポイント再開時、`ConflictIntensityArc`に存在しない`daily_intensities`属性の`len()`を評価してクラッシュするバグを修正。`ConflictIntensityArc`モデルに`raw_text`フィールドを後方互換性を持たせて追加し、スキップ判定とテキスト復元を正しく行うよう修正。変更ファイル: character.py, phase_d/orchestrator.py |
 | Stage 42: 日記生成停止問題の修正（NameError + エラーハンドリング） | ✅ 修正完了 | `linguistic_validator.py` の `Optional` インポート漏れ修正、および `main.py` の非同期タスク初期化フェーズへの包括的 try-except 導入により、サイレント停止問題を解決。検証 E2E テスト（Day 1 本番動作）完了。 |
+| Stage 43: 日記生成セッション管理 + Dayログ分離 | ✅ 実装完了 | DailyLoopOrchestratorにsession_id管理導入（キャラ名+タイムスタンプ）、main.pyに同時実行防止ガード（`_diary_generation_active` Set）追加。save_daily_log()から衝動/理性出力を除去し、新関数save_rim_outputs()で`Day_{N}_rim_outputs.md`に分離保存。_generate_diary()のシステムプロンプトにキャラ名・セッションIDを明示注入し、全ログにsession_idとexc_info=Trueを追加 |
 ### 次のアクション
 
 1. **【最優先】仕様書加筆の設計判断** → 感情強度バイパス方式（v10原則「重み低下」vs 実装「完全スキップ」）、イベント数（2-4件/日 vs 仕様4-6件/日）、Phase B実装有無の3点を決定
