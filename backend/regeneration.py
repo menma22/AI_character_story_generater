@@ -260,15 +260,32 @@ async def _regenerate_daily_loop(package: CharacterPackage, regen_context: str, 
     from datetime import datetime
     session_id = f"diary_regen_{safe_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
+    import shutil
+    
+    # 既存の状態（記憶、ムード、ログ）を退避して、Day 1から強制的に再生成させる（バージョン管理）
+    base_dir = AppConfig.STORAGE_DIR / safe_name
+    backup_root = base_dir / "backups" / session_id
+    backup_root.mkdir(parents=True, exist_ok=True)
+    
+    for sub_dir in ["daily_logs", "mood_states", "short_term_memory", "key_memories", "diaries"]:
+        target = base_dir / sub_dir
+        if target.exists():
+            dest = backup_root / sub_dir
+            logger.info(f"[_regenerate_daily_loop] Backing up {target} to {dest}")
+            try:
+                shutil.move(str(target), str(dest))
+            except Exception as e:
+                logger.error(f"[_regenerate_daily_loop] Failed to backup {sub_dir}: {e}")
+
     orch = DailyLoopOrchestrator(
         package=package,
         profile=profile,
         ws_manager=ws_manager,
         api_keys=api_keys,
-        session_id=session_id
+        session_id=session_id,
+        regeneration_context=regen_context
     )
-    # regen_context is passed to agents if supported, but currently DailyLoop might not support passing regeneration_context
-    # It will regenerate from scratch based on identical Phase D events.
+    # 状態をクリア（退避）したため、run(days=7) は必ず Day 1 から開始される
     results = await orch.run(days=7)
 
     # 日記を保存

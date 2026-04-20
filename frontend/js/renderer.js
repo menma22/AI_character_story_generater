@@ -261,7 +261,8 @@ const Renderer = {
      */
     renderDiary(diaries) {
         if (!diaries?.length) return '';
-        return diaries.map(d => `
+        const actionBar = artifactActionBar('daily_logs');
+        return actionBar + diaries.map(d => `
             <div class="diary-entry-card" data-day="Day ${d.day}">
                 <div class="diary-text">${d.content}</div>
             </div>

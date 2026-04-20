@@ -600,6 +600,17 @@ async def save_manual_edit(package_name: str, artifact_name: str, edited_data: d
         if model_cls:
             validated = model_cls(**edited_data)
             setattr(package, artifact_name, validated)
+        elif artifact_name == "daily_logs":
+            # edited_data は list[dict] (day, content) であることを想定
+            package.diaries = edited_data
+            # 個別ファイル (.md) にも同期保存
+            diaries_dir = pkg_path.parent / "diaries"
+            diaries_dir.mkdir(parents=True, exist_ok=True)
+            for d in edited_data:
+                day_num = d.get("day")
+                content = d.get("content", "")
+                if day_num is not None:
+                    (diaries_dir / f"day_{day_num:02d}.md").write_text(content, encoding="utf-8")
         else:
             setattr(package, artifact_name, edited_data)
 

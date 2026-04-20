@@ -305,11 +305,12 @@ class DailyLogStore:
 class DailyLoopOrchestrator:
     """Day 1-7 日次ループオーケストレータ（v10 §4 完全準拠）"""
 
-    def __init__(self, package: CharacterPackage, profile: EvaluationProfile, ws_manager=None, api_keys: Optional[dict] = None, session_id: Optional[str] = None):
+    def __init__(self, package: CharacterPackage, profile: EvaluationProfile, ws_manager=None, api_keys: Optional[dict] = None, session_id: Optional[str] = None, regeneration_context: Optional[str] = None):
         self.package = package
         self.profile = profile
         self.ws = ws_manager
         self.api_keys = api_keys or {}
+        self.regeneration_context = regeneration_context  # 追加
 
         # キャラ名解決（全Storeで共通使用）
         cname = ""
@@ -1524,6 +1525,7 @@ Day: {day}
             f"{caps_section}"
             f"{past_diary_section}"
             f"{next_day_section}"
+            f"{self.regeneration_context if self.regeneration_context else ''}"
             f"{diary_feedback_section}"
         )
 
