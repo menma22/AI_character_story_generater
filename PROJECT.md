@@ -971,14 +971,13 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 | Stage 42: 日記生成停止問題の修正（NameError + エラーハンドリング） | ✅ 修正完了 | `linguistic_validator.py` の `Optional` インポート漏れ修正、および `main.py` の非同期タスク初期化フェーズへの包括的 try-except 導入により、サイレント停止問題を解決。検証 E2E テスト（Day 1 本番動作）完了。 |
 | Stage 43: 日記生成セッション管理 + Dayログ分離 | ✅ 実装完了 | DailyLoopOrchestratorにsession_id管理導入（キャラ名+タイムスタンプ）、main.pyに同時実行防止ガード（`_diary_generation_active` Set）追加。save_daily_log()から衝動/理性出力を除去し、新関数save_rim_outputs()で`Day_{N}_rim_outputs.md`に分離保存。_generate_diary()のシステムプロンプトにキャラ名・セッションIDを明示注入し、全ログにsession_idとexc_info=Trueを追加 |
 | Stage 44: 再生成の破壊的操作排除・セクション選択型UI移行と履歴バックアップ確保 | ✅ 実装完了 | `regenerateCharacter()` における全パッケージ消去の破壊的処理を完全廃止し、「セクション単位の再生成（section-select-modal）」への誘導に変更。「破棄して再生成」によるデータ喪失リスクを構造的に排除。さらに `backend/main.py` にて、アーティファクトの再生成や手動編集が実行・保存される直前に、必ず元の `package.json` を `package_backup_YYYYMMDD_HHMMSS_{name}_{action}.json` として自動バックアップする機能を追加。上書きによる過去の生成結果の完全喪失を防ぐ保護機構を確立。 |
+| Stage 45: 日記再生成機能の追加と自動バックアップ（バージョン管理） | ✅ 実装完了 | 日記表示タブへのボタン統合、再生成前の既存データ（記憶・ムード・ログ）の `backups/` フォルダへの自動退避（バージョン管理）、ユーザー指示のプロンプト注入によるカスタマイズ可能な再生成を実現。 |
 ### 次のアクション
 
-1. **【最優先】日記再生成機能の実装（承認後実行）** → バックエンドの状態リセットロジック、Pydanticモデル拡張、UIへのボタン追加
-2. **【重要】仕様書加筆の設計判断** → 感情強度バイパス方式、イベント数、Phase B実装有無の3点を決定
-3. **仕様書v10への加筆（Phase 1, 12項目）** → Perceiver統合、LinguisticExpression、CharacterCapabilities等
-4. **仕様書v2への加筆（Phase 2, 15項目）** → 技術スタック全面改訂、Phase A-3/Dエージェンティック化等
-5. **E2Eテスト実行（Day0→日記シミュレーション通し）** → 全フローの動作確認
-4. **E2Eテスト実行（Day0→日記シミュレーション通し）** → draftプロファイルでキャラクター生成→日記生成までを連続実行し、全フローの動作を確認する
+1. **【重要】仕様書加筆の設計判断** → 感情強度バイパス方式、イベント数、Phase B実装有無の3点を決定
+2. **仕様書v10への加筆（Phase 1, 12項目）** → Perceiver統合、LinguisticExpression、CharacterCapabilities等
+3. **仕様書v2への加筆（Phase 2, 15項目）** → 技術スタック全面改訂、Phase A-3/Dエージェンティック化等
+4. **E2Eテスト実行（Day0→日記シミュレーション通し）** → draftプロファイルでキャラクター生成→日記生成までを連続実行し、全フローの動作確認する
 5. **提出用キャラクター生成** → High Qualityプロファイルで全EvaluatorをONにし、MDデータベース出力まで通して実行する
 
 
