@@ -116,10 +116,17 @@ function backToStart() {
 }
 
 function regenerateCharacter() {
-    if (confirm("現在作成したDay 0のキャラクター設定を破棄して、もう一度最初から作り直しますか？")) {
-        currentPackage = null;
-        diaryEntries = [];
-        backToStart();
+    // Day 0データを全て破棄する処理を廃止し、セクション選択モーダルを開く
+    const modal = document.getElementById('section-select-modal');
+    if (modal) {
+        modal.classList.remove('hidden');
+    }
+}
+
+function closeSectionSelectModal() {
+    const modal = document.getElementById('section-select-modal');
+    if (modal) {
+        modal.classList.add('hidden');
     }
 }
 
@@ -385,11 +392,10 @@ function updateProgress(phase, progress, detail) {
     const diaryBar = document.getElementById('diary-progress-bar');
     const phaseEl = document.getElementById('gen-phase');
     const detailEl = document.getElementById('gen-detail');
+    const diaryPhaseEl = document.getElementById('diary-gen-phase');
     const diaryDetailEl = document.getElementById('diary-gen-detail');
     
     const percent = `${Math.min(progress * 100, 100)}%`;
-    if (bar) bar.style.width = percent;
-    if (diaryBar) diaryBar.style.width = percent;
     
     const phaseNames = {
         'creative_director': 'Creative Director',
@@ -401,11 +407,26 @@ function updateProgress(phase, progress, detail) {
         'complete': '完了！',
     };
     
-    // 「完了」や「daily_loop」の時、日記側の詳細表示も更新する
-    if (phaseEl) phaseEl.textContent = phaseNames[phase] || phase;
-    if (detailEl) detailEl.textContent = detail || '';
-    if (diaryDetailEl && (phase === 'daily_loop' || phase === 'complete')) {
-        diaryDetailEl.textContent = detail || '';
+    // 日記生成フェーズの場合
+    if (phase.startsWith('diary_') || phase === 'daily_loop') {
+        if (diaryBar) diaryBar.style.width = percent;
+        if (diaryDetailEl) diaryDetailEl.textContent = detail || '';
+        
+        const cancelBtn = document.querySelector('#diary-generation-area button.btn-ghost');
+        if (phase === 'diary_complete') {
+            if (diaryPhaseEl) diaryPhaseEl.textContent = '日記の生成が完了しました';
+            if (cancelBtn) cancelBtn.style.display = 'none';
+        } else if (phase === 'diary_init') {
+            if (diaryPhaseEl) diaryPhaseEl.textContent = '日記シミュレーション開始...';
+            if (cancelBtn) cancelBtn.style.display = 'inline-block';
+        } else {
+            if (diaryPhaseEl) diaryPhaseEl.textContent = '日記シミュレーション進行中...';
+            if (cancelBtn) cancelBtn.style.display = 'inline-block';
+        }
+    } else {
+        if (bar) bar.style.width = percent;
+        if (phaseEl && phaseNames[phase]) phaseEl.textContent = phaseNames[phase];
+        if (detailEl) detailEl.textContent = detail || '';
     }
 }
 
@@ -551,6 +572,19 @@ async function loadPackage(name) {
         const res = await fetch(`/api/packages/${name}`);
         currentPackage = await res.json();
         currentPackage._package_name = name;
+        
+        // 日記データの復元
+        diaryEntries = currentPackage.diaries || [];
+        const diaryContent = document.getElementById('diary-content');
+        if (diaryContent && diaryEntries.length > 0) {
+            diaryContent.innerHTML = Renderer.renderDiary(diaryEntries);
+            document.getElementById('diary-start-panel').style.display = 'none';
+        } else {
+            if (diaryContent) diaryContent.innerHTML = '';
+            document.getElementById('diary-start-panel').style.display = 'block';
+        }
+        document.getElementById('diary-generation-area').style.display = 'none';
+
         renderResults(currentPackage);
         showScreen('result-screen');
     } catch (e) {
@@ -622,17 +656,18 @@ const ARTIFACT_LABELS = {
     macro_profile: 'マクロプロフィール + 言語的表現',
     linguistic_expression: 'マクロプロフィール + 言語的表現',
     micro_parameters: 'ミクロパラメータ',
-    autobiographical_episodes: '自伝的エピソード',
     weekly_events_store: 'イベント列',
+    daily_logs: '日記 (7日分)',
 };
 
 const ARTIFACT_DEPENDENTS = {
-    concept_package: ['macro_profile', 'linguistic_expression', 'micro_parameters', 'autobiographical_episodes', 'weekly_events_store'],
-    macro_profile: ['micro_parameters', 'autobiographical_episodes', 'weekly_events_store'],
-    linguistic_expression: [],
-    micro_parameters: ['autobiographical_episodes', 'weekly_events_store'],
-    autobiographical_episodes: ['weekly_events_store'],
-    weekly_events_store: [],
+    concept_package: ['macro_profile', 'linguistic_expression', 'micro_parameters', 'autobiographical_episodes', 'weekly_events_store', 'daily_logs'],
+    macro_profile: ['micro_parameters', 'autobiographical_episodes', 'weekly_events_store', 'daily_logs'],
+    linguistic_expression: ['daily_logs'],
+    micro_parameters: ['autobiographical_episodes', 'weekly_events_store', 'daily_logs'],
+    autobiographical_episodes: ['weekly_events_store', 'daily_logs'],
+    weekly_events_store: ['daily_logs'],
+    daily_logs: [],
 };
 
 // アーティファクト名 → パッケージJSONのキー
@@ -640,9 +675,9 @@ const ARTIFACT_PKG_KEYS = {
     concept_package: 'concept_package',
     macro_profile: 'macro_profile',
     linguistic_expression: 'linguistic_expression',
-    micro_parameters: 'micro_parameters',
     autobiographical_episodes: 'autobiographical_episodes',
     weekly_events_store: 'weekly_events_store',
+    daily_logs: 'diaries',
 };
 
 let currentRegenArtifact = null;

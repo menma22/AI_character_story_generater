@@ -22,15 +22,17 @@ ARTIFACT_TO_PHASE = {
     "micro_parameters": "phase_a2",
     "autobiographical_episodes": "phase_a3",
     "weekly_events_store": "phase_d",
+    "daily_logs": "daily_loop",
 }
 
 ARTIFACT_DEPENDENTS = {
-    "concept_package": ["macro_profile", "linguistic_expression", "micro_parameters", "autobiographical_episodes", "weekly_events_store"],
-    "macro_profile": ["micro_parameters", "autobiographical_episodes", "weekly_events_store"],
-    "linguistic_expression": [],
-    "micro_parameters": ["autobiographical_episodes", "weekly_events_store"],
-    "autobiographical_episodes": ["weekly_events_store"],
-    "weekly_events_store": [],
+    "concept_package": ["macro_profile", "linguistic_expression", "micro_parameters", "autobiographical_episodes", "weekly_events_store", "daily_logs"],
+    "macro_profile": ["micro_parameters", "autobiographical_episodes", "weekly_events_store", "daily_logs"],
+    "linguistic_expression": ["daily_logs"],
+    "micro_parameters": ["autobiographical_episodes", "weekly_events_store", "daily_logs"],
+    "autobiographical_episodes": ["weekly_events_store", "daily_logs"],
+    "weekly_events_store": ["daily_logs"],
+    "daily_logs": [],
 }
 
 ARTIFACT_LABELS = {
@@ -40,6 +42,7 @@ ARTIFACT_LABELS = {
     "micro_parameters": "ミクロパラメータ",
     "autobiographical_episodes": "自伝的エピソード",
     "weekly_events_store": "イベント列",
+    "daily_logs": "日記 (7日分)",
 }
 
 
@@ -135,6 +138,9 @@ async def regenerate_artifact(
 
     elif phase == "phase_d":
         await _regenerate_phase_d(package, regen_context, profile, ws_manager, api_keys)
+
+    elif phase == "daily_loop":
+        await _regenerate_daily_loop(package, regen_context, profile, ws_manager, api_keys)
 
     if ws_manager:
         await ws_manager.send_agent_thought(
@@ -238,3 +244,38 @@ async def _regenerate_phase_d(package: CharacterPackage, regen_context: str, pro
     )
     result = await orch.run()
     package.weekly_events_store = result
+
+
+async def _regenerate_daily_loop(package: CharacterPackage, regen_context: str, profile: EvaluationProfile, ws_manager, api_keys: Optional[dict]):
+    """Daily Loop（日記 7日分）の再生成"""
+    from backend.agents.daily_loop.orchestrator import DailyLoopOrchestrator
+    from backend.config import AppConfig
+    
+    if not package.weekly_events_store:
+        raise ValueError("上流アーティファクトが未生成のため、日記を再生成できません")
+
+    cname = package.macro_profile.basic_info.name if package.macro_profile and package.macro_profile.basic_info else "Unknown_Character"
+    safe_name = cname.replace("/", "_").replace("\\", "_")
+
+    from datetime import datetime
+    session_id = f"diary_regen_{safe_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+    orch = DailyLoopOrchestrator(
+        package=package,
+        profile=profile,
+        ws_manager=ws_manager,
+        api_keys=api_keys,
+        session_id=session_id
+    )
+    # regen_context is passed to agents if supported, but currently DailyLoop might not support passing regeneration_context
+    # It will regenerate from scratch based on identical Phase D events.
+    results = await orch.run(days=7)
+
+    # 日記を保存
+    save_dir = AppConfig.STORAGE_DIR / safe_name / "diaries"
+    save_dir.mkdir(parents=True, exist_ok=True)
+
+    for day_state in results:
+        if day_state.diary:
+            diary_path = save_dir / f"day_{day_state.day:02d}.md"
+            diary_path.write_text(day_state.diary.content, encoding="utf-8")

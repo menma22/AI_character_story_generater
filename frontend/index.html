@@ -389,7 +389,7 @@
             </div>
             
             <div class="result-actions">
-                <button class="btn-ghost" style="color: var(--accent-error); border-color: rgba(239, 68, 68, 0.3);" onclick="regenerateCharacter()">🗑️ 破棄して再生成</button>
+                <button class="btn-ghost" style="color: var(--text-primary); border-color: rgba(255, 255, 255, 0.2);" onclick="regenerateCharacter()">🔄 セクションごとに再生成</button>
                 <button class="btn-ghost" onclick="downloadPackage()">📥 JSON保存</button>
                 <button class="btn-ghost" onclick="backToStart()">← Topへ</button>
             </div>
@@ -402,6 +402,45 @@
             <button class="btn-ghost" onclick="backToStart()">← 戻る</button>
         </section>
     </main>
+
+    <!-- セクション選択モーダル -->
+    <div id="section-select-modal" class="modal hidden">
+        <div class="modal-overlay" onclick="closeSectionSelectModal()"></div>
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>セクション単位の再生成</h3>
+                <button class="modal-close-btn" onclick="closeSectionSelectModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p style="margin-bottom: 1rem; color: var(--text-muted); font-size: 0.95rem;">
+                    再生成したいセクションを選択してください。特定のセクションを変更すると、それ以降のセクションにも影響を反映させることができます。
+                </p>
+                <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+                    <button class="btn-ghost" style="justify-content: flex-start; border: 1px solid var(--border-subtle); padding: 0.8rem;" onclick="closeSectionSelectModal(); openRegenerateModal('concept_package')">
+                        <strong style="display: inline-block; width: 30px;">1.</strong> コンセプトを再生成
+                    </button>
+                    <button class="btn-ghost" style="justify-content: flex-start; border: 1px solid var(--border-subtle); padding: 0.8rem;" onclick="closeSectionSelectModal(); openRegenerateModal('macro_profile')">
+                        <strong style="display: inline-block; width: 30px;">2.</strong> プロフィールを再生成
+                    </button>
+                    <button class="btn-ghost" style="justify-content: flex-start; border: 1px solid var(--border-subtle); padding: 0.8rem;" onclick="closeSectionSelectModal(); openRegenerateModal('micro_parameters')">
+                        <strong style="display: inline-block; width: 30px;">3.</strong> パラメータを再生成
+                    </button>
+                    <button class="btn-ghost" style="justify-content: flex-start; border: 1px solid var(--border-subtle); padding: 0.8rem;" onclick="closeSectionSelectModal(); openRegenerateModal('autobiographical_episodes')">
+                        <strong style="display: inline-block; width: 30px;">4.</strong> エピソードを再生成
+                    </button>
+                    <button class="btn-ghost" style="justify-content: flex-start; border: 1px solid var(--border-subtle); padding: 0.8rem;" onclick="closeSectionSelectModal(); openRegenerateModal('weekly_events_store')">
+                        <strong style="display: inline-block; width: 30px;">5.</strong> イベントを再生成
+                    </button>
+                    <button class="btn-ghost" style="justify-content: flex-start; border: 1px solid var(--border-subtle); padding: 0.8rem;" onclick="closeSectionSelectModal(); openRegenerateModal('daily_logs')">
+                        <strong style="display: inline-block; width: 30px;">6.</strong> 日記を再生成
+                    </button>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-ghost" onclick="closeSectionSelectModal()">キャンセル</button>
+            </div>
+        </div>
+    </div>
 
     <!-- 再生成モーダル -->
     <div id="regenerate-modal" class="modal hidden">

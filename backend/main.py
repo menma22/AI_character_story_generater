@@ -144,9 +144,24 @@ async def list_packages():
 @app.get("/api/packages/{package_name}")
 async def get_package(package_name: str):
     """特定の脚本パッケージを取得"""
-    pkg_path = AppConfig.STORAGE_DIR / package_name / "package.json"
+    base_dir = AppConfig.STORAGE_DIR / package_name
+    pkg_path = base_dir / "package.json"
     if pkg_path.exists():
-        return json.loads(pkg_path.read_text(encoding="utf-8"))
+        data = json.loads(pkg_path.read_text(encoding="utf-8"))
+        
+        # 日記データも読み込む
+        diaries = []
+        diaries_dir = base_dir / "diaries"
+        if diaries_dir.exists():
+            for d in sorted(diaries_dir.glob("day_*.md")):
+                try:
+                    day_num = int(d.stem.split("_")[1])
+                    content = d.read_text(encoding="utf-8")
+                    diaries.append({"day": day_num, "content": content})
+                except Exception:
+                    pass
+        data["diaries"] = diaries
+        return data
     return {"error": "パッケージが見つかりません"}
 
 
@@ -522,9 +537,16 @@ async def run_artifact_regeneration(package_name: str, artifact_name: str, instr
                 package = await regenerate_artifact(package, ds_artifact, "", base_profile, manager)
                 regenerated.append(ds_artifact)
 
-        # 保存
+        # 保存の前にバックアップを取得
         save_dir = AppConfig.STORAGE_DIR / package_name
         save_dir.mkdir(parents=True, exist_ok=True)
+        if pkg_path.exists():
+            from datetime import datetime
+            import shutil
+            backup_time = datetime.now().strftime('%Y%m%d_%H%M%S')
+            backup_path = save_dir / f"package_backup_{backup_time}_{artifact_name}_regen.json"
+            shutil.copy2(pkg_path, backup_path)
+
         pkg_json = package.model_dump(mode="json")
         (save_dir / "package.json").write_text(
             json.dumps(pkg_json, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -581,7 +603,14 @@ async def save_manual_edit(package_name: str, artifact_name: str, edited_data: d
         else:
             setattr(package, artifact_name, edited_data)
 
-        # 保存
+        # 保存の前にバックアップを取得
+        if pkg_path.exists():
+            from datetime import datetime
+            import shutil
+            backup_time = datetime.now().strftime('%Y%m%d_%H%M%S')
+            backup_path = pkg_path.parent / f"package_backup_{backup_time}_{artifact_name}_edit.json"
+            shutil.copy2(pkg_path, backup_path)
+
         pkg_json = package.model_dump(mode="json")
         pkg_path.write_text(
             json.dumps(pkg_json, ensure_ascii=False, indent=2), encoding="utf-8"
