@@ -62,9 +62,12 @@ logger = logging.getLogger(__name__)
 class KeyMemoryStore:
     """key memoryを短期記憶とは別の個別ファイルとして管理（1日1ファイル、7日間フル保持）"""
 
-    def __init__(self, character_name: str):
+    def __init__(self, character_name: str, session_id: str = None):
         safe_name = character_name.replace("/", "_").replace("\\", "_")
-        self.dir = AppConfig.STORAGE_DIR / safe_name / "key_memories"
+        if session_id:
+            self.dir = AppConfig.STORAGE_DIR / safe_name / "sessions" / session_id / "key_memories"
+        else:
+            self.dir = AppConfig.STORAGE_DIR / safe_name / "key_memories"
         self.dir.mkdir(parents=True, exist_ok=True)
 
     def save(self, km: KeyMemory) -> Path:
@@ -101,9 +104,12 @@ class ShortTermMemoryStore:
     """短期記憶DB（normal_area + diary_store）を日単位でファイル永続化。
     各日のスナップショットを保持し、最新ファイル＝現在状態。"""
 
-    def __init__(self, character_name: str):
+    def __init__(self, character_name: str, session_id: str = None):
         safe_name = character_name.replace("/", "_").replace("\\", "_")
-        self.dir = AppConfig.STORAGE_DIR / safe_name / "short_term_memory"
+        if session_id:
+            self.dir = AppConfig.STORAGE_DIR / safe_name / "sessions" / session_id / "short_term_memory"
+        else:
+            self.dir = AppConfig.STORAGE_DIR / safe_name / "short_term_memory"
         self.dir.mkdir(parents=True, exist_ok=True)
 
     def save(self, day: int, memory_db: ShortTermMemoryDB) -> Path:
@@ -164,9 +170,12 @@ class MoodStateStore:
     """ムード状態（PAD 3次元）を日単位でファイル永続化。
     daily_mood（Peak-End集約）とcarry_over_mood（翌日開始値）の両方を保持。"""
 
-    def __init__(self, character_name: str):
+    def __init__(self, character_name: str, session_id: str = None):
         safe_name = character_name.replace("/", "_").replace("\\", "_")
-        self.dir = AppConfig.STORAGE_DIR / safe_name / "mood_states"
+        if session_id:
+            self.dir = AppConfig.STORAGE_DIR / safe_name / "sessions" / session_id / "mood_states"
+        else:
+            self.dir = AppConfig.STORAGE_DIR / safe_name / "mood_states"
         self.dir.mkdir(parents=True, exist_ok=True)
 
     def save(self, day: int, daily_mood: MoodState, carry_over_mood: MoodState) -> Path:
@@ -231,9 +240,12 @@ class DailyLogStore:
     エージェントに渡す「短期記憶」= 各日の最新IDファイルを全て渡す。
     """
 
-    def __init__(self, character_name: str):
+    def __init__(self, character_name: str, session_id: str = None):
         safe_name = character_name.replace("/", "_").replace("\\", "_")
-        self.dir = AppConfig.STORAGE_DIR / safe_name / "daily_logs"
+        if session_id:
+            self.dir = AppConfig.STORAGE_DIR / safe_name / "sessions" / session_id / "daily_logs"
+        else:
+            self.dir = AppConfig.STORAGE_DIR / safe_name / "daily_logs"
         self.dir.mkdir(parents=True, exist_ok=True)
 
     def _day_dir(self, day: int) -> Path:
@@ -319,10 +331,10 @@ class DailyLoopOrchestrator:
         self._cname = cname or "Unknown_Character"
 
         # 各Store初期化
-        self.key_memory_store = KeyMemoryStore(self._cname)
-        self.memory_store = ShortTermMemoryStore(self._cname)
-        self.mood_store = MoodStateStore(self._cname)
-        self.daily_log_store = DailyLogStore(self._cname)
+        self.key_memory_store = KeyMemoryStore(self._cname, session_id=self.session_id)
+        self.memory_store = ShortTermMemoryStore(self._cname, session_id=self.session_id)
+        self.mood_store = MoodStateStore(self._cname, session_id=self.session_id)
+        self.daily_log_store = DailyLogStore(self._cname, session_id=self.session_id)
 
         # 状態: 既存スナップショットがあれば復元、なければ初期値
         restored_mood = self.mood_store.load_latest_carry_over()
@@ -445,7 +457,12 @@ class DailyLoopOrchestrator:
         """過去の日記を独立DBとして読み込み（参照用）"""
         parts = []
         # diaries/ フォルダから直接読み込み
-        diaries_dir = AppConfig.STORAGE_DIR / self._cname.replace("/", "_").replace("\\", "_") / "diaries"
+        safe_name = self._cname.replace("/", "_").replace("\\", "_")
+        if self.session_id:
+            diaries_dir = AppConfig.STORAGE_DIR / safe_name / "sessions" / self.session_id / "diaries"
+        else:
+            diaries_dir = AppConfig.STORAGE_DIR / safe_name / "diaries"
+
         if diaries_dir.exists():
             for diary_file in sorted(diaries_dir.glob("day_*.md")):
                 try:
@@ -1987,8 +2004,8 @@ Day: {day}
             try:
                 from backend.storage.md_storage import save_daily_log, save_rim_outputs
                 cname = self.package.macro_profile.basic_info.name if (self.package.macro_profile and self.package.macro_profile.basic_info) else "Unknown_Character"
-                await save_daily_log(cname, day, day_state)
-                await save_rim_outputs(cname, day, day_state)
+                await save_daily_log(cname, day, day_state, session_id=self.session_id)
+                await save_rim_outputs(cname, day, day_state, session_id=self.session_id)
             except Exception as e:
                 import logging
                 logging.getLogger("daily_loop").error(f"MD保存エラー: {e}")
@@ -1997,7 +2014,11 @@ Day: {day}
             # （中断時にも翌日予定が失われないよう、各Day完了後に必ず永続化）
             try:
                 from backend.storage.md_storage import safe_name as _safe_name
-                pkg_dir = AppConfig.STORAGE_DIR / _safe_name(self._cname)
+                safe_folder = _safe_name(self._cname)
+                if self.session_id:
+                    pkg_dir = AppConfig.STORAGE_DIR / safe_folder / "sessions" / self.session_id
+                else:
+                    pkg_dir = AppConfig.STORAGE_DIR / safe_folder
                 pkg_dir.mkdir(parents=True, exist_ok=True)
                 pkg_path = pkg_dir / "package.json"
                 pkg_path.write_text(

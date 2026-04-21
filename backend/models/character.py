@@ -435,4 +435,3 @@ class CharacterPackage(BaseModel):
     character_capabilities: Optional[CharacterCapabilities] = None
     composition_preferences: Optional[StoryCompositionPreferences] = None
     audit_report: dict = Field(default_factory=dict)
-    diaries: list[dict] = Field(default_factory=list, description="生成済みの日記（Day 1-7）")

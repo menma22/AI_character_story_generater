@@ -260,23 +260,6 @@ async def _regenerate_daily_loop(package: CharacterPackage, regen_context: str, 
     from datetime import datetime
     session_id = f"diary_regen_{safe_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
-    import shutil
-    
-    # 既存の状態（記憶、ムード、ログ）を退避して、Day 1から強制的に再生成させる（バージョン管理）
-    base_dir = AppConfig.STORAGE_DIR / safe_name
-    backup_root = base_dir / "backups" / session_id
-    backup_root.mkdir(parents=True, exist_ok=True)
-    
-    for sub_dir in ["daily_logs", "mood_states", "short_term_memory", "key_memories", "diaries"]:
-        target = base_dir / sub_dir
-        if target.exists():
-            dest = backup_root / sub_dir
-            logger.info(f"[_regenerate_daily_loop] Backing up {target} to {dest}")
-            try:
-                shutil.move(str(target), str(dest))
-            except Exception as e:
-                logger.error(f"[_regenerate_daily_loop] Failed to backup {sub_dir}: {e}")
-
     orch = DailyLoopOrchestrator(
         package=package,
         profile=profile,
@@ -285,14 +268,6 @@ async def _regenerate_daily_loop(package: CharacterPackage, regen_context: str, 
         session_id=session_id,
         regeneration_context=regen_context
     )
-    # 状態をクリア（退避）したため、run(days=7) は必ず Day 1 から開始される
+    # run(days=7) を実行
     results = await orch.run(days=7)
-
-    # 日記を保存
-    save_dir = AppConfig.STORAGE_DIR / safe_name / "diaries"
-    save_dir.mkdir(parents=True, exist_ok=True)
-
-    for day_state in results:
-        if day_state.diary:
-            diary_path = save_dir / f"day_{day_state.day:02d}.md"
-            diary_path.write_text(day_state.diary.content, encoding="utf-8")
+    return results

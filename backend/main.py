@@ -149,11 +149,22 @@ async def get_package(package_name: str):
     if pkg_path.exists():
         data = json.loads(pkg_path.read_text(encoding="utf-8"))
         
-        # 日記データも読み込む
+        # 日記データも読み込む (最新セッションがあればそれを優先)
         diaries = []
-        diaries_dir = base_dir / "diaries"
-        if diaries_dir.exists():
-            for d in sorted(diaries_dir.glob("day_*.md")):
+        # セッションフォルダを探す
+        sessions_dir = base_dir / "sessions"
+        latest_diaries_dir = base_dir / "diaries"
+        
+        if sessions_dir.exists():
+            # フォルダ名でソートして最新のものを探す (diary_regen_... や v1, v2 など)
+            session_folders = sorted([d for d in sessions_dir.iterdir() if d.is_dir()])
+            if session_folders:
+                latest_session_dir = session_folders[-1]
+                if (latest_session_dir / "diaries").exists():
+                    latest_diaries_dir = latest_session_dir / "diaries"
+        
+        if latest_diaries_dir.exists():
+            for d in sorted(latest_diaries_dir.glob("day_*.md")):
                 try:
                     day_num = int(d.stem.split("_")[1])
                     content = d.read_text(encoding="utf-8")
@@ -472,23 +483,6 @@ async def run_diary_generation(package_name: str, days: int = 7, profile_name: s
             session_id=session_id,
         )
         results = await orchestrator.run(days=days)
-
-        # 日記を保存
-        save_dir = AppConfig.STORAGE_DIR / package_name / "diaries"
-        save_dir.mkdir(parents=True, exist_ok=True)
-
-        for day_state in results:
-            if day_state.diary:
-                diary_path = save_dir / f"day_{day_state.day:02d}.md"
-                diary_path.write_text(day_state.diary.content, encoding="utf-8")
-
-        # protagonist_planイベントを含む最新パッケージをpackage.jsonに保存
-        # （ループ内でも保存しているが、完了後に確実に最終状態を反映）
-        pkg_path.write_text(
-            json.dumps(package.model_dump(mode="json"), ensure_ascii=False, indent=2),
-            encoding="utf-8"
-        )
-
         await manager.send_progress("diary_complete", 1.0, f"{len(results)}日分の日記生成が完了しました (session: {session_id})")
         
     except Exception as e:
@@ -600,17 +594,6 @@ async def save_manual_edit(package_name: str, artifact_name: str, edited_data: d
         if model_cls:
             validated = model_cls(**edited_data)
             setattr(package, artifact_name, validated)
-        elif artifact_name == "daily_logs":
-            # edited_data は list[dict] (day, content) であることを想定
-            package.diaries = edited_data
-            # 個別ファイル (.md) にも同期保存
-            diaries_dir = pkg_path.parent / "diaries"
-            diaries_dir.mkdir(parents=True, exist_ok=True)
-            for d in edited_data:
-                day_num = d.get("day")
-                content = d.get("content", "")
-                if day_num is not None:
-                    (diaries_dir / f"day_{day_num:02d}.md").write_text(content, encoding="utf-8")
         else:
             setattr(package, artifact_name, edited_data)
 

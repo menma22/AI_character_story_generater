@@ -225,20 +225,24 @@ async def save_character_profile(character_name: str, package: CharacterPackage)
     file_path.write_text(md_content, encoding="utf-8")
     return file_path
 
-async def save_daily_log(character_name: str, day: int, day_state):
+async def save_daily_log(character_name: str, day: int, day_state, session_id: Optional[str] = None):
     """
     1日の処理状態を完全にカバーするMarkdownログを保存する。
-    イベント処理（Perceiver/Impulsive/Reflective/Integration/SceneNarration/ValuesViolation）、
-    内省、日記、記憶、ムード変遷を全て記録する。
+    セッションIDが指定されている場合は、sessions/<session_id>/daily_logs に保存する。
     """
     if not character_name:
         character_name = "Unknown_Character"
 
     char_dir = STORAGE_ROOT / safe_name(character_name)
-    logs_dir = char_dir / "daily_logs"
+    if session_id:
+        logs_dir = char_dir / "sessions" / session_id / "daily_logs"
+    else:
+        logs_dir = char_dir / "daily_logs"
     _ensure_dir(logs_dir)
 
     md_content = f"# Day {day} ログ — {character_name}\n\n"
+    if session_id:
+        md_content += f"*Session: {session_id}*\n\n"
     md_content += f"**日次集約ムード (Peak-End):** V={day_state.daily_mood.valence:.1f} / A={day_state.daily_mood.arousal:.1f} / D={day_state.daily_mood.dominance:.1f}\n\n"
 
     # ── 1. イベント処理詳細 ──
@@ -253,9 +257,6 @@ async def save_daily_log(character_name: str, day: int, day_state):
 
         # ムード変遷
         md_content += f"**ムード変遷:** V={ep.mood_before.valence:.1f}→{ep.mood_after.valence:.1f} / A={ep.mood_before.arousal:.1f}→{ep.mood_after.arousal:.1f} / D={ep.mood_before.dominance:.1f}→{ep.mood_after.dominance:.1f}\n\n"
-
-        # 衝動反応（Impulsive）と理性分析（Reflective）は別ファイルに保存
-        # → save_rim_outputs() を参照
 
         # Integration (行動決定)
         if ep.integration_output and ep.integration_output.final_action:
@@ -298,6 +299,10 @@ async def save_daily_log(character_name: str, day: int, day_state):
     if day_state.diary:
         md_content += f"> {day_state.diary.content}\n\n"
         md_content += f"*執筆時ムード: V={day_state.diary.mood_at_writing.valence:.1f} A={day_state.diary.mood_at_writing.arousal:.1f} D={day_state.diary.mood_at_writing.dominance:.1f}*\n\n"
+        # 日記を個別の.mdとしても保存（sessions 考慮済みの logs_dir を親とする diaries フォルダ）
+        diaries_dir = logs_dir.parent / "diaries"
+        _ensure_dir(diaries_dir)
+        (diaries_dir / f"day_{day:02d}.md").write_text(day_state.diary.content, encoding="utf-8")
     else:
         md_content += "*日記なし*\n\n"
 
@@ -343,20 +348,24 @@ async def save_daily_log(character_name: str, day: int, day_state):
     return file_path
 
 
-async def save_rim_outputs(character_name: str, day: int, day_state):
+async def save_rim_outputs(character_name: str, day: int, day_state, session_id: Optional[str] = None):
     """
     衝動エージェント（Impulsive）と理性エージェント（Reflective）の出力を
     Dayログとは別ファイルに保存する。
-    これらの出力は日記AIには渡さず、デバッグ・分析用途でのみ使用される。
     """
     if not character_name:
         character_name = "Unknown_Character"
 
     char_dir = STORAGE_ROOT / safe_name(character_name)
-    logs_dir = char_dir / "daily_logs"
+    if session_id:
+        logs_dir = char_dir / "sessions" / session_id / "daily_logs"
+    else:
+        logs_dir = char_dir / "daily_logs"
     _ensure_dir(logs_dir)
 
     md_content = f"# Day {day} RIM出力（衝動/理性エージェント） — {character_name}\n\n"
+    if session_id:
+        md_content += f"*Session: {session_id}*\n\n"
     md_content += "*このファイルは衝動エージェント（Impulsive）と理性エージェント（Reflective）の*\n"
     md_content += "*生出力を保存したものです。日記AIには渡されません。*\n\n"
 
