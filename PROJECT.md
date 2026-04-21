@@ -1055,7 +1055,7 @@ powershell -Command "python -m backend.main 2>&1 | Out-File -Encoding utf8 serve
 > 必ずプロジェクトルートで実行してください。`backend/main.py` を直接実行するとインポートエラーが発生します。
 
 ### 3. 現在の状態
-- **最新起動**: 2026-04-21 18:48 (JST)
-- **PID**: 2108
+- **最新起動**: 2026-04-21 21:53 (JST)
+- **PID**: 24064
 - **ポート**: 8001
 - **状態ログ**: `knowledge/fact/app_status.md`
