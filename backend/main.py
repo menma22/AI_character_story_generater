@@ -439,6 +439,11 @@ async def _finalize_character_generation(package):
     )
 
     await manager.send_progress("complete", 1.0, f"キャラクター「{char_name}」の生成が完了しました")
+    
+    # バージョン保存を実行（世代管理）
+    from backend.storage.md_storage import save_versioned_package
+    await save_versioned_package(char_name, package, manager.thought_history)
+
     await manager.send_phase_result("complete", {
         "package_name": save_dir.name,
         "character_name": char_name,
@@ -516,7 +521,14 @@ async def run_artifact_regeneration(package_name: str, artifact_name: str, instr
         base_profile = PROFILES.get(profile_name, PROFILES["draft"])
 
         label = ARTIFACT_LABELS.get(artifact_name, artifact_name)
-        await manager.send_progress("regeneration", 0.0, f"「{label}」を再生成中...")
+        
+        # 日記の再生成の場合は日記生成用のUIフローをトリガーする
+        phase_name = "regeneration"
+        if artifact_name == "daily_logs":
+            phase_name = "diary_init"
+            await manager.send_progress(phase_name, 0.0, f"日記の再生成を開始します...")
+        else:
+            await manager.send_progress(phase_name, 0.0, f"「{label}」を再生成中...")
 
         # メインアーティファクトの再生成
         package = await regenerate_artifact(package, artifact_name, instructions, base_profile, manager, api_keys=api_keys)
@@ -524,10 +536,9 @@ async def run_artifact_regeneration(package_name: str, artifact_name: str, instr
         # カスケード再生成
         regenerated = [artifact_name]
         if cascade:
-            downstream = get_downstream_artifacts(artifact_name)
             for i, ds_artifact in enumerate(downstream):
                 ds_label = ARTIFACT_LABELS.get(ds_artifact, ds_artifact)
-                await manager.send_progress("regeneration", (i + 1) / (len(downstream) + 1), f"カスケード再生成: {ds_label}")
+                await manager.send_progress(phase_name, (i + 1) / (len(downstream) + 1), f"カスケード再生成: {ds_label}")
                 package = await regenerate_artifact(package, ds_artifact, "", base_profile, manager)
                 regenerated.append(ds_artifact)
 
@@ -546,7 +557,12 @@ async def run_artifact_regeneration(package_name: str, artifact_name: str, instr
             json.dumps(pkg_json, ensure_ascii=False, indent=2), encoding="utf-8"
         )
 
-        await manager.send_progress("regeneration", 1.0, "再生成完了")
+        # バージョン保存を実行（世代管理）
+        from backend.storage.md_storage import save_versioned_package
+        char_name = package.macro_profile.basic_info.name if package.macro_profile and package.macro_profile.basic_info else package_name
+        await save_versioned_package(char_name, package, manager.thought_history)
+
+        await manager.send_progress(phase_name, 1.0, "再生成完了")
         await manager.send_phase_result("regenerate_complete", {
             "package_name": package_name,
             "regenerated": regenerated,

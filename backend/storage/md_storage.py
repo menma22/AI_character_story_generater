@@ -13,6 +13,27 @@ def safe_name(name: str) -> str:
     """Sanitizes character name for filesystem usage"""
     return "".join([c if c.isalnum() or c in (" ", "-", "_") else "_" for c in name]).strip()
 
+def get_next_version_name(character_name: str) -> str:
+    """次のバージョン名（v1, v2, ...）を決定する"""
+    char_dir = STORAGE_ROOT / safe_name(character_name)
+    versions_dir = char_dir / "versions"
+    if not versions_dir.exists():
+        return "v1"
+    
+    existing_versions = []
+    for d in versions_dir.iterdir():
+        if d.is_dir() and d.name.startswith("v"):
+            try:
+                num = int(d.name[1:])
+                existing_versions.append(num)
+            except ValueError:
+                continue
+    
+    if not existing_versions:
+        return "v1"
+    
+    return f"v{max(existing_versions) + 1}"
+
 async def save_checkpoint(character_name: str, package: CharacterPackage):
     """Saves the current character package for potential resumption"""
     if not character_name:
@@ -400,3 +421,60 @@ async def save_rim_outputs(character_name: str, day: int, day_state, session_id:
     file_path = logs_dir / f"Day_{day}_rim_outputs.md"
     file_path.write_text(md_content, encoding="utf-8")
     return file_path
+
+async def save_versioned_package(character_name: str, package: CharacterPackage, logs: list[dict] = None) -> pathlib.Path:
+    """
+    現在のパッケージ状態をバージョンフォルダ（versions/vN/）に保存し、
+    トップレベルのpackage.jsonも更新する。
+    """
+    import shutil
+    from datetime import datetime
+
+    c_safe = safe_name(character_name)
+    char_dir = STORAGE_ROOT / c_safe
+    v_name = get_next_version_name(character_name)
+    v_dir = char_dir / "versions" / v_name
+    _ensure_dir(v_dir)
+
+    # 1. package.json 保存
+    pkg_json = package.model_dump(mode="json")
+    # メタデータにバージョン情報を付与
+    if "metadata" not in pkg_json:
+        pkg_json["metadata"] = {}
+    pkg_json["metadata"]["version"] = v_name
+    pkg_json["metadata"]["saved_at"] = datetime.now().isoformat()
+    
+    json_data = json.dumps(pkg_json, ensure_ascii=False, indent=2)
+    
+    # バージョンフォルダ内
+    (v_dir / "package.json").write_text(json_data, encoding="utf-8")
+    # トップレベル（最新版）
+    (char_dir / "package.json").write_text(json_data, encoding="utf-8")
+
+    # 2. 既存の関連フォルダをバージョンフォルダへ移動、またはコピー
+    # (diaries, daily_logs, sessions, key_memories, short_term_memory, mood_states)
+    target_folders = [
+        "diaries", "daily_logs", "sessions", "key_memories", 
+        "short_term_memory", "mood_states", "agent_logs.json", "agent_logs.md",
+        "00_profile.md"
+    ]
+    
+    for item_name in target_folders:
+        src = char_dir / item_name
+        if src.exists():
+            if src.is_dir():
+                shutil.copytree(src, v_dir / item_name, dirs_exist_ok=True)
+            else:
+                shutil.copy2(src, v_dir / item_name)
+
+    # 3. 引数のログがあればそれも保存
+    if logs:
+        # バージョンフォルダ内のログを更新
+        v_json_log = v_dir / "agent_logs.json"
+        v_json_log.write_text(json.dumps(logs, ensure_ascii=False, indent=2), encoding="utf-8")
+        
+        # トップレベルのログも更新（共通関数を流用）
+        await save_logs(character_name, logs)
+
+    print(f"[md_storage] Saved version {v_name} for {character_name}")
+    return v_dir

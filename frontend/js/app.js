@@ -726,9 +726,30 @@ function executeRegeneration() {
     const instructions = document.getElementById('regen-instructions').value.trim();
     const cascade = document.getElementById('regen-cascade-check')?.checked || false;
 
-    document.getElementById('regen-submit-btn').disabled = true;
-    document.getElementById('regen-progress-area').classList.remove('hidden');
-    document.getElementById('regen-detail').textContent = '再生成を開始しています...';
+    // 日記の再生成の場合はモーダルを閉じて日記タブへ遷移
+    if (currentRegenArtifact === 'daily_logs') {
+        // モーダルを閉じるために一時的にフラグを落とす
+        isRegenerating = false;
+        closeRegenerateModal();
+        isRegenerating = true;
+
+        switchTab('diary');
+        document.getElementById('diary-start-panel').style.display = 'none';
+        document.getElementById('diary-generation-area').style.display = 'block';
+        document.getElementById('diary-thought-log').innerHTML = ''; // ログをクリア
+        
+        // 進捗バーとテキストのリセット
+        const diaryBar = document.getElementById('diary-progress-bar');
+        const diaryPhaseEl = document.getElementById('diary-gen-phase');
+        const diaryDetailEl = document.getElementById('diary-gen-detail');
+        if (diaryBar) diaryBar.style.width = '0%';
+        if (diaryPhaseEl) diaryPhaseEl.textContent = '日記の再生成を開始します...';
+        if (diaryDetailEl) diaryDetailEl.textContent = '';
+    } else {
+        document.getElementById('regen-submit-btn').disabled = true;
+        document.getElementById('regen-progress-area').classList.remove('hidden');
+        document.getElementById('regen-detail').textContent = '再生成を開始しています...';
+    }
 
     wsManager.send('regenerate_artifact', {
         package_name: currentPackage._package_name,
@@ -775,6 +796,13 @@ updateProgress = function(phase, progress, detail) {
         const detailEl = document.getElementById('regen-detail');
         if (bar) bar.style.width = `${Math.min(progress * 100, 100)}%`;
         if (detailEl) detailEl.textContent = detail || '';
+    }
+    // 日記の再生成フェーズが始まったらモーダルを確実に閉じる（バックアップ的処理）
+    if (phase === 'diary_init') {
+        const modal = document.getElementById('regenerate-modal');
+        if (modal && !modal.classList.contains('hidden')) {
+            modal.classList.add('hidden');
+        }
     }
 };
 
