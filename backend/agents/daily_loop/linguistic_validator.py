@@ -133,12 +133,12 @@ V={mood.valence:.1f} A={mood.arousal:.1f} D={mood.dominance:.1f}
         if vf.second_person_by_context:
             spc = vf.second_person_by_context
             parts.append("二人称の使い分け:")
-            if spc.to_intimate:
-                parts.append(f"  - 親しい人へ: {spc.to_intimate}")
-            if spc.to_superior:
-                parts.append(f"  - 目上へ: {spc.to_superior}")
-            if spc.to_stranger:
-                parts.append(f"  - 知らない人へ: {spc.to_stranger}")
+            if spc.get("to_intimate"):
+                parts.append(f"  - 親しい人へ: {spc.get('to_intimate')}")
+            if spc.get("to_superior"):
+                parts.append(f"  - 目上へ: {spc.get('to_superior')}")
+            if spc.get("to_stranger"):
+                parts.append(f"  - 知らない人へ: {spc.get('to_stranger')}")
 
         parts.append(f"口癖: {', '.join(vf.speech_patterns)}")
         parts.append(f"文末表現: {', '.join(vf.sentence_endings)}")

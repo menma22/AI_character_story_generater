@@ -593,7 +593,22 @@ async def call_llm_agentic(
             
             messages.append({"role": "user", "content": tool_results})
             
-            if any(block.name.startswith("submit_") and not res["is_error"] for block, res in zip(tool_use_blocks, tool_results)):
+            # 終了判定: いずれかの submit_ ツールが「成功」を返したか
+            success_found = False
+            for block, res in zip(tool_use_blocks, tool_results):
+                if block.name.startswith("submit_") and not res["is_error"]:
+                    try:
+                        # ハンドラが返したJSONをチェック
+                        parsed = json.loads(res["content"])
+                        status = str(parsed.get("status", "")).upper()
+                        if status == "SUCCESS" or "SUCCESS" in status:
+                            success_found = True
+                    except:
+                        # JSONでない場合は文字列に SUCCESS があれば成功とみなす
+                        if "SUCCESS" in str(res["content"]).upper():
+                            success_found = True
+            
+            if success_found:
                 logger.info(f"[call_llm_agentic] Final submit tool called successfully. Exiting loop.")
                 return "Success"
         else:
@@ -730,34 +745,81 @@ async def call_llm_agentic_gemini(
         if not response.candidates or not candidate or not candidate.content.parts:
             raise ValueError("Geminiから有効な回答を得られませんでした。")
 
-        part = response.candidates[0].content.parts[0]
+        # 応答から全関数呼び出しを抽出
+        candidate = response.candidates[0]
+        tool_calls = [p.function_call for p in candidate.content.parts if p.function_call]
         
-        if part.function_call:
-            call = part.function_call
-            if call.name in tool_map:
+        if tool_calls:
+            responses_parts = []
+            any_submit_success = False
+            
+            for call in tool_calls:
+                if call.name in tool_map:
+                    try:
+                        handler = tool_map[call.name]
+                        import inspect
+                        # call.args (MapValue) を通常の dict に変換
+                        def _to_plain(obj):
+                            if hasattr(obj, 'items'): return {k: _to_plain(v) for k, v in obj.items()}
+                            elif isinstance(obj, (list, tuple)): return [_to_plain(i) for i in obj]
+                            return obj
+                        args = _to_plain(call.args)
+                        
+                        result_data = await handler(**args) if inspect.iscoroutinefunction(handler) else handler(**args)
+                        is_error = False
+                    except Exception as e:
+                        logger.error(f"[call_llm_agentic_gemini] Tool error: {e}")
+                        result_data = {"status": "ERROR", "message": str(e)}
+                        is_error = True
+                    
+                    # 応答用パーツを作成
+                    # MapValue 用にシリアライズ可能な形式に変換
+                    plain_result = json.loads(json.dumps(result_data, default=str))
+                    responses_parts.append(genai.protos.Part(
+                        function_response=genai.protos.FunctionResponse(name=call.name, response=plain_result)
+                    ))
+                    
+                    # 提出ツールの成功判定
+                    if call.name.startswith("submit_") and not is_error:
+                        if isinstance(result_data, dict):
+                            status = str(result_data.get("status", "")).upper()
+                            if status == "SUCCESS" or "SUCCESS" in status:
+                                any_submit_success = True
+                        elif "SUCCESS" in str(result_data).upper():
+                            any_submit_success = True
+                else:
+                    responses_parts.append(genai.protos.Part(
+                        function_response=genai.protos.FunctionResponse(
+                            name=call.name, 
+                            response={"status": "ERROR", "message": f"Tool '{call.name}' not found."}
+                        )
+                    ))
+            
+            # 結果を次のメッセージとして設定
+            current_message = responses_parts
+            
+            if any_submit_success:
+                logger.info("[call_llm_agentic_gemini] Final submit tool called successfully. Exiting loop.")
+                # 最後の実行結果を履歴に送っておく（任意だが整合性のため）
                 try:
-                    handler = tool_map[call.name]
-                    import inspect
-                    def _to_plain(obj):
-                        if hasattr(obj, 'items'): return {k: _to_plain(v) for k, v in obj.items()}
-                        elif isinstance(obj, (list, tuple)): return [_to_plain(i) for i in obj]
-                        return obj
-                    args = _to_plain(call.args)
-                    result_data = await handler(**args) if inspect.iscoroutinefunction(handler) else handler(**args)
-                    is_error = False
+                    await asyncio.to_thread(chat.send_message, current_message)
                 except Exception as e:
-                    result_data = {"error": str(e)}; is_error = True
-            else:
-                result_data = {"error": "Not Found"}; is_error = True
-            
-            plain_result = json.loads(json.dumps(result_data, default=str))
-            current_message = genai.protos.Part(
-                function_response=genai.protos.FunctionResponse(name=call.name, response=plain_result)
-            )
-            
-            if call.name.startswith("submit_") and not is_error:
+                    logger.warning(f"[call_llm_agentic_gemini] Failed to send final tool response: {e}")
                 return "Success"
         else:
-            current_message = "指示: 用意されたツールのいずれかを呼び出してください。"
+            # 関数呼び出しがなかった場合
+            text_parts = [p.text for p in candidate.content.parts if p.text]
+            if text_parts:
+                # テキストを返した場合は、次にツールを呼ぶよう促す
+                current_message = "指示: 用意されたツールのいずれかを呼び出してプロセスを完了させてください。"
+                # 思考ログへの送信（managerが存在する場合）
+                try:
+                    from backend.websocket.handler import manager
+                    if manager:
+                        await manager.send_agent_thought(agent_name or "Agent", "".join(text_parts), "thinking")
+                except: pass
+            else:
+                current_message = "指示: 用意されたツールのいずれかを呼び出してください。"
 
-    return chat.history[-1].parts[0].text
+    logger.warning(f"[call_llm_agentic_gemini] Max iterations ({max_iterations}) reached.")
+    return chat.history[-1].parts[0].text if chat.history and chat.history[-1].parts else "Iteration limit reached"

@@ -322,6 +322,7 @@ class DailyLoopOrchestrator:
         self.profile = profile
         self.ws = ws_manager
         self.api_keys = api_keys or {}
+        self.session_id = session_id
         self.regeneration_context = regeneration_context  # 追加
 
         # キャラ名解決（全Storeで共通使用）
@@ -549,12 +550,12 @@ class DailyLoopOrchestrator:
             if vf.second_person_by_context:
                 spc = vf.second_person_by_context
                 second_person_parts = []
-                if spc.to_intimate:
-                    second_person_parts.append(f"親しい人への二人称: {spc.to_intimate}")
-                if spc.to_superior:
-                    second_person_parts.append(f"目上への二人称: {spc.to_superior}")
-                if spc.to_stranger:
-                    second_person_parts.append(f"知らない人への二人称: {spc.to_stranger}")
+                if spc.get("to_intimate"):
+                    second_person_parts.append(f"親しい人への二人称: {spc.get('to_intimate')}")
+                if spc.get("to_superior"):
+                    second_person_parts.append(f"目上への二人称: {spc.get('to_superior')}")
+                if spc.get("to_stranger"):
+                    second_person_parts.append(f"知らない人への二人称: {spc.get('to_stranger')}")
                 if second_person_parts:
                     parts.append("二人称の使い分け:\n  " + "\n  ".join(second_person_parts))
 
