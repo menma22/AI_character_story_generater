@@ -13,7 +13,7 @@
 ```
 AI_character_story_generater/
 ├── backend/
-│   ├── main.py                                # FastAPI エントリポイント (WebSocket + REST API) ※2026-04-21 23:35 再起動完了 (PID: 15336)
+│   ├── main.py                                # FastAPI エントリポイント (WebSocket + REST API) ※2026-04-22 00:08 再起動完了 (PID: 1528)
 │   ├── regeneration.py                        # アーティファクト個別再生成モジュール (依存マップ + 再生成コア)
 │   ├── config.py                              # 設定管理 (APIキー, 4段階プロファイル, モデル定義)
 │   ├── agents/
@@ -1055,7 +1055,7 @@ powershell -Command "python -m backend.main 2>&1 | Out-File -Encoding utf8 serve
 > 必ずプロジェクトルートで実行してください。`backend/main.py` を直接実行するとインポートエラーが発生します。
 
 ### 3. 現在の状態
-- **最新起動**: 2026-04-21 23:35 (JST)
-- **PID**: 15336
+- **最新起動**: 2026-04-22 00:08 (JST)
+- **PID**: 1528
 - **ポート**: 8001
 - **状態ログ**: `knowledge/fact/app_status.md`
