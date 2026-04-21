@@ -13,7 +13,7 @@
 ```
 AI_character_story_generater/
 ├── backend/
-│   ├── main.py                                # FastAPI エントリポイント (WebSocket + REST API) ※2026-04-22 00:08 再起動完了 (PID: 1528)
+│   ├── main.py                                # FastAPI エントリポイント (WebSocket + REST API) ※2026-04-22 01:32 再起動完了 (PID: 19668)
 │   ├── regeneration.py                        # アーティファクト個別再生成モジュール (依存マップ + 再生成コア)
 │   ├── config.py                              # 設定管理 (APIキー, 4段階プロファイル, モデル定義)
 │   ├── agents/
@@ -31,7 +31,7 @@ AI_character_story_generater/
 │   │   │   ├── orchestrator.py                # Phase D: 7日間イベント列 (Step5エージェンティック, 2層自己批判)
 │   │   │   └── capabilities_agent.py          # CharacterCapabilitiesAgent (Web検索2回以上+批評+内省, エージェンティック化)
 │   │   ├── daily_loop/
-│   │   │   ├── orchestrator.py                # Day 1-7 日次ループ (RIM + 感情強度判定 + 内省 + 日記)
+│   │   │   ├── orchestrator.py                # Day 1-7 日次ループ (RIM + 感情強度判定 + 内省 + 日記) ※cancel()中断機能・指示反映対応済
 │   │   │   ├── activation.py                  # パラメータ動的活性化 (5-10個選択, v10 §3.5)
 │   │   │   ├── verification.py                # 裏方出力検証 (#1-#52漏洩チェック, v10 §4.6b)
 │   │   │   ├── checkers.py                    # 4つの個別チェックAI (Profile/Temperament/Personality/Values)
@@ -293,7 +293,9 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 - **生成進捗管理（管理ボックス）**: `GenerationStatus` モデルによる厳密な状態管理。各フェーズ（A1-3, D）および Phase D 内部の各ステップの完了をフラグで管理し、重複生成を構造的に防止。
 - **4画面構成**: 起動 → 生成中（思考とフェーズトラッカー） → Day 0結果（6タブ・ダッシュボード） → 履歴
 - **生成進行UI（Phase Tracker）**: 生成中画面にて、現在のパイプライン実行状態（Creative Director → A-1 → A-2 → A-3 → D）をステップ形式で可視化。
-- **インライン日記生成とキャンセル機能**: 「日記」ダッシュボード内で、他画面に遷移せずインラインで思考ログと生成中の日記をリアルタイム表示。
+- **日記生成ワークフローの統合と UI 刷新**: 日記タブ内に「統合コントロールパネル」を実装。生成前のインライン指示入力（コメント機能）、状態に応じて「生成/再生成/中断」と役割が切り替わるダイナミックなアクションボタン、リアルタイムな進捗表示・思考ログを単一画面に統合し、試行錯誤のループを高速化。
+- **指示入力 (regeneration_context)**: 日記の初回生成および再生成時にユーザーからのコメント（「もっと詩的に」など）をバックエンドのオーケストレーターに渡し、プロントに反映させる仕組みを導入。
+- **中断機能 (Cancellation)**: WebSocket 経由の `cancel_diary` アクションにより、実行中の日記生成プロセスを安全に停止し、UIを即座にリセット可能。
 - **エラー耐性と生成再開（Resume）**: Pydantic v2 の `field_validator` による自己修復 + 各Phase完了ごとのチェックポイント保存。
 - **アーティファクト個別再生成・編集**: 各タブ（コンセプト/プロフィール/パラメータ/エピソード/イベント）に「再生成」「編集」ボタンを配置。加えて、初期画面の「破棄して再生成」ボタン（全データ喪失リスク）を撤廃し、「セクションごとに再生成」モーダルへ移行。再生成モーダルで自然言語指示を入力可能。編集モーダルでJSON直接編集・保存。下流カスケード再生成はオプトイン。
 - **構成設定UI**: 7種のEvaluatorのON/OFFを独立切り替え可能。
@@ -1055,7 +1057,7 @@ powershell -Command "python -m backend.main 2>&1 | Out-File -Encoding utf8 serve
 > 必ずプロジェクトルートで実行してください。`backend/main.py` を直接実行するとインポートエラーが発生します。
 
 ### 3. 現在の状態
-- **最新起動**: 2026-04-22 00:08 (JST)
-- **PID**: 1528
+- **最新起動**: 2026-04-22 01:32 (JST)
+- **PID**: 19668
 - **ポート**: 8001
 - **状態ログ**: `knowledge/fact/app_status.md`
