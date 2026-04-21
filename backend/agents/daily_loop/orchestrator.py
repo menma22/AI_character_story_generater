@@ -714,7 +714,7 @@ class DailyLoopOrchestrator:
         source_str = f"source: {event.source}" if event.source else ""
 
         result = await call_llm(
-            tier="gemini",
+            tier=self.profile.worker_tier,
             system_prompt="""あなたはこのキャラクターの「衝動的感覚を司るエージェント」です。
 キャラ本人にとっては無意識下にある気質・性格パラメータを読み取り、
 それに基づいて「今このキャラがイベントを受け取り、衝動的、感情的に生まれた内面的な心の動きを詳細に分析したレポート」を生成してください。
@@ -773,7 +773,7 @@ class DailyLoopOrchestrator:
         known_str = "既知（事前に知っている予定）" if event.known_to_protagonist else "未知（予想外の出来事）"
 
         result = await call_llm(
-            tier="gemini",
+            tier=self.profile.worker_tier,
             system_prompt="""あなたは主人公AIの理性ブランチ（Reflective Agent）です。
 規範層（価値観、理想自己、義務自己）を参照し、このイベントに対する濃密な内面分析レポートを作成してください。
 
