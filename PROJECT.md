@@ -311,6 +311,9 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
   - `daily_logs/Day_{N}.md` — 日次ログ（統合エージェント出力・ムード変遷・内省・日記・翌日予定。衝動/理性エージェント出力は除外）
   - `daily_logs/Day_{N}_rim_outputs.md` — 衝動/理性エージェント（Impulsive/Reflective）の生出力（デバッグ・分析用）
 - **復元・再開**: DailyLoopOrchestrator初期化時に最新スナップショットを自動ロードし、保存済み日の翌日から再開
+- **システム・アーティファクトの永続化**: エージェント自身が生成するメタデータ（実装計画、ウォークスルー、タスクリスト等）は、プロジェクト外のシステム領域に会話IDごとに保存される
+  - 保存先: `C:\Users\mahim\.gemini\antigravity\brain\<conversation-id>\`
+  - 対象: `implementation_plan.md`, `walkthrough.md`, `task.md` およびその履歴。
 - **その他永続化ファイル**:
   - `package.json` — 最終キャラクターパッケージ（生成完了時）
   - `checkpoint.json` — Phase A-C中断再開用
@@ -1008,7 +1011,14 @@ Step 3: CognitiveDerivation (ルールベース自動導出, LLM不使用)
 > - end-of-day処理の各ステップ（内省・日記・key memory・翌日予定）に個別エラーハンドリング追加済み。
 
 
+### 26. システム・アーティファクトの永続化と透明性
 
+- **Subject / Feature**: 実装計画やウォークスルー記録の保存管理
+- **(a) Original Design**: エージェントが生成するアーティファクトは、対話中のUI上でのみ表示される一時的なものという認識。
+- **(b) The Change & Rationale**: ユーザーから「過去のウォークスルーはどこに保存されているのか」という問いに対し、永続的なトレーサビリティを保証する必要が生じた。
+- **(c) Adopted Best Practice**: 会話IDに紐づく `brain` フォルダへ全アーティファクト（およびその版管理データ）を自動保存し、プロジェクトの外部知識（knowledge）としてもこれらを参照可能にする方針を採用。
+
+---
 
 ## アプリの再起動方法
 
