@@ -399,7 +399,7 @@ class DailyLoopOrchestrator:
         self.temperament_checker = TemperamentChecker(ws_manager, tier="gemini")
         self.personality_checker = PersonalityChecker(ws_manager, tier="gemini")
         self.values_checker = ValuesChecker(ws_manager, tier="gemini")
-        self.third_party_reviewer = ThirdPartyDiaryReviewer(api_keys=self.api_keys)
+        self.third_party_reviewer = ThirdPartyReviewer(api_keys=self.api_keys)
 
     def cancel(self):
         """生成プロセスを中断する"""
