@@ -635,14 +635,12 @@ async function loadPackage(name) {
         // 日記データの復元
         diaryEntries = currentPackage.diaries || [];
         const diaryContent = document.getElementById('diary-content');
-        if (diaryContent && diaryEntries.length > 0) {
-            diaryContent.innerHTML = Renderer.renderDiary(diaryEntries);
-            document.getElementById('diary-start-panel').style.display = 'none';
-        } else {
-            if (diaryContent) diaryContent.innerHTML = '';
-            document.getElementById('diary-start-panel').style.display = 'block';
+        if (diaryContent) {
+            diaryContent.innerHTML = diaryEntries.length > 0 ? Renderer.renderDiary(diaryEntries) : '';
         }
-        document.getElementById('diary-generation-area').style.display = 'none';
+        
+        // 日記タブのコントロールパネルの状態をリセット（ボタンテキストなどの更新）
+        resetDiaryUI();
 
         renderResults(currentPackage);
         showScreen('result-screen');
@@ -793,9 +791,26 @@ function executeRegeneration() {
         isRegenerating = true;
 
         switchTab('diary');
-        document.getElementById('diary-start-panel').style.display = 'none';
-        document.getElementById('diary-generation-area').style.display = 'block';
-        document.getElementById('diary-thought-log').innerHTML = ''; // ログをクリア
+        
+        // 日記生成中のUI状態に移行
+        isDiaryGenerating = true;
+        const actionBtn = document.getElementById('diary-action-btn');
+        const cancelBtn = document.getElementById('diary-cancel-btn');
+        const progressContainer = document.getElementById('diary-progress-container');
+        const thoughtContainer = document.getElementById('diary-thought-container');
+        
+        if (actionBtn) {
+            actionBtn.textContent = '⏳ 生成を準備中...';
+            actionBtn.disabled = true;
+            actionBtn.classList.remove('btn-primary');
+            actionBtn.classList.add('btn-ghost');
+        }
+        if (cancelBtn) cancelBtn.classList.remove('hidden');
+        if (progressContainer) progressContainer.classList.remove('hidden');
+        if (thoughtContainer) thoughtContainer.classList.remove('hidden');
+
+        const thoughtLog = document.getElementById('diary-thought-log');
+        if (thoughtLog) thoughtLog.innerHTML = ''; // ログをクリア
         
         // 進捗バーとテキストのリセット
         const diaryBar = document.getElementById('diary-progress-bar');
