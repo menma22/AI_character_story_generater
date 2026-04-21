@@ -8,6 +8,7 @@ let currentSessionId = null;
 let diaryEntries = [];
 let isWSHandlersSetup = false;
 let recentThoughts = new Set(); // 重複排除用
+let isDiaryGenerating = false; // 日記生成中のフラグ
 
 // ─── 初期化 ──────────────────────────────────────────────
 
@@ -300,46 +301,83 @@ function showResumeButton() {
     log.scrollTop = log.scrollHeight;
 }
 
-// ─── 日記生成 ─────────────────────────────────────────────
+// 統合アクションボタンのハンドラ
+function handleDiaryAction() {
+    if (isDiaryGenerating) {
+        cancelDiary();
+    } else {
+        generateDiary();
+    }
+}
 
 function generateDiary() {
-    if (!currentPackage?.metadata) {
-        alert('先にキャラクターを生成してください');
+    if (!currentPackage?._package_name) {
+        alert('キャラクターを読み込んでください');
         return;
     }
     
-    // UIをインライン生成モードに切り替え
-    document.getElementById('diary-start-panel').style.display = 'none';
-    document.getElementById('diary-generation-area').style.display = 'block';
+    isDiaryGenerating = true;
+    const instructions = document.getElementById('diary-instructions')?.value.trim() || "";
+    
+    // UI状態の更新
+    const actionBtn = document.getElementById('diary-action-btn');
+    const cancelBtn = document.getElementById('diary-cancel-btn');
+    const progressContainer = document.getElementById('diary-progress-container');
+    const thoughtContainer = document.getElementById('diary-thought-container');
+    
+    if (actionBtn) {
+        actionBtn.textContent = '⏳ 生成を準備中...';
+        actionBtn.disabled = true;
+        actionBtn.classList.remove('btn-primary');
+        actionBtn.classList.add('btn-ghost');
+    }
+    if (cancelBtn) cancelBtn.classList.remove('hidden');
+    if (progressContainer) progressContainer.classList.remove('hidden');
+    if (thoughtContainer) thoughtContainer.classList.remove('hidden');
+    
     document.getElementById('diary-thought-log').innerHTML = '';
     document.getElementById('diary-progress-bar').style.width = '0%';
-    document.getElementById('diary-gen-detail').textContent = '開始準備中...';
+    document.getElementById('diary-gen-detail').textContent = 'エージェントを起動しています...';
     
-    // 既存の日記表示をクリア
-    diaryEntries = [];
-    document.getElementById('diary-content').innerHTML = '';
-    
-    const pkgName = currentPackage._package_name || 'unknown';
+    const pkgName = currentPackage._package_name;
     wsManager.send('generate_diary', { 
         package_name: pkgName, 
         days: 7,
-        api_keys: getApiKeys()
+        instructions: instructions,
+        api_keys: getApiKeys(),
+        profile: document.getElementById('profile-select')?.value || 'draft'
     });
     
-    addThought('System', '7日分の日記生成を開始', 'thinking');
+    addThought('System', '日記シミュレーションを開始しました', 'thinking');
 }
 
 function cancelDiary() {
-    wsManager.send('cancel_diary', {});
+    if (!isDiaryGenerating) return;
+    if (!confirm('実行中の日記生成を中断しますか？')) return;
+
+    const pkgName = currentPackage?._package_name;
+    if (pkgName) {
+        wsManager.send('cancel_diary', { package_name: pkgName });
+    }
     
-    // UIを初期状態へ戻す
-    document.getElementById('diary-generation-area').style.display = 'none';
-    document.getElementById('diary-start-panel').style.display = 'block';
+    resetDiaryUI();
+    addThought('System', '日記生成を中断しました', 'error');
+}
+
+function resetDiaryUI() {
+    isDiaryGenerating = false;
+    const actionBtn = document.getElementById('diary-action-btn');
+    const cancelBtn = document.getElementById('diary-cancel-btn');
+    const progressContainer = document.getElementById('diary-progress-container');
     
-    diaryEntries = [];
-    document.getElementById('diary-content').innerHTML = '';
-    
-    addThought('System', '日記生成をキャンセルしてリセットしました', 'error');
+    if (actionBtn) {
+        actionBtn.textContent = (diaryEntries.length > 0) ? '🔄 日記を再生成' : 'Day 1〜7 日記生成を開始';
+        actionBtn.disabled = false;
+        actionBtn.classList.remove('btn-ghost');
+        actionBtn.classList.add('btn-primary');
+    }
+    if (cancelBtn) cancelBtn.classList.add('hidden');
+    if (progressContainer) progressContainer.classList.add('hidden');
 }
 
 function addDiaryEntry(day, content) {
@@ -363,7 +401,7 @@ function addThought(agent, content, status, model = null) {
     setTimeout(() => recentThoughts.delete(hash), 500);
 
     // 日記生成エリアがアクティブならそちらに出力、それ以外はDay0用に出力
-    const isDiaryMode = document.getElementById('diary-generation-area')?.style.display === 'block';
+    const isDiaryMode = !document.getElementById('diary-thought-container')?.classList.contains('hidden');
     const log = isDiaryMode ? document.getElementById('diary-thought-log') : document.getElementById('thought-log');
     
     if (!log) return;
@@ -411,17 +449,38 @@ function updateProgress(phase, progress, detail) {
     if (phase.startsWith('diary_') || phase === 'daily_loop') {
         if (diaryBar) diaryBar.style.width = percent;
         if (diaryDetailEl) diaryDetailEl.textContent = detail || '';
+        const progressPercent = document.getElementById('diary-progress-percent');
+        if (progressPercent) progressPercent.textContent = percent;
         
-        const cancelBtn = document.querySelector('#diary-generation-area button.btn-ghost');
+        const actionBtn = document.getElementById('diary-action-btn');
         if (phase === 'diary_complete') {
             if (diaryPhaseEl) diaryPhaseEl.textContent = '日記の生成が完了しました';
-            if (cancelBtn) cancelBtn.style.display = 'none';
+            resetDiaryUI();
+            
+            // 最新データを取得して表示を更新
+            if (currentPackage?._package_name) {
+                fetch(`/api/packages/${currentPackage._package_name}`)
+                    .then(r => r.json())
+                    .then(pkg => {
+                        currentPackage = pkg;
+                        currentPackage._package_name = pkg._package_name; // fetch結果に含まれない可能性を考慮
+                        diaryEntries = pkg.diaries || [];
+                        const diaryContent = document.getElementById('diary-content');
+                        if (diaryContent) diaryContent.innerHTML = Renderer.renderDiary(diaryEntries);
+                    });
+            }
         } else if (phase === 'diary_init') {
             if (diaryPhaseEl) diaryPhaseEl.textContent = '日記シミュレーション開始...';
-            if (cancelBtn) cancelBtn.style.display = 'inline-block';
+            if (actionBtn && isDiaryGenerating) {
+                actionBtn.textContent = '⏹ 生成を中断する';
+                actionBtn.disabled = false;
+            }
         } else {
             if (diaryPhaseEl) diaryPhaseEl.textContent = '日記シミュレーション進行中...';
-            if (cancelBtn) cancelBtn.style.display = 'inline-block';
+            if (actionBtn && isDiaryGenerating) {
+                actionBtn.textContent = '⏹ 生成を中断する';
+                actionBtn.disabled = false;
+            }
         }
     } else {
         if (bar) bar.style.width = percent;

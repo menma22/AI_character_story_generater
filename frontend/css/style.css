@@ -709,7 +709,58 @@ body {
     text-align: right;
 }
 
-/* ─── Diary Display ───────────────────────────────────── */
+/* ─── Diary Display & Unified Panel ─────────────────────── */
+.diary-control-panel {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    transition: all 0.3s ease;
+}
+
+.diary-control-panel:hover {
+    border-color: rgba(255, 255, 255, 0.2);
+    box-shadow: 0 12px 40px 0 rgba(0, 0, 0, 0.45);
+}
+
+#diary-instructions {
+    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(0, 0, 0, 0.2);
+}
+
+#diary-instructions:focus {
+    outline: none;
+    border-color: var(--accent-secondary);
+    background: rgba(0, 0, 0, 0.3);
+    box-shadow: 0 0 15px rgba(8, 145, 178, 0.1);
+}
+
+#diary-action-btn {
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+#diary-action-btn:not(:disabled):hover {
+    transform: translateY(-2px);
+    box-shadow: 0 5px 15px var(--accent-primary-glow);
+}
+
+#diary-action-btn:disabled {
+    cursor: wait;
+    opacity: 0.8;
+}
+
+@keyframes glow-pulse {
+    0% { box-shadow: 0 0 5px rgba(8, 145, 178, 0.2); }
+    50% { box-shadow: 0 0 20px rgba(8, 145, 178, 0.5); }
+    100% { box-shadow: 0 0 5px rgba(8, 145, 178, 0.2); }
+}
+
+#diary-progress-bar {
+    transition: width 0.4s cubic-bezier(0.1, 0.7, 0.1, 1);
+}
+
 .diary-entry-card {
     background: var(--bg-card);
     border: 1px solid var(--border-subtle);
@@ -717,6 +768,7 @@ body {
     padding: var(--space-xl);
     margin-bottom: var(--space-lg);
     position: relative;
+    animation: fadeIn 0.5s ease-out;
 }
 
 .diary-entry-card::before {

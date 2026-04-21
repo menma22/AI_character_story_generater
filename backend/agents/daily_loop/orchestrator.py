@@ -324,6 +324,7 @@ class DailyLoopOrchestrator:
         self.api_keys = api_keys or {}
         self.session_id = session_id
         self.regeneration_context = regeneration_context  # 追加
+        self._is_cancelled = False  # 追加: 中断フラグ
 
         # キャラ名解決（全Storeで共通使用）
         cname = ""
@@ -398,7 +399,13 @@ class DailyLoopOrchestrator:
         self.temperament_checker = TemperamentChecker(ws_manager, tier="gemini")
         self.personality_checker = PersonalityChecker(ws_manager, tier="gemini")
         self.values_checker = ValuesChecker(ws_manager, tier="gemini")
-    
+        self.third_party_reviewer = ThirdPartyDiaryReviewer(api_keys=self.api_keys)
+
+    def cancel(self):
+        """生成プロセスを中断する"""
+        self._is_cancelled = True
+        logger.info(f"[DailyLoopOrchestrator] cancel requested for session={self.session_id}")
+
     async def _notify(self, content: str, status: str = "thinking"):
         if self.ws:
             await self.ws.send_agent_thought(f"[日次ループ:{self._cname}]", content, status)
@@ -1735,6 +1742,11 @@ Day: {day}
         await self._notify(f"日次ループ開始: Day {start_day}〜{days}")
 
         for day in range(start_day, days + 1):
+            if self._is_cancelled:
+                await self._notify("生成プロセスが中断されました。", "complete")
+                logger.info(f"[DailyLoopOrchestrator] execution stopped due to cancellation at Day {day}")
+                break
+
             await self._notify(f"=== Day {day} 開始 ===")
             if self.ws:
                 await self.ws.send_progress("daily_loop", (day - 1) / days, f"Day {day} 処理中")

@@ -151,12 +151,10 @@ async def get_package(package_name: str):
         
         # 日記データも読み込む (最新セッションがあればそれを優先)
         diaries = []
-        # セッションフォルダを探す
         sessions_dir = base_dir / "sessions"
         latest_diaries_dir = base_dir / "diaries"
         
         if sessions_dir.exists():
-            # フォルダ名でソートして最新のものを探す (diary_regen_... や v1, v2 など)
             session_folders = sorted([d for d in sessions_dir.iterdir() if d.is_dir()])
             if session_folders:
                 latest_session_dir = session_folders[-1]
@@ -189,10 +187,10 @@ async def get_debug_thoughts():
 
 # クライアントごとに実行中のタスクを保持（キャンセル機能のため）
 ws_active_tasks = {}
-# 現在実行中のMasterOrchestratorインスタンスへの参照（concept_review応答のため）
+# 現在実行中のMasterOrchestratorインスタンスへの参照（HIL応答のため）
 active_orchestrator = None
-# 日記生成中のパッケージ名を追跡（同時実行防止）
-_diary_generation_active: set = set()
+# 日記生成中のオーケストレーターを管理（中断用）
+active_diary_orchestrators = {}
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -216,7 +214,6 @@ async def handle_ws_message(data: dict, websocket: WebSocket):
     logger.debug(f"[WS] Received action: {action} with data: {data}")
     
     if action == "generate_character":
-        # キャラクター生成開始
         profile_name = data.get("profile", AppConfig.DEFAULT_PROFILE)
         theme = data.get("theme", None)
         evaluators_override = data.get("evaluators_override", {})
@@ -227,7 +224,6 @@ async def handle_ws_message(data: dict, websocket: WebSocket):
         task.add_done_callback(lambda t: ws_active_tasks.pop(id(websocket), None))
     
     elif action == "resume_generation":
-        # チェックポイントから再開
         character_name = data.get("character_name", "")
         profile_name = data.get("profile", AppConfig.DEFAULT_PROFILE)
         evaluators_override = data.get("evaluators_override", {})
@@ -237,61 +233,31 @@ async def handle_ws_message(data: dict, websocket: WebSocket):
         task.add_done_callback(lambda t: ws_active_tasks.pop(id(websocket), None))
     
     elif action == "generate_diary":
-        # 日記生成開始
         package_name = data.get("package_name", "")
         days = data.get("days", 7)
         profile_name = data.get("profile", AppConfig.DEFAULT_PROFILE)
         api_keys = data.get("api_keys", {})
-        task = asyncio.create_task(run_diary_generation(package_name, days, profile_name, api_keys))
-        ws_active_tasks[id(websocket)] = task
-        
-        # 完了時に辞書から削除
-        task.add_done_callback(lambda t: ws_active_tasks.pop(id(websocket), None))
+        instructions = data.get("instructions", "")
+        asyncio.create_task(run_diary_generation(package_name, days, profile_name, api_keys, instructions))
     
     elif action == "cancel_diary":
-        # 現在実行中のタスクがあればキャンセル
-        task_id = id(websocket)
-        if task_id in ws_active_tasks:
-            logger.info("Cancelling diary generation task per user request.")
-            ws_active_tasks[task_id].cancel()
-            ws_active_tasks.pop(task_id, None)
+        package_name = data.get("package_name", "")
+        if package_name in active_diary_orchestrators:
+            active_diary_orchestrators[package_name].cancel()
+            await websocket.send_json({"type": "info", "content": f"パッケージ {package_name} の日記生成を中断します。"})
+        else:
+            await websocket.send_json({"type": "error", "content": "実行中の日記生成プロセスが見つかりません。"})
             
     elif action == "cancel_character_generation":
-        # キャラクター生成の中断
         task_id = id(websocket)
         package_name = None
-        
         if active_orchestrator:
-            logger.info(f"Cancelling character generation per user request (Session: {getattr(active_orchestrator, 'session_id', 'unknown')})")
-            
-            # 中断前にチェックポイントを強制保存
-            try:
-                active_orchestrator._checkpoint()
-                # パッケージ名を取得（キャラ名 or セッションID）
-                pkg = active_orchestrator.package
-                char_name = None
-                if pkg and hasattr(pkg, 'macro_profile') and pkg.macro_profile:
-                    bi = getattr(pkg.macro_profile, 'basic_info', None)
-                    if bi:
-                        char_name = getattr(bi, 'name', None)
-                if char_name:
-                    from backend.storage.md_storage import safe_name
-                    package_name = safe_name(char_name)
-                else:
-                    package_name = getattr(active_orchestrator, 'session_id', None)
-            except Exception as e:
-                logger.error(f"Error saving checkpoint during cancel: {e}")
-            
             active_orchestrator.cancel()
-        
         if task_id in ws_active_tasks:
             ws_active_tasks[task_id].cancel()
             ws_active_tasks.pop(task_id, None)
-        
-        # フロントエンドに中断完了を通知（パーシャルデータの表示用）
         await websocket.send_json({
             "type": "generation_cancelled",
-            "package_name": package_name,
             "message": "生成が中断されました。"
         })
 
@@ -302,7 +268,11 @@ async def handle_ws_message(data: dict, websocket: WebSocket):
         cascade = data.get("cascade", False)
         profile_name = data.get("profile", AppConfig.DEFAULT_PROFILE)
         api_keys = data.get("api_keys", {})
-        asyncio.create_task(run_artifact_regeneration(package_name, artifact_name, instructions, cascade, profile_name, api_keys))
+        # 日記の場合は専用フローに転送（UI統合のため）
+        if artifact_name == "daily_logs":
+            asyncio.create_task(run_diary_generation(package_name, 7, profile_name, api_keys, instructions))
+        else:
+            asyncio.create_task(run_artifact_regeneration(package_name, artifact_name, instructions, cascade, profile_name, api_keys))
 
     elif action == "save_artifact_edit":
         package_name = data.get("package_name", "")
@@ -311,71 +281,29 @@ async def handle_ws_message(data: dict, websocket: WebSocket):
         asyncio.create_task(save_manual_edit(package_name, artifact_name, edited_data))
 
     elif action == "approve_concept":
-        # Human in the Loop: コンセプト承認
-        if active_orchestrator:
-            active_orchestrator.handle_review_response("approve")
-        else:
-            await websocket.send_json({"type": "error", "content": "アクティブな生成セッションがありません"})
-
+        if active_orchestrator: active_orchestrator.handle_review_response("approve")
     elif action == "revise_concept":
-        # Human in the Loop: フィードバック付きコンセプト再生成
-        if active_orchestrator:
-            feedback = data.get("feedback", "")
-            active_orchestrator.handle_review_response("revise", feedback=feedback)
-        else:
-            await websocket.send_json({"type": "error", "content": "アクティブな生成セッションがありません"})
-
+        if active_orchestrator: active_orchestrator.handle_review_response("revise", feedback=data.get("feedback", ""))
     elif action == "edit_concept_direct":
-        # Human in the Loop: コンセプト直接編集
-        if active_orchestrator:
-            edited_concept = data.get("concept_package", {})
-            active_orchestrator.handle_review_response("edit", edited_concept=edited_concept)
-        else:
-            await websocket.send_json({"type": "error", "content": "アクティブな生成セッションがありません"})
-
+        if active_orchestrator: active_orchestrator.handle_review_response("edit", edited_concept=data.get("concept_package", {}))
     elif action == "get_status":
-        await websocket.send_json({
-            "type": "status",
-            "cost": token_tracker.summary(),
-        })
-
+        await websocket.send_json({"type": "status", "cost": token_tracker.summary()})
     else:
-        await websocket.send_json({
-            "type": "error",
-            "content": f"Unknown action: {action}"
-        })
+        await websocket.send_json({"type": "error", "content": f"Unknown action: {action}"})
 
 
 async def run_character_generation(profile_name: str, theme: str = None, evaluators_override: dict = None, api_keys: dict = None, composition_preferences: dict = None):
-    """キャラクター生成パイプライン全体を実行"""
     try:
         from backend.agents.master_orchestrator.orchestrator import MasterOrchestrator
         from backend.models.character import StoryCompositionPreferences
         import dataclasses
-        from datetime import datetime
-
         base_profile = PROFILES.get(profile_name, PROFILES["draft"])
-        target_profile = base_profile
-        if evaluators_override:
-            target_profile = dataclasses.replace(base_profile, **{
-                k: v for k, v in evaluators_override.items()
-                if hasattr(base_profile, k)
-            })
-
-        # 構成プリファレンスをPydanticモデルに変換
-        prefs = None
-        if composition_preferences:
-            try:
-                prefs = StoryCompositionPreferences(**composition_preferences)
-            except Exception as e:
-                logger.warning(f"Invalid composition_preferences: {e}")
-
+        target_profile = dataclasses.replace(base_profile, **{k: v for k, v in (evaluators_override or {}).items() if hasattr(base_profile, k)})
+        
+        prefs = StoryCompositionPreferences(**composition_preferences) if composition_preferences else None
         session_id = f"SID_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-
         await manager.send_progress("init", 0.0, "キャラクター生成を開始します...")
-        # クライアントにセッションIDを通知（中断時の再開キーとして使用）
-        await manager.send_agent_thought("System", f"Session ID: {session_id}", "info")
-
+        
         global active_orchestrator
         orchestrator = MasterOrchestrator(profile=target_profile, ws_manager=manager, session_id=session_id, api_keys=api_keys, composition_preferences=prefs)
         active_orchestrator = orchestrator
@@ -388,29 +316,19 @@ async def run_character_generation(profile_name: str, theme: str = None, evaluat
         active_orchestrator = None
 
 async def resume_character_generation(character_name: str, profile_name: str, evaluators_override: dict = None, api_keys: dict = None):
-    """チェックポイントから再開"""
     try:
         from backend.agents.master_orchestrator.orchestrator import MasterOrchestrator
         from backend.storage.md_storage import load_checkpoint
         import dataclasses
-        
-        await manager.send_agent_thought("System", f"{character_name} の復旧を開始します...", "thinking")
-        
         package = await load_checkpoint(character_name)
         if not package:
             await manager.send_error(f"チェックポイントが見つかりませんでした: {character_name}")
             return
-            
         base_profile = PROFILES.get(profile_name, PROFILES["draft"])
-        target_profile = base_profile
-        if evaluators_override:
-            target_profile = dataclasses.replace(base_profile, **{
-                k: v for k, v in evaluators_override.items() 
-                if hasattr(base_profile, k)
-            })
-            
+        target_profile = dataclasses.replace(base_profile, **{k: v for k, v in (evaluators_override or {}).items() if hasattr(base_profile, k)})
+        
         global active_orchestrator
-        orchestrator = MasterOrchestrator(profile=target_profile, ws_manager=manager, existing_package=package, session_id=character_name, api_keys=api_keys) # character_name が事実上のSession ID
+        orchestrator = MasterOrchestrator(profile=target_profile, ws_manager=manager, existing_package=package, session_id=character_name, api_keys=api_keys)
         active_orchestrator = orchestrator
         package = await orchestrator.run()
         await _finalize_character_generation(package)
@@ -421,232 +339,85 @@ async def resume_character_generation(character_name: str, profile_name: str, ev
         active_orchestrator = None
 
 async def _finalize_character_generation(package):
-    """生成完了後の保存と通知（作業ディレクトリに統一保存）"""
     from backend.storage.md_storage import safe_name
-
-    char_name = "unknown"
-    if package.macro_profile and package.macro_profile.basic_info:
-        char_name = package.macro_profile.basic_info.name
-
-    # 作業ディレクトリと同一パスに保存（1キャラ=1ディレクトリ）
+    char_name = package.macro_profile.basic_info.name if package.macro_profile and package.macro_profile.basic_info else "unknown"
     save_dir = AppConfig.STORAGE_DIR / safe_name(char_name)
     save_dir.mkdir(parents=True, exist_ok=True)
-
-    pkg_json = package.model_dump(mode="json")
-    (save_dir / "package.json").write_text(
-        json.dumps(pkg_json, ensure_ascii=False, indent=2),
-        encoding="utf-8"
-    )
-
-    await manager.send_progress("complete", 1.0, f"キャラクター「{char_name}」の生成が完了しました")
-    
-    # バージョン保存を実行（世代管理）
+    (save_dir / "package.json").write_text(json.dumps(package.model_dump(mode="json"), ensure_ascii=False, indent=2), encoding="utf-8")
+    await manager.send_progress("complete", 1.0, f"「{char_name}」の生成が完了しました")
     from backend.storage.md_storage import save_versioned_package
     await save_versioned_package(char_name, package, manager.thought_history)
+    await manager.send_phase_result("complete", {"package_name": save_dir.name, "character_name": char_name, "cost": token_tracker.summary()})
 
-    await manager.send_phase_result("complete", {
-        "package_name": save_dir.name,
-        "character_name": char_name,
-        "cost": token_tracker.summary(),
-    })
-
-
-async def run_diary_generation(package_name: str, days: int = 7, profile_name: str = None, api_keys: dict = None):
-    """日記生成パイプライン全体を実行"""
-    global _diary_generation_active
-
-    # 同時実行防止ガード
-    if package_name in _diary_generation_active:
-        logger.warning(f"[run_diary_generation] 既に日記生成中: {package_name}。リクエストを拒否します。")
-        await manager.send_error(f"「{package_name}」の日記生成は既に実行中です。完了をお待ちください。")
+async def run_diary_generation(package_name: str, days: int = 7, profile_name: str = None, api_keys: dict = None, instructions: str = None):
+    """日記生成プロセスを実行"""
+    from backend.agents.daily_loop.orchestrator import DailyLoopOrchestrator
+    from backend.models.character import CharacterPackage
+    pkg_path = AppConfig.STORAGE_DIR / package_name / "package.json"
+    if not pkg_path.exists():
+        await manager.send_error(f"パッケージが見つかりません: {package_name}")
         return
-
-    _diary_generation_active.add(package_name)
-    session_id = f"diary_{package_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-    logger.info(f"[run_diary_generation] 開始: package={package_name}, session_id={session_id}")
-
     try:
-        from backend.agents.daily_loop.orchestrator import DailyLoopOrchestrator
-        from backend.models.character import CharacterPackage
+        package = CharacterPackage(**json.loads(pkg_path.read_text(encoding="utf-8")))
+        char_name = package.macro_profile.basic_info.name if package.macro_profile and package.macro_profile.basic_info else package_name
+        session_id = f"diary_{char_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}".replace(" ", "_")
         
-        pkg_path = AppConfig.STORAGE_DIR / package_name / "package.json"
-        if not pkg_path.exists():
-            await manager.send_error(f"パッケージが見つかりません: {package_name}")
-            return
+        orchestrator = DailyLoopOrchestrator(
+            package=package, profile=PROFILES.get(profile_name, PROFILES["draft"]),
+            ws_manager=manager, api_keys=api_keys, session_id=session_id,
+            regeneration_context=instructions
+        )
         
-        pkg_data = json.loads(pkg_path.read_text(encoding="utf-8"))
-        package = CharacterPackage(**pkg_data)
+        global active_diary_orchestrators
+        active_diary_orchestrators[package_name] = orchestrator
         
         await manager.send_progress("diary_init", 0.0, f"日記生成を開始します... (session: {session_id})")
-        
-        target_profile = PROFILES.get(profile_name, PROFILES["draft"])
-        orchestrator = DailyLoopOrchestrator(
-            package=package,
-            profile=target_profile,
-            ws_manager=manager,
-            api_keys=api_keys,
-            session_id=session_id,
-        )
-        results = await orchestrator.run(days=days)
-        await manager.send_progress("diary_complete", 1.0, f"{len(results)}日分の日記生成が完了しました (session: {session_id})")
-        
+        try:
+            results = await orchestrator.run(days=days)
+            await manager.send_progress("diary_complete", 1.0, f"{len(results)}日分の日記生成が完了しました")
+        finally:
+            active_diary_orchestrators.pop(package_name, None)
     except Exception as e:
-        logger.error(f"Diary generation failed (session={session_id}): {e}", exc_info=True)
+        logger.error(f"Diary generation failed: {e}", exc_info=True)
         await manager.send_error(f"日記生成エラー: {str(e)}")
-    finally:
-        _diary_generation_active.discard(package_name)
-        logger.info(f"[run_diary_generation] 終了: package={package_name}, session_id={session_id}")
-
-# ─── アーティファクト再生成・編集 ─────────────────────────────
 
 async def run_artifact_regeneration(package_name: str, artifact_name: str, instructions: str, cascade: bool, profile_name: str, api_keys: dict = None):
-    """特定アーティファクトを再生成する"""
     from backend.models.character import CharacterPackage
-    from backend.regeneration import regenerate_artifact, get_downstream_artifacts, ARTIFACT_TO_PHASE, ARTIFACT_LABELS
-    import dataclasses
-
+    from backend.regeneration import regenerate_artifact, ARTIFACT_TO_PHASE, ARTIFACT_LABELS
     pkg_path = AppConfig.STORAGE_DIR / package_name / "package.json"
-    if not pkg_path.exists():
-        await manager.send_error(f"パッケージが見つかりません: {package_name}")
-        return
-
-    if artifact_name not in ARTIFACT_TO_PHASE:
-        await manager.send_error(f"不明なアーティファクト: {artifact_name}")
-        return
-
     try:
-        pkg_data = json.loads(pkg_path.read_text(encoding="utf-8"))
-        package = CharacterPackage(**pkg_data)
-
-        base_profile = PROFILES.get(profile_name, PROFILES["draft"])
-
+        package = CharacterPackage(**json.loads(pkg_path.read_text(encoding="utf-8")))
         label = ARTIFACT_LABELS.get(artifact_name, artifact_name)
+        await manager.send_progress("regeneration", 0.0, f"「{label}」を再生成中...")
         
-        # 日記の再生成の場合は日記生成用のUIフローをトリガーする
-        phase_name = "regeneration"
-        if artifact_name == "daily_logs":
-            phase_name = "diary_init"
-            await manager.send_progress(phase_name, 0.0, f"日記の再生成を開始します...")
-        else:
-            await manager.send_progress(phase_name, 0.0, f"「{label}」を再生成中...")
-
-        # メインアーティファクトの再生成
-        package = await regenerate_artifact(package, artifact_name, instructions, base_profile, manager, api_keys=api_keys)
-
-        # カスケード再生成
-        regenerated = [artifact_name]
-        if cascade:
-            for i, ds_artifact in enumerate(downstream):
-                ds_label = ARTIFACT_LABELS.get(ds_artifact, ds_artifact)
-                await manager.send_progress(phase_name, (i + 1) / (len(downstream) + 1), f"カスケード再生成: {ds_label}")
-                package = await regenerate_artifact(package, ds_artifact, "", base_profile, manager)
-                regenerated.append(ds_artifact)
-
-        # 保存の前にバックアップを取得
+        package = await regenerate_artifact(package, artifact_name, instructions, PROFILES.get(profile_name, PROFILES["draft"]), manager, api_keys=api_keys)
+        
         save_dir = AppConfig.STORAGE_DIR / package_name
-        save_dir.mkdir(parents=True, exist_ok=True)
-        if pkg_path.exists():
-            from datetime import datetime
-            import shutil
-            backup_time = datetime.now().strftime('%Y%m%d_%H%M%S')
-            backup_path = save_dir / f"package_backup_{backup_time}_{artifact_name}_regen.json"
-            shutil.copy2(pkg_path, backup_path)
-
-        pkg_json = package.model_dump(mode="json")
-        (save_dir / "package.json").write_text(
-            json.dumps(pkg_json, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-
-        # バージョン保存を実行（世代管理）
+        (save_dir / "package.json").write_text(json.dumps(package.model_dump(mode="json"), ensure_ascii=False, indent=2), encoding="utf-8")
         from backend.storage.md_storage import save_versioned_package
-        char_name = package.macro_profile.basic_info.name if package.macro_profile and package.macro_profile.basic_info else package_name
-        await save_versioned_package(char_name, package, manager.thought_history)
-
-        await manager.send_progress(phase_name, 1.0, "再生成完了")
-        await manager.send_phase_result("regenerate_complete", {
-            "package_name": package_name,
-            "regenerated": regenerated,
-            "cost": token_tracker.summary(),
-        })
-
+        await save_versioned_package(package.macro_profile.basic_info.name, package, manager.thought_history)
+        await manager.send_progress("regeneration", 1.0, "再生成完了")
+        await manager.send_phase_result("regenerate_complete", {"package_name": package_name, "regenerated": [artifact_name], "cost": token_tracker.summary()})
     except Exception as e:
-        logger.error(f"Artifact regeneration failed: {e}", exc_info=True)
+        logger.error(f"Regeneration failed: {e}", exc_info=True)
         await manager.send_error(f"再生成エラー: {str(e)}")
 
-
 async def save_manual_edit(package_name: str, artifact_name: str, edited_data: dict):
-    """手動編集されたアーティファクトを保存する"""
-    from backend.models.character import (
-        CharacterPackage, ConceptPackage, MacroProfile, LinguisticExpression,
-        MicroParameters, AutobiographicalEpisodes, WeeklyEventsStore,
-    )
-    from backend.regeneration import ARTIFACT_TO_PHASE, ARTIFACT_LABELS
-
+    from backend.models.character import CharacterPackage, ConceptPackage, MacroProfile, LinguisticExpression, MicroParameters, AutobiographicalEpisodes, WeeklyEventsStore
     pkg_path = AppConfig.STORAGE_DIR / package_name / "package.json"
-    if not pkg_path.exists():
-        await manager.send_error(f"パッケージが見つかりません: {package_name}")
-        return
-
-    if artifact_name not in ARTIFACT_TO_PHASE:
-        await manager.send_error(f"不明なアーティファクト: {artifact_name}")
-        return
-
-    # アーティファクト名 → Pydanticモデルのマッピング
-    model_map = {
-        "concept_package": ConceptPackage,
-        "macro_profile": MacroProfile,
-        "linguistic_expression": LinguisticExpression,
-        "micro_parameters": MicroParameters,
-        "autobiographical_episodes": AutobiographicalEpisodes,
-        "weekly_events_store": WeeklyEventsStore,
-    }
-
+    model_map = {"concept_package": ConceptPackage, "macro_profile": MacroProfile, "linguistic_expression": LinguisticExpression, "micro_parameters": MicroParameters, "autobiographical_episodes": AutobiographicalEpisodes, "weekly_events_store": WeeklyEventsStore}
     try:
-        pkg_data = json.loads(pkg_path.read_text(encoding="utf-8"))
-        package = CharacterPackage(**pkg_data)
-
-        # Pydanticモデルでバリデーション
+        package = CharacterPackage(**json.loads(pkg_path.read_text(encoding="utf-8")))
         model_cls = model_map.get(artifact_name)
-        if model_cls:
-            validated = model_cls(**edited_data)
-            setattr(package, artifact_name, validated)
-        else:
-            setattr(package, artifact_name, edited_data)
-
-        # 保存の前にバックアップを取得
-        if pkg_path.exists():
-            from datetime import datetime
-            import shutil
-            backup_time = datetime.now().strftime('%Y%m%d_%H%M%S')
-            backup_path = pkg_path.parent / f"package_backup_{backup_time}_{artifact_name}_edit.json"
-            shutil.copy2(pkg_path, backup_path)
-
-        pkg_json = package.model_dump(mode="json")
-        pkg_path.write_text(
-            json.dumps(pkg_json, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-
-        label = ARTIFACT_LABELS.get(artifact_name, artifact_name)
-        await manager.broadcast({
-            "type": "edit_saved",
-            "artifact": artifact_name,
-            "package_name": package_name,
-            "message": f"「{label}」の編集を保存しました",
-        })
-
+        if model_cls: setattr(package, artifact_name, model_cls(**edited_data))
+        else: setattr(package, artifact_name, edited_data)
+        
+        pkg_path.write_text(json.dumps(package.model_dump(mode="json"), ensure_ascii=False, indent=2), encoding="utf-8")
+        await manager.broadcast({"type": "edit_saved", "artifact": artifact_name, "package_name": package_name, "message": f"「{artifact_name}」の編集を保存しました"})
     except Exception as e:
-        logger.error(f"Manual edit save failed: {e}", exc_info=True)
+        logger.error(f"Save edit failed: {e}", exc_info=True)
         await manager.send_error(f"編集保存エラー: {str(e)}")
-
-
-# ─── 起動 ────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(
-        "backend.main:app",
-        host=AppConfig.HOST,
-        port=AppConfig.PORT,
-        reload=False,
-        log_level=AppConfig.LOG_LEVEL.lower(),
-    )
+    uvicorn.run("backend.main:app", host=AppConfig.HOST, port=AppConfig.PORT, reload=False, log_level=AppConfig.LOG_LEVEL.lower())

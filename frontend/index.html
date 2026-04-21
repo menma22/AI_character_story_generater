@@ -353,38 +353,50 @@
                 <div id="events-content"></div>
             </div>
             <div id="tab-diary" class="tab-content">
-                <div id="diary-content" style="margin-bottom: 1.5rem;"></div>
-                
-                <!-- 初期案内パネル -->
-                <div id="diary-start-panel" class="diary-start-panel" style="padding: 1.5rem; background: rgba(255, 255, 255, 0.05); border-radius: 8px; text-align: center;">
-                    <h3 style="margin-bottom: 1rem;">シミュレーション開始</h3>
-                    <p style="margin-bottom: 1.5rem; font-size: 0.95rem; color: var(--text-muted); text-align: left; line-height: 1.6;">
-                        Day 0の全パラメータが確定しました。上記の各種情報（人格、生い立ち、価値観、テンション、記憶イベント等）をすべて引き継ぎ、
-                        自律的な生活シミュレーションおよび7日間にわたる内省・日記生成ループを開始します。
-                    </p>
-                    <button class="btn-primary btn-large" onclick="generateDiary()">
-                        Day 1〜7 日記生成を開始
-                    </button>
+                <!-- 統合コントロールパネル -->
+                <div class="diary-control-panel" style="margin-bottom: 1.5rem; padding: 1.5rem; background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 12px; backdrop-filter: blur(10px);">
+                    <div style="display: flex; flex-direction: column; gap: 1rem;">
+                        <div style="display: flex; justify-content: space-between; align-items: flex-end;">
+                            <div style="flex: 1; margin-right: 1.5rem;">
+                                <label for="diary-instructions" style="display: block; font-size: 0.85rem; font-weight: 500; color: var(--accent-secondary); margin-bottom: 0.5rem; letter-spacing: 0.05em;">AIエージェントへの指示・コメント</label>
+                                <textarea id="diary-instructions" 
+                                    style="width: 100%; min-height: 80px; padding: 0.8rem; background: rgba(0, 0, 0, 0.2); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 8px; color: var(--text-primary); font-size: 0.9rem; resize: vertical; transition: border-color 0.2s;"
+                                    placeholder="例: もっと詩的な表現にして / Day 3の出来事を強調して / 少し内省的なトーンを強めて..."></textarea>
+                            </div>
+                            <div style="display: flex; flex-direction: column; gap: 0.5rem; min-width: 180px;">
+                                <button id="diary-action-btn" class="btn-primary" style="height: 50px; font-weight: 600; text-shadow: 0 2px 4px rgba(0,0,0,0.3);" onclick="handleDiaryAction()">
+                                    Day 1〜7 日記生成を開始
+                                </button>
+                                <button id="diary-cancel-btn" class="btn-ghost hidden" style="color: var(--accent-error); border-color: rgba(239, 68, 68, 0.3); font-size: 0.85rem;" onclick="cancelDiary()">
+                                    🛑 生成を中断
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- 進行状況 (生成中のみ表示) -->
+                        <div id="diary-progress-container" class="hidden" style="margin-top: 0.5rem; padding-top: 1rem; border-top: 1px solid rgba(255, 255, 255, 0.05);">
+                            <div style="display: flex; justify-content: space-between; font-size: 0.8rem; margin-bottom: 0.5rem;">
+                                <span id="diary-gen-phase" style="color: var(--accent-secondary); font-weight: 500;">シミュレーション進行中...</span>
+                                <span id="diary-progress-percent" style="color: var(--text-muted);">0%</span>
+                            </div>
+                            <div class="progress-container" style="height: 6px; background: rgba(255, 255, 255, 0.1);">
+                                <div id="diary-progress-bar" class="progress-bar" style="width: 0%; background: var(--accent-secondary); box-shadow: 0 0 10px var(--accent-secondary);"></div>
+                            </div>
+                            <p id="diary-gen-detail" class="gen-detail" style="margin-top: 0.8rem; font-size: 0.8rem; color: var(--text-muted);"></p>
+                        </div>
+                    </div>
                 </div>
 
-                <!-- インライン生成領域 (デフォルト非表示) -->
-                <div id="diary-generation-area" style="display: none; padding: 1.5rem; background: rgba(0, 0, 0, 0.2); border: 1px solid var(--border-subtle); border-radius: 8px; margin-top: 1rem;">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
-                        <h3 id="diary-gen-phase" style="color: var(--accent-secondary); margin: 0;">日記シミュレーション進行中...</h3>
-                        <button class="btn-ghost" style="color: var(--accent-error); border-color: rgba(239, 68, 68, 0.5); padding: 0.4rem 0.8rem; font-size: 0.8rem;" onclick="cancelDiary()">🛑 停止してリセット</button>
+                <!-- 日記本文表示エリア -->
+                <div id="diary-content" style="margin-bottom: 1.5rem;"></div>
+
+                <!-- 思考ログ領域 (生成中・完了後も確認可能) -->
+                <div id="diary-thought-container" class="thought-stream hidden" style="border: 1px solid rgba(255, 255, 255, 0.05); margin-top: 2rem;">
+                    <div class="thought-header">
+                        <span class="thought-icon" style="color: var(--accent-secondary);">⟡</span>
+                        <span>生活エージェント（RIM）思考ログ</span>
                     </div>
-                    <div class="progress-container" style="margin-bottom: 1rem;">
-                        <div class="progress-bar" id="diary-progress-bar" style="width: 0%; background: var(--accent-secondary);"></div>
-                    </div>
-                    <p id="diary-gen-detail" class="gen-detail" style="margin-bottom: 1.5rem;"></p>
-                    
-                    <div class="thought-stream" style="border: 1px solid rgba(255, 255, 255, 0.05);">
-                        <div class="thought-header">
-                            <span class="thought-icon" style="color: var(--accent-secondary);">⟡</span>
-                            <span>生活エージェント（RIM）思考ログ</span>
-                        </div>
-                        <div id="diary-thought-log" class="thought-log" style="max-height: 200px;"></div>
-                    </div>
+                    <div id="diary-thought-log" class="thought-log" style="max-height: 250px;"></div>
                 </div>
             </div>
             
@@ -431,8 +443,8 @@
                     <button class="btn-ghost" style="justify-content: flex-start; border: 1px solid var(--border-subtle); padding: 0.8rem;" onclick="closeSectionSelectModal(); openRegenerateModal('weekly_events_store')">
                         <strong style="display: inline-block; width: 30px;">5.</strong> イベントを再生成
                     </button>
-                    <button class="btn-ghost" style="justify-content: flex-start; border: 1px solid var(--border-subtle); padding: 0.8rem;" onclick="closeSectionSelectModal(); openRegenerateModal('daily_logs')">
-                        <strong style="display: inline-block; width: 30px;">6.</strong> 日記を再生成
+                    <button class="btn-ghost" style="justify-content: flex-start; border: 1px solid var(--border-subtle); padding: 0.8rem;" onclick="closeSectionSelectModal(); switchTab('diary')">
+                        <strong style="display: inline-block; width: 30px;">6.</strong> 日記を再生成（日記タブへ）
                     </button>
                 </div>
             </div>
