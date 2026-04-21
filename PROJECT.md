@@ -13,7 +13,7 @@
 ```
 AI_character_story_generater/
 ├── backend/
-│   ├── main.py                                # FastAPI エントリポイント (WebSocket + REST API) ※2026-04-20 22:34 再起動完了 (PID: 19164)
+│   ├── main.py                                # FastAPI エントリポイント (WebSocket + REST API) ※2026-04-21 18:48 再起動完了 (PID: 2108)
 │   ├── regeneration.py                        # アーティファクト個別再生成モジュール (依存マップ + 再生成コア)
 │   ├── config.py                              # 設定管理 (APIキー, 4段階プロファイル, モデル定義)
 │   ├── agents/
